@@ -1,116 +1,189 @@
 # AEGIS Python RAG Subsystem
 
-The `rag-python` module is the document retrieval subsystem of AEGIS. Its purpose is to enable
-document-grounded responses by ingesting local files, preparing them for retrieval, and returning
-relevant document content when requested by the central orchestration layer.
+The `rag-python` module is the document retrieval subsystem of AEGIS. Its purpose is to enable document-grounded responses by ingesting local files, preparing them for semantic retrieval, and returning relevant content when requested by the central Rust orchestration engine.
 
-This subsystem is designed as a supporting local process rather than the main backend of the
-application. It is responsible only for document processing and retrieval. The Rust engine remains
-the central controller of the overall system flow.
+This subsystem operates as a local, persistent service and is responsible exclusively for retrieval-related tasks. It does not manage user interaction or model inference.
+
+## Overview
+
+AEGIS follows a modular architecture where responsibilities are clearly separated:
+
+- Rust Engine → orchestration, routing, inference control
+- Python RAG Subsystem → document indexing & retrieval
+- Local LLM (e.g., Ollama) → response generation
+
+The RAG subsystem acts as a specialized retrieval worker, enabling the system to ground responses in user-provided data rather than relying solely on model knowledge.
 
 ## Responsibilities
 
 The Python RAG subsystem is responsible for:
 
-- ingesting local documents from user-specified folders
-- preprocessing document content
-- splitting documents into searchable chunks
-- building and maintaining a local persistent index
-- retrieving relevant chunks for document-based queries
-- returning source references or citation metadata where available
+- Ingesting local documents from user-specified folders
+- Preprocessing and cleaning document content
+- Splitting documents into semantically meaningful chunks
+- Generating embeddings using a local model
+- Storing embeddings and metadata in a persistent vector store
+- Retrieving relevant document chunks for a given query
+- Returning structured results with source metadata (citations)
 
-## Role in the System
+## Architecture
+### Role in the System
 
-The RAG subsystem does not communicate directly with the user interface and does not control the
-inference workflow. Its role is to act as a dedicated retrieval component that responds to requests
-from the Rust orchestration layer.
+The subsystem does not:
 
-In the current design, the Rust engine may launch the Python RAG process during startup and keep it
-running in memory as a persistent local helper process. Once initialized, the RAG subsystem remains
-available to handle indexing and retrieval requests without repeated startup overhead.
+- communicate directly with the UI
+- control inference
+- manage user sessions
 
-## How It Is Used
+Instead, it is invoked by the Rust engine when retrieval is required.
 
-The RAG subsystem is used only when the Rust engine determines that document retrieval is required.
+### System Flow
 
-A typical usage flow is:
+1. User sends request (CLI or Web UI)
+2. Rust engine receives and analyzes request
+3. If retrieval is needed → calls RAG subsystem
+4. RAG subsystem:
+   - processes request (index or query)
+   - returns relevant chunks + metadata
+5. Rust engine:
+   - injects retrieved context into prompt
+   - sends request to LLM
+6. Response is returned to the user
 
-1. A user sends a request through the CLI or Web UI.
-2. The request is received by the Rust engine.
-3. If the request requires document-grounded processing, the Rust engine invokes the Python RAG
-   subsystem.
-4. The RAG subsystem performs the required operation, such as indexing documents or retrieving
-   relevant chunks.
-5. The RAG subsystem returns structured results to the Rust engine.
-6. The Rust engine integrates the retrieved context into the final model request.
-7. The Rust engine sends the prepared request to Ollama for response generation.
+## Runtime Behavior
 
-In this architecture, the Python RAG subsystem is a specialized retrieval worker, while the Rust
-engine remains responsible for orchestration, inference coordination, and user-facing flow.
+### Initialization
 
-## Initialization and Runtime Behavior
+The subsystem must be initialized before use:
 
-The Python RAG subsystem is expected to support an initialization phase during startup. During this
-phase, it may:
+- Load embedding model (local, e.g., SentenceTransformers)
+- Initialize or restore vector store (Chroma persistent storage)
+- Prepare internal state
+- Mark system as ready
 
-- load runtime configuration
-- prepare or restore local indexes
-- initialize retrieval-related resources
-- confirm readiness to the Rust engine
+### Persistent Process
 
-After initialization, the process remains alive in memory and handles repeated indexing and retrieval
-requests until the system shuts down.
+Once initialized:
 
-## Intended Provided Functions
+- Runs as a long-lived local service
+- Handles repeated requests without reloading models
+- Maintains in-memory + on-disk state
 
-The Python RAG subsystem is intended to provide a small set of core operations that can be invoked by
-the Rust engine. At a minimum, these include:
+## API Contract
 
-- **Initialization**
-    - prepare runtime state and load required resources
-- **Document Indexing**
-    - ingest local files, preprocess them, and build/update the retrieval index
-- **Document Retrieval**
-    - accept a query and return the most relevant document chunks
-- **Citation Support**
-    - return source metadata such as file names and page references alongside retrieved content
-- **Health Check**
-    - report whether the subsystem is running and ready
-- **Shutdown**
-    - terminate cleanly when the main system exits
+The subsystem exposes a REST API for integration with the Rust engine.
 
-These functions are intended to form the minimal contract between the Rust engine and the RAG
-subsystem.
+### Endpoints
+- `GET /health` → service status
+- `POST /init` → initialize system
+- `POST /index` → index documents from a folder
+- `POST /query` → retrieve relevant chunks
+- `POST /store` → store user memory
+- `POST /shutdown` → clean shutdown
 
-## Supported Operations
+### Key Design Rules
+- All responses are JSON
+- Strict initialization requirement (must call `/init` first)
+- Deterministic and predictable behavior
+- No direct UI interaction
 
-At a minimum, the RAG subsystem is expected to support:
+## Data & Metadata Model
 
-- initialization
-- document indexing
-- query-time retrieval
-- health/status reporting
-- clean shutdown
+Each stored entry (document or memory) includes:
+- `text` → chunk content
+- `source` → file name or `"user"`
+- `page` → page number (if applicable)
+- `type` → `"document"` or `"memory"`
 
-The exact communication method between the Rust engine and the Python RAG subsystem may vary
-depending on implementation choices, but the subsystem should always operate as a controlled
-dependency of the Rust engine rather than an independent application.
+This enables:
 
-## Future Possibilities
+- citation support
+- filtering
+- future extensibility
 
-Possible future extensions include:
+## Memory Support
 
-- support for additional document formats
-- improved retrieval quality and ranking
-- more advanced citation support
-- persistent index management improvements
-- richer document preprocessing strategies
+The subsystem also supports long-term user memory:
 
-These are future possibilities and are not all required for the initial MVP.
+- Stored via `/store` endpoint
+- Treated as lightweight semantic entries
+- Retrieved alongside documents
+
+Memory is:
+
+- persistent
+- queryable
+- integrated into retrieval results
+
+## Vector Store Design
+
+The subsystem uses Chroma in persistent mode.
+
+However, the implementation abstracts the vector store layer, allowing future replacement with alternatives such as:
+
+- FAISS
+- LanceDB
+
+This ensures:
+
+- modularity
+- flexibility
+- reduced vendor lock-in
+
+## Reliability & Design Considerations
+
+The system is designed with the following guarantees:
+
+#### ✔ Concurrency Safety
+- Thread-safe access to vector store and state using locks
+#### ✔ Path Normalization
+- All file paths handled via `pathlib` for cross-platform compatibility
+#### ✔ Duplicate Protection
+- Prevents re-indexing the same document
+#### ✔ Resource Awareness
+- Designed for low-resource machines
+- No GPU required
+#### ✔ Error Handling
+- Clean JSON error responses
+- Validation of inputs and file paths
+
+## Integration with Rust
+
+The subsystem is designed for seamless integration with the Rust engine:
+
+- Communication via REST (JSON)
+- Stateless request handling (except stored index)
+- Fast response times
+- Clear and minimal contract
+
+## Future Extensions
+
+Possible enhancements:
+
+- Support for additional file formats (DOCX, HTML, etc.)
+- Improved ranking and retrieval strategies
+- Advanced metadata filtering
+- Hybrid search (keyword + vector)
+- Smarter memory management
+- Streaming responses
+
 
 ## Summary
 
-The Python RAG subsystem is the document-grounding component of AEGIS. It is used by the Rust
-orchestration layer to process and retrieve local document content so that model responses can be
-grounded in user-provided data rather than relying only on the base model’s general knowledge.
+The Python RAG subsystem is the data grounding layer of AEGIS.
 
+It enables the system to:
+
+- understand user documents
+- retrieve relevant knowledge
+- provide context-aware responses
+
+while remaining:
+
+- local-first
+- modular
+- efficient
+- and easy to integrate
+
+
+> This subsystem serves as a foundational component in building a **privacy-preserving, local AI assistant platform**.
