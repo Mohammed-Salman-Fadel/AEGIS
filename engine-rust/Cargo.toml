@@ -8,7 +8,7 @@ edition = "2024"
 tokio = { version = "1", features = ["full"] }
 
 # HTTP server
-axum = "0.7"
+axum = "0.8"
 
 # HTTP client (inference backends + RAG client)
 reqwest = { version = "0.12", features = ["json", "stream"] }
@@ -36,3 +36,5 @@ tracing-subscriber = "0.3"
 # Error handling
 anyhow = "1"
 thiserror = "1"
+tokio-stream = "0.1"
+futures = "0.3"

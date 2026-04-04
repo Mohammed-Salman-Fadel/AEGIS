@@ -7,3 +7,7 @@
 // TODO: POST /chat handler — deserialize request, open stream, hand off to orchestrator
 // TODO: POST /ingest handler — trigger RAG ingestion for a file/directory
 // TODO: GET  /health handler — check engine + RAG process status
+
+mod handlers;
+mod router;
+mod state;
