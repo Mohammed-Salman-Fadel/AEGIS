@@ -1,32 +1,24 @@
-// Memory Store — persists sessions and conversation history across requests
-//
-// TODO: Session {
-//     session_id: String,
-//     history:    ConversationHistory,
-//     created_at: DateTime,
-//     updated_at: DateTime,
-// }
-//
-// TODO: ConversationHistory {
-//     turns: Vec<Turn>,
-// }
-//
-// TODO: Turn {
-//     query:     String,
-//     response:  String,
-//     timestamp: DateTime,
-// }
-//
-// TODO: impl ConversationHistory
-//   → recent_turns(n: usize) -> &[Turn]   — last N turns for prompt
-//   → compress_oldest()                    — called by compactor
-//   → token_estimate() -> usize
-//
-// TODO: MemoryStore struct (SQLite or flat JSON files for MVP)
-//
-// TODO: impl MemoryStore
-//   → load_or_create(session_id: &str) -> Session
-//   → save(session: &Session) -> Result<()>
-//   → append_turn(session_id: &str, turn: Turn) -> Result<()>
-//   → list_sessions() -> Result<Vec<String>>
-//   → delete_session(session_id: &str) -> Result<()>
+use crate::context::{ConversationHistory, RequestContext};
+
+pub struct MemoryStore;
+
+impl MemoryStore {
+    pub fn new() -> Self { Self }
+
+    pub fn load_or_create(&self, session_id: &str) -> Session {
+        // TODO: load from disk, create new if not found
+        Session {
+            session_id: session_id.to_string(),
+            history:    ConversationHistory::empty(),
+        }
+    }
+
+    pub fn append_turn(&self, session_id: &str, ctx: &RequestContext) {
+        // TODO: persist the turn to disk
+    }
+}
+
+pub struct Session {
+    pub session_id: String,
+    pub history:    ConversationHistory,
+}
