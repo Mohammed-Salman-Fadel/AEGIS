@@ -1,0 +1,8 @@
+# Rust
+engine-rust/target/
+engine-rust/Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
