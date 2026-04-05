@@ -1,0 +1,14 @@
+[package]
+name = "aegis-cli"
+version = "0.1.0"
+edition = "2024"
+description = "Friendly Rust TODO-first scaffold for the AEGIS CLI and localhost engine boundary"
+default-run = "aegis"
+
+[[bin]]
+name = "aegis"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.0", features = ["derive", "cargo"] }
+owo-colors = "4.3.0"

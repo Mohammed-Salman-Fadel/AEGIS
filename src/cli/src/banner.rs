@@ -1,0 +1,30 @@
+//! Role: banner policy and the AEGIS ASCII art used by friendly entry flows.
+//! Called by: `main.rs` before command dispatch.
+//! Calls into: `cli.rs` command variants for banner decisions.
+//! Owns: the banner string and the policy for when it should appear.
+//! Does not own: command output, menus, or backend interactions.
+//! Next TODOs: let users disable the banner from future CLI config and theme settings.
+
+use crate::cli::CommandKind;
+
+pub const AEGIS_ASCII_ART: &str = r#"
+
+_____/\\\\\\\\\_____/\\\\\\\\\\\\\\\_____/\\\\\\\\\\\\__/\\\\\\\\\\\_____/\\\\\\\\\\\___        
+ ___/\\\\\\\\\\\\\__\/\\\///////////____/\\\//////////__\/////\\\///____/\\\/////////\\\_       
+  __/\\\/////////\\\_\/\\\______________/\\\_________________\/\\\______\//\\\______\///__      
+   _\/\\\_______\/\\\_\/\\\\\\\\\\\_____\/\\\____/\\\\\\\_____\/\\\_______\////\\\_________     
+    _\/\\\\\\\\\\\\\\\_\/\\\///////______\/\\\___\/////\\\_____\/\\\__________\////\\\______    
+     _\/\\\/////////\\\_\/\\\_____________\/\\\_______\/\\\_____\/\\\_____________\////\\\___   
+      _\/\\\_______\/\\\_\/\\\_____________\/\\\_______\/\\\_____\/\\\______/\\\______\//\\\__  
+       _\/\\\_______\/\\\_\/\\\\\\\\\\\\\\\_\//\\\\\\\\\\\\/___/\\\\\\\\\\\_\///\\\\\\\\\\\/___ 
+        _\///________\///__\///////////////___\////////////____\///////////____\///////////_____
+
+Local-First AI Orchestration Scaffold
+"#;
+
+pub fn should_render_banner(command: Option<&CommandKind>) -> bool {
+    matches!(
+        command,
+        None | Some(CommandKind::Chat(_)) | Some(CommandKind::Ask(_)) | Some(CommandKind::Repl(_))
+    )
+}
