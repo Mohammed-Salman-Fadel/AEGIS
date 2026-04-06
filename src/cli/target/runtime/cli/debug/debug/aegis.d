@@ -1,1 +1,0 @@
-C:\AEGIS\AEGIS\src/cli\target\runtime\cli\debug\debug\aegis.exe: C:\AEGIS\AEGIS\src\cli\src\cli.rs C:\AEGIS\AEGIS\src\cli\src\doctor.rs C:\AEGIS\AEGIS\src\cli\src\main.rs C:\AEGIS\AEGIS\src\cli\src\runner.rs C:\AEGIS\AEGIS\src\cli\src\ui.rs C:\AEGIS\AEGIS\src\cli\src\workspace.rs

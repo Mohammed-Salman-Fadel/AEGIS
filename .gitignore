@@ -3,6 +3,13 @@
 engine-rust/target/
 engine-rust/Cargo.lock
 
+.env
+.env.local
+# CLI
+
+src/cli/target/
+
+
 # IDE
 .idea/
 .vscode/
