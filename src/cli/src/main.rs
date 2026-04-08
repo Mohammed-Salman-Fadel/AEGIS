@@ -5,6 +5,7 @@
 //! Does not own: command-specific behavior, backend orchestration, or installation logic.
 //! Next TODOs: load real CLI config, persist CLI-local state pointers, and source the engine URL from shared config.
 
+
 mod args;
 mod banner;
 mod cli;
@@ -19,7 +20,7 @@ mod ui;
 mod workspace;
 
 use clap::Parser;
-
+use crate::doctor::Health;
 use cli::Cli;
 use engine_client::EngineClient;
 use ui::Ui;
@@ -57,6 +58,10 @@ fn main() {
     // then hands off all command behavior to `commands.rs`.
     if banner::should_render_banner(cli.command.as_ref()) {
         ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+        let current_health = Health::Ok; 
+        println!("  {}    {}", ctx.ui.status_indicator(&current_health), ctx.ui.local_badge());
+        println!("  {}", ctx.ui.stop_button_hint());
+        println!("  {}\n", ctx.ui.muted("------------------------------------------"));
     }
 
     if let Err(error) = commands::dispatch(&ctx, cli.command) {
