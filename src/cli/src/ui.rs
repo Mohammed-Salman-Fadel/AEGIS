@@ -139,4 +139,27 @@ impl Ui {
             ComponentState::Missing => self.error("[MISSING]"),
         }
     }
+    pub fn status_indicator(&self, health: &Health) -> String {
+        match health {
+            Health::Ok => format!("{} {}", "●".green(), self.success("SYSTEM ACTIVE")),
+            Health::Warn => format!("{} {}", "●".yellow(), self.warning("SYSTEM DEGRADED")),
+            _ => format!("{} {}", "○".dimmed(), self.muted("SYSTEM IDLE")),
+        }
+    }
+
+    pub fn local_badge(&self) -> String {
+        if self.no_color {
+            "[LOCAL-ONLY]".to_string()
+        } else {
+            format!("{}", "[LOCAL-ONLY]".on_blue().white().bold())
+        }
+    }
+
+    pub fn stop_button_hint(&self) -> String {
+        if self.no_color {
+            "Press 'q' or 'Ctrl+C' to STOP".to_string()
+        } else {
+            format!("{} {}", " ■ STOP ".on_red().white().bold(), "Press 'q' to exit".dimmed())
+        }
+    }
 }
