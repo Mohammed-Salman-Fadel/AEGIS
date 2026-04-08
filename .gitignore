@@ -9,6 +9,15 @@ engine-rust/Cargo.lock
 
 src/cli/target/
 
+# RAG
+__pycache__/
+*.py[cod]
+*$py.class
+rag-env/
+.pytest_cache/
+*.log
+# Vector DB
+data/  
 
 # IDE
 .idea/
