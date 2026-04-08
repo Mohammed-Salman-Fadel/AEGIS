@@ -4,7 +4,6 @@
 //! Owns: positional arguments and reusable flag groups for scaffold commands.
 //! Does not own: top-level command routing, validation side effects, or backend calls.
 //! Next TODOs: add richer prompt/session flags once the engine contract and config format are finalized.
-
 use clap::Args;
 
 #[derive(Debug, Clone, Args)]

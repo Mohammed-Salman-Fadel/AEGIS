@@ -208,12 +208,12 @@ impl EngineClient {
             ModelSummary {
                 name: "mistral:7b".to_string(),
                 provider: "ollama".to_string(),
-                description: "Placeholder local model surfaced by the scaffold.".to_string(),
+                description: "can add random predefined description".to_string(),
             },
             ModelSummary {
                 name: "llama3.1".to_string(),
                 provider: "ollama".to_string(),
-                description: "Used to demonstrate numbered selection prompts.".to_string(),
+                description: "".to_string(),
             },
         ])
     }

@@ -29,6 +29,13 @@ impl Ui {
         println!("{}", self.header(art));
     }
 
+    pub fn clear_screen(&self) {
+        // ANSI clear screen + scrollback + move cursor home.
+        // This only affects terminal display and does not touch any CLI or session state.
+        print!("\x1B[2J\x1B[3J\x1B[H");
+        let _ = io::stdout().flush();
+    }
+
     pub fn play_exit_animation(&self, reason: &str) {
         let status = if self.no_color {
             "Shutting down AEGIS".to_string()

@@ -48,26 +48,28 @@ fn dispatch_command(ctx: &AppContext, command: CommandKind) -> AppResult<()> {
     }
 }
 
+//? PRIMARY HOME INTERFACE
 fn show_home(ctx: &AppContext) -> AppResult<()> {
     let report = DoctorReport::collect(&ctx.workspace);
+    // ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
 
     println!("{}", ctx.ui.header("AEGIS CLI"));
     println!("Private, local-first assistant scaffold built to stay inside the Rust CLI boundary.");
-    println!("{}", ctx.ui.muted("This pass is intentionally TODO-heavy: commands explain how the CLI should connect to the engine without pretending the backend wiring is finished."));
+    // println!("{}", ctx.ui.muted("This pass is intentionally TODO-heavy: commands explain how the CLI should connect to the engine without pretending the backend wiring is finished."));
     println!();
     println!("Workspace : {}", ctx.workspace.root.display());
-    println!("Engine URL: {}", ctx.engine.base_url());
-    println!();
-    println!("{}", ctx.ui.header("Command Families"));
-    println!("- install");
-    println!("- chat");
-    println!("- ask --stdin");
-    println!("- repl");
-    println!("- session");
-    println!("- provider");
-    println!("- model");
-    println!("- status");
-    println!("- doctor");
+    println!("Localhost URL: {}", ctx.engine.base_url());
+    // println!();
+    // println!("{}", ctx.ui.header("Command Families"));
+    // println!("- install");
+    // println!("- chat");
+    // println!("- ask --stdin");
+    // println!("- repl");
+    // println!("- session");
+    // println!("- provider");
+    // println!("- model");
+    // println!("- status");
+    // println!("- doctor");
     println!();
     println!("{}", ctx.ui.header("Readiness Snapshot"));
     println!(
@@ -76,21 +78,40 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
         report.warnings(),
         report.missing()
     );
-    println!("{}", ctx.ui.todo("TODO: once the engine endpoints are real, this home screen should show active session, provider, and model summaries from the backend."));
+    // println!("{}", ctx.ui.todo("TODO: once the engine endpoints are real, this home screen should show active session, provider, and model summaries from the backend."));
     if io::stdin().is_terminal() {
         println!();
         println!("{}", ctx.ui.header("Live Shell"));
         println!(
             "{}",
             ctx.ui
-                .muted("Enter commands like `status`, `chat \"hello\"`, or `provider list`.")
+                .muted("Enter commands like `status`, `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
         );
         println!(
             "{}",
-            ctx.ui.muted(
-                "The CLI stays open until Ctrl+C. You can also type `quit` or `exit` to leave gracefully."
-            )
+            ctx.ui
+                .muted("Type `quit` or `exit` to leave the shell. Or simply use Ctrl + C.")
         );
+    }
+    Ok(())
+}
+
+fn handle_clear(ctx: &AppContext) -> AppResult<()> {
+    ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+
+    println!("{}", ctx.ui.header("AEGIS CLI"));
+    // println!();
+    println!("Workspace : {}", ctx.workspace.root.display());
+    println!("Localhost URL: {}", ctx.engine.base_url());
+
+    if io::stdin().is_terminal() {
+        println!();
+        // println!("{}", ctx.ui.header("Live Shell"));
+        println!(
+            "{}",
+            ctx.ui.muted("Enter commands `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
+        );
+        println!();
     }
     Ok(())
 }
@@ -210,16 +231,11 @@ fn handle_repl(ctx: &AppContext, session_id: Option<&str>) -> AppResult<()> {
     Ok(())
 }
 
+// Interactive shell logic
 fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
     println!();
-    println!("{}", ctx.ui.header("Interactive Command Shell"));
-    println!(
-        "{}",
-        ctx.ui.muted(
-            "This shell keeps running until Ctrl+C. Use `help` to repeat guidance or `quit` to leave cleanly."
-        )
-    );
 
+    // Shell command loop
     loop {
         print!("aegis-shell> ");
         io::stdout()
@@ -256,6 +272,11 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
             }
             "banner" => {
                 ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+                continue;
+            }
+            "clear" => {
+                ctx.ui.clear_screen();
+                handle_clear(ctx)?;
                 continue;
             }
             "home" => {
@@ -311,24 +332,26 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn print_shell_help(ctx: &AppContext) {
-    println!("{}", ctx.ui.header("Shell Help"));
-    println!("Run commands without the `aegis` prefix.");
-    println!("Examples:");
+    println!("{}", ctx.ui.header("Aegis Help"));
+    println!("You can run the following commands without the `aegis` prefix:");
+    // println!("Examples:");
     println!("- status");
     println!("- chat \"hello\"");
     println!("- repl");
     println!("- session list");
     println!("- provider select ollama");
     println!("- model list");
+    println!("");
     println!("Built-ins:");
     println!("- help");
     println!("- home");
     println!("- banner");
+    println!("- clear");
     println!("- quit");
     println!(
         "{}",
         ctx.ui
-            .muted("Press Ctrl+C at any time to stop the whole CLI immediately.")
+            .muted("Type `quit` or `exit` at any time to stop the CLI immediately.")
     );
 }
 
@@ -479,21 +502,18 @@ fn handle_model(ctx: &AppContext, command: ModelCommand) -> AppResult<()> {
     Ok(())
 }
 
+//? HANDLES "STATUS" COMMAND
 fn show_status(ctx: &AppContext) -> AppResult<()> {
     let report = DoctorReport::collect(&ctx.workspace);
     let health = ctx.engine.health();
 
     println!("{}", ctx.ui.header("Status"));
     println!("Workspace root : {}", ctx.workspace.root.display());
-    println!("Engine URL     : {}", health.base_url);
+    println!("Localhost URL     : {}", health.base_url);
     println!("Health path    : {}", health.request_path);
     println!(
         "Engine ready   : {}",
-        if health.reachable {
-            "yes"
-        } else {
-            "no (scaffold placeholder)"
-        }
+        if health.reachable { "yes" } else { "no" }
     );
     println!("Health note    : {}", health.note);
     println!(

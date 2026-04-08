@@ -28,11 +28,12 @@ Examples:
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "aegis",
-    version,
-    about = "Friendly TODO-first CLI scaffold for the local AEGIS assistant",
+    version = "0.0.1",
+    about = "AEGIS is your local privacy first tool!",
     long_about = None,
     after_help = HELP_EXAMPLES
 )]
+
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<CommandKind>,
