@@ -35,12 +35,13 @@ struct GenerateChunk {
 
 #[async_trait]
 impl InferenceBackend for OllamaBackend {
-    async fn call(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
+    async fn call(&self, prompt: &str, _model: &str) -> anyhow::Result<String> {
+        // DIŞARIDAN GELEN MODEL İSMİNİ İPTAL EDİP "llama3" YAPIYORUZ
         let response = self
             .client
             .post(format!("{}/api/generate", self.base_url))
             .json(&GenerateRequest {
-                model,
+                model: "llama3", 
                 prompt,
                 stream: false,
             })
@@ -60,14 +61,15 @@ impl InferenceBackend for OllamaBackend {
     async fn stream(
         &self,
         prompt: &str,
-        model: &str,
+        _model: &str,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
+        // BURADA DA MODELİ "llama3" OLARAK SABİTLEDİK
         let response = self
             .client
             .post(format!("{}/api/generate", self.base_url))
             .json(&GenerateRequest {
-                model,
+                model: "llama3",
                 prompt,
                 stream: true,
             })

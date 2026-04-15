@@ -7,7 +7,7 @@ use crate::workflow::registry::WorkflowRegistry;
 use crate::compactor::Compactor;
 use crate::prompt_builder::PromptBuilder;
 use crate::inference::InferenceBackend;
-use crate::plan_parser::{ParsedPlan, PlanParser, StepResult};
+use crate::plan_parser::{PlanParser, StepResult};
 use crate::rag_client::RagClient;
 use crate::tool_registry::ToolRegistry;
 use crate::model_registry::ModelRegistry;
@@ -15,9 +15,8 @@ use crate::memory_store::{MemoryStore, Session, SessionSummary};
 use crate::context::RequestContext;
 use crate::network::handlers::chat::ChatRequest;
 
-
 /// The central orchestrator — coordinates every subsystem.
-/// This is the only module the network layer talks to.
+/// This is the primary entry point for all incoming chat requests.
 pub struct Orchestrator {
     classifier:        Classifier,
     workflow_registry: WorkflowRegistry,
@@ -25,13 +24,14 @@ pub struct Orchestrator {
     prompt_builder:    PromptBuilder,
     inference:         Box<dyn InferenceBackend + Send + Sync>,
     plan_parser:       PlanParser,
-    rag_client:        Arc<RagClient>,
+    pub rag_client:    Arc<RagClient>, // Public access for the network layer to ingest files
     tool_registry:     ToolRegistry,
     model_registry:    ModelRegistry,
     memory_store:      MemoryStore,
 }
 
 impl Orchestrator {
+    /// Initializes the Orchestrator with required backend services.
     pub fn new(
         inference:    Box<dyn InferenceBackend + Send + Sync>,
         rag_client:   Arc<RagClient>,
@@ -51,8 +51,7 @@ impl Orchestrator {
         }
     }
 
-    /// The only public method — called by the network layer.
-    /// Runs the full request lifecycle and streams tokens into tx.
+    /// Handles incoming requests, manages session IDs, and streams responses to the network layer.
     pub async fn handle(&self, req: ChatRequest, tx: mpsc::Sender<String>) {
         let session_id = req
             .session_id
@@ -70,14 +69,17 @@ impl Orchestrator {
         }
     }
 
+    /// Returns a list of all active chat sessions.
     pub fn list_sessions(&self) -> Vec<SessionSummary> {
         self.memory_store.list_sessions()
     }
 
+    /// Retrieves a specific session by its unique ID.
     pub fn get_session(&self, session_id: &str) -> Option<Session> {
         self.memory_store.get_session(session_id)
     }
 
+    /// The core logic for handling queries using a fallback-to-synthesis approach.
     async fn handle_fallback(
         &self,
         req: ChatRequest,
@@ -93,51 +95,37 @@ impl Orchestrator {
             model,
         );
 
-        let workflow_id = self.classifier.classify(&ctx);
-        let workflow = self.workflow_registry.get(workflow_id);
         ctx.trace_summary("classify", "fallback");
-        ctx.trace_summary("workflow", format!("{} phase(s)", workflow.phases.len()));
-        if !req.attachments.is_empty() {
-            ctx.trace_summary(
-                "attachments",
-                "attachments are accepted by the MVP API but not executed yet",
-            );
-        }
+        
+        // 1. RAG (Retrieval-Augmented Generation): Retrieve relevant chunks from uploaded documents
+        let relevant_chunks = self.rag_client.retrieve(&ctx.original_query, 5).await.unwrap_or_default();
+        let context_from_docs = relevant_chunks.join("\n---\n");
 
-        self.compactor.compact(&mut ctx);
-
-        let planning_prompt = self
-            .prompt_builder
-            .build_planning_prompt(&ctx.history, &ctx.original_query);
-        let planner_output = self
-            .inference
-            .call(&planning_prompt, &ctx.model.name)
-            .await?;
-        ctx.trace_summary("plan", "planner response received");
-
-        let final_answer = match self.plan_parser.parse(&planner_output) {
-            ParsedPlan::Final { answer } => {
-                ctx.trace_summary("plan_parse", "model returned final");
-                tx.send(answer.clone()).await.ok();
-                answer
-            }
-            ParsedPlan::Steps { steps } => {
-                ctx.trace_summary("plan_parse", format!("{} step(s)", steps.len()));
-                let step_results = self.execute_steps(&ctx, steps).await?;
-                ctx.trace_summary("execute", format!("{} step result(s)", step_results.len()));
-
-                let synthesis_prompt = self.prompt_builder.build_synthesis_prompt(
-                    &ctx.history,
-                    &ctx.original_query,
-                    &step_results,
-                );
-
-                self.inference
-                    .stream(&synthesis_prompt, &ctx.model.name, tx)
-                    .await?
-            }
+        // 2. Prompt Synthesis: Perform "Context Injection" if document data is available
+        let synthesis_prompt = if !context_from_docs.is_empty() {
+            ctx.trace_summary("rag", "context found and injected into prompt");
+            format!(
+                "You are the AEGIS AI Assistant. Below are excerpts from a document provided by the user. \
+                Please use this information to answer the question as accurately as possible. \
+                If the document does not contain the answer, use your general knowledge to assist.\n\n\
+                DOCUMENT CONTENT:\n{}\n\nUSER QUERY: {}",
+                context_from_docs, ctx.original_query
+            )
+        } else {
+            ctx.trace_summary("rag", "no relevant document context found");
+            self.prompt_builder.build_synthesis_prompt(
+                &ctx.history,
+                &ctx.original_query,
+                &[],
+            )
         };
 
+        // 3. Inference: Call the local LLM and stream tokens back to the client
+        let final_answer = self.inference
+            .stream(&synthesis_prompt, &ctx.model.name, tx)
+            .await?;
+
+        // Persist the conversation turn in local memory
         self.memory_store.append_turn(
             &session_id,
             req.message,
@@ -147,6 +135,7 @@ impl Orchestrator {
         Ok(final_answer)
     }
 
+    /// Executes specific atomic steps planned by the reasoning engine.
     async fn execute_steps(
         &self,
         ctx: &RequestContext,
@@ -164,8 +153,16 @@ impl Orchestrator {
                     );
                     self.inference.call(&prompt, &ctx.model.name).await?
                 }
+                "rag" | "search" | "document" => {
+                    let chunks = self.rag_client.retrieve(&step.input, 5).await.unwrap_or_default();
+                    if chunks.is_empty() {
+                        "No relevant information was found in the document.".to_string()
+                    } else {
+                        chunks.join("\n---\n")
+                    }
+                }
                 unsupported => {
-                    format!("Unsupported MVP tool `{unsupported}`. Only `think` is enabled.")
+                    format!("Unsupported tool usage detected: `{unsupported}`.")
                 }
             };
 
