@@ -15,7 +15,7 @@ The Rust engine is responsible for:
 
 - receiving requests from the CLI and web UI
 - managing the overall system flow
-- coordinating inference through Ollama
+- coordinating inference through Ollama or an OpenAI-compatible local backend such as LM Studio
 - invoking the RAG subsystem for document-based queries
 - invoking MCP-based local tools when required
 - managing session state and context
@@ -28,7 +28,7 @@ The Rust engine is responsible for:
 For the initial MVP, the Rust engine should support:
 
 - a local API for the CLI and web UI
-- basic direct chat flow through Ollama
+- basic direct chat flow through Ollama or LM Studio
 - streamed assistant responses
 - minimal session handling
 - explicit invocation of the RAG subsystem when requested
@@ -57,7 +57,7 @@ Instead, it coordinates them.
 3. Determine the execution path.
 4. If required, invoke the RAG subsystem or MCP integration.
 5. Assemble the final context for inference.
-6. Send the request to Ollama.
+6. Send the request to the configured inference provider.
 7. Stream the response back to the caller.
 8. Handle errors, logging, and state updates.
 
@@ -67,6 +67,8 @@ The engine is designed to work with:
 
 - **Ollama**
     - local inference backend
+- **LM Studio**
+    - local OpenAI-compatible inference backend
 - **Python RAG subsystem**
     - document ingestion and retrieval
 - **MCP integrations**
@@ -75,6 +77,33 @@ The engine is designed to work with:
     - local control and interaction
 - **Web UI**
     - browser-based chat interface
+
+## Inference Configuration
+
+The engine defaults to Ollama:
+
+```bash
+AEGIS_INFERENCE_PROVIDER=ollama
+AEGIS_OLLAMA_URL=http://127.0.0.1:11434
+AEGIS_MODEL=mistral:7b
+```
+
+LM Studio uses the shared OpenAI-compatible backend and defaults to LM Studio's local server URL:
+
+```bash
+AEGIS_INFERENCE_PROVIDER=lmstudio
+AEGIS_LM_STUDIO_URL=http://127.0.0.1:1234
+AEGIS_MODEL=<lm-studio-model-id>
+```
+
+Other OpenAI-compatible local servers can use:
+
+```bash
+AEGIS_INFERENCE_PROVIDER=openai-compatible
+AEGIS_OPENAI_COMPAT_URL=http://127.0.0.1:1234
+AEGIS_OPENAI_COMPAT_API_KEY=<optional-api-key>
+AEGIS_MODEL=<model-id>
+```
 
 ## Future Possibilities
 

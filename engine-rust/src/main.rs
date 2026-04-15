@@ -14,18 +14,34 @@ mod model_registry;
 mod memory_store;
 mod process_manager;
 
+use config::{AppConfig, InferenceProvider};
+use inference::InferenceBackend;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let host = std::env::var("AEGIS_ENGINE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = std::env::var("AEGIS_ENGINE_PORT").unwrap_or_else(|_| "8080".to_string());
-    let bind_addr = format!("{host}:{port}");
+    let config = AppConfig::from_env()?;
+    let bind_addr = format!("{}:{}", config.server.host, config.server.port);
 
-    let ollama_base_url =
-        std::env::var("AEGIS_OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+    let inference: Box<dyn InferenceBackend + Send + Sync> = match &config.inference.provider {
+        InferenceProvider::Ollama => Box::new(inference::backends::ollama::OllamaBackend::new(
+            config.inference.base_url.clone(),
+        )),
+        InferenceProvider::LmStudio | InferenceProvider::OpenAiCompatible => Box::new(
+            inference::backends::openai_compat::OpenAiCompatBackend::new(
+                config.inference.base_url.clone(),
+                config.inference.api_key.clone(),
+            ),
+        ),
+    };
 
-    let inference = Box::new(inference::backends::ollama::OllamaBackend::new(ollama_base_url));
+    tracing::info!(
+        provider = ?config.inference.provider,
+        base_url = %config.inference.base_url,
+        "configured inference backend"
+    );
+
     let rag_client = std::sync::Arc::new(rag_client::RagClient::new());
     let memory_store = memory_store::MemoryStore::new();
 
