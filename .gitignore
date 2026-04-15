@@ -7,7 +7,7 @@ engine-rust/Cargo.lock
 .env.local
 # CLI
 
-src/cli/target/
+cli/target/
 
 # RAG
 __pycache__/

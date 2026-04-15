@@ -6,8 +6,10 @@
 //! Next TODOs: replace placeholder returns with real HTTP requests and source endpoint paths from shared engine config.
 
 use std::env;
+use std::io::{BufRead, BufReader};
 
 use crate::AppResult;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct EngineClient {
@@ -77,27 +79,66 @@ impl EngineClient {
     }
 
     pub fn health(&self) -> EngineHealth {
-        // TODO: replace this placeholder shape with a real HTTP GET so both the CLI and
-        // future tests can verify the engine is reachable before running chat commands.
-        EngineHealth {
-            base_url: self.base_url.clone(),
-            request_path: format!("{}/health", self.base_url),
-            reachable: false,
-            note: "TODO: implement a real GET /health request against the engine network layer."
-                .to_string(),
+        let request_path = format!("{}/health", self.base_url);
+        match reqwest::blocking::get(&request_path) {
+            Ok(response) if response.status().is_success() => EngineHealth {
+                base_url: self.base_url.clone(),
+                request_path,
+                reachable: true,
+                note: "Engine /health responded successfully.".to_string(),
+            },
+            Ok(response) => EngineHealth {
+                base_url: self.base_url.clone(),
+                request_path,
+                reachable: false,
+                note: format!("Engine /health returned HTTP {}.", response.status()),
+            },
+            Err(error) => EngineHealth {
+                base_url: self.base_url.clone(),
+                request_path,
+                reachable: false,
+                note: format!("Could not reach engine: {error}"),
+            },
         }
     }
 
     pub fn chat(&self, prompt: &str, session_id: Option<&str>) -> AppResult<ChatReply> {
-        // TODO: keep `/chat` as the shared runtime seam instead of adding special CLI-only
-        // orchestration branches here.
+        let request_path = format!("{}/chat", self.base_url);
+        let response = reqwest::blocking::Client::new()
+            .post(&request_path)
+            .json(&ChatRequestBody {
+                session_id: session_id.map(str::to_string),
+                message: prompt.to_string(),
+            })
+            .send()
+            .map_err(|error| format!("Could not send chat request to engine: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Engine chat request failed with HTTP {}.", response.status()));
+        }
+
+        let reader = BufReader::new(response);
+        let mut message = String::new();
+
+        for line in reader.lines() {
+            let line = line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
+            if let Some(data) = line.strip_prefix("data: ") {
+                if data == "[DONE]" {
+                    break;
+                }
+                if data.starts_with("[ERROR]") {
+                    return Err(data.to_string());
+                }
+                print!("{data}");
+                message.push_str(data);
+            }
+        }
+
+        println!();
+
         Ok(ChatReply {
-            request_path: format!("{}/chat", self.base_url),
-            message: format!(
-                "TODO: send chat payload to the orchestrator /chat endpoint over localhost HTTP.\nSession: {}\nPrompt: {}",
-                session_id.unwrap_or("<engine should create or choose a session>"),
-                prompt
-            ),
+            request_path,
+            message,
         })
     }
 
@@ -123,33 +164,67 @@ impl EngineClient {
     }
 
     pub fn list_sessions(&self) -> AppResult<Vec<SessionSummary>> {
-        // Placeholder records exist only so the scaffold menus and output paths are easy to test.
-        Ok(vec![
-            SessionSummary {
-                id: "todo-session-001".to_string(),
-                title: "Placeholder chat session".to_string(),
-                description: "TODO: replace this list with engine-owned session summaries."
-                    .to_string(),
-            },
-            SessionSummary {
-                id: "todo-session-002".to_string(),
-                title: "Second placeholder session".to_string(),
-                description: "Used only so interactive menu scaffolding has something to render."
-                    .to_string(),
-            },
-        ])
+        let request_path = format!("{}/sessions", self.base_url);
+        let response = reqwest::blocking::get(&request_path)
+            .map_err(|error| format!("Could not fetch sessions from engine: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Engine sessions request failed with HTTP {}.", response.status()));
+        }
+
+        let response = response
+            .json::<SessionsResponse>()
+            .map_err(|error| format!("Could not parse engine sessions response: {error}"))?;
+
+        Ok(response
+            .sessions
+            .into_iter()
+            .map(|session| SessionSummary {
+                id: session.session_id,
+                title: session.title,
+                description: format!(
+                    "{} turn(s), updated {}",
+                    session.turn_count, session.updated_at
+                ),
+            })
+            .collect())
     }
 
     pub fn show_session(&self, session_id: &str) -> AppResult<SessionDetail> {
+        let request_path = format!("{}/sessions/{session_id}", self.base_url);
+        let response = reqwest::blocking::get(&request_path)
+            .map_err(|error| format!("Could not fetch session from engine: {error}"))?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(format!("Session `{session_id}` was not found."));
+        }
+
+        if !response.status().is_success() {
+            return Err(format!("Engine session request failed with HTTP {}.", response.status()));
+        }
+
+        let response = response
+            .json::<EngineSession>()
+            .map_err(|error| format!("Could not parse engine session response: {error}"))?;
+
         Ok(SessionDetail {
-            id: session_id.to_string(),
-            title: "Placeholder session detail".to_string(),
-            note: "TODO: GET /sessions/<id> from the engine and render real conversation history."
-                .to_string(),
-            recent_turns: vec![
-                "user> TODO session request".to_string(),
-                "assistant> TODO session response".to_string(),
-            ],
+            id: response.session_id,
+            title: response.title,
+            note: format!(
+                "Created {}, updated {}",
+                response.created_at, response.updated_at
+            ),
+            recent_turns: response
+                .history
+                .turns
+                .into_iter()
+                .flat_map(|turn| {
+                    [
+                        format!("user> {}", turn.query),
+                        format!("assistant> {}", turn.response),
+                    ]
+                })
+                .collect(),
         })
     }
 
@@ -226,4 +301,43 @@ impl EngineClient {
             message: "TODO: ask the engine to make this model active in shared config.".to_string(),
         })
     }
+}
+
+#[derive(Serialize)]
+struct ChatRequestBody {
+    session_id: Option<String>,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct SessionsResponse {
+    sessions: Vec<EngineSessionSummary>,
+}
+
+#[derive(Deserialize)]
+struct EngineSessionSummary {
+    session_id: String,
+    title: String,
+    turn_count: usize,
+    updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct EngineSession {
+    session_id: String,
+    title: String,
+    history: EngineHistory,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct EngineHistory {
+    turns: Vec<EngineTurn>,
+}
+
+#[derive(Deserialize)]
+struct EngineTurn {
+    query: String,
+    response: String,
 }

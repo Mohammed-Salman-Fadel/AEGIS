@@ -135,11 +135,12 @@ fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult
 }
 
 fn handle_chat(ctx: &AppContext, prompt: &str, session_id: Option<&str>) -> AppResult<()> {
-    println!("{}", ctx.ui.header("Chat Scaffold"));
+    println!("{}", ctx.ui.header("Chat"));
     let reply = ctx.engine.chat(prompt, session_id)?;
-    println!("{}", reply.message);
-    println!("Endpoint: {}", reply.request_path);
-    println!("{}", ctx.ui.todo("TODO: stream tokens from the engine /chat SSE flow instead of printing a placeholder reply."));
+    if ctx.ui.verbose {
+        println!();
+        println!("Endpoint: {}", reply.request_path);
+    }
     Ok(())
 }
 
