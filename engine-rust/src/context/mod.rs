@@ -1,15 +1,20 @@
 use std::collections::HashMap;
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::model_registry::ModelProfile;
 
 /// One turn in the conversation — a user message and the assistant's response.
+#[derive(Clone, Serialize)]
 pub struct Turn {
-    pub query:    String,
-    pub response: String,
+    pub query:      String,
+    pub response:   String,
+    pub created_at: DateTime<Utc>,
 }
 
 /// The conversation history for a session.
+#[derive(Clone, Serialize)]
 pub struct ConversationHistory {
     pub turns: Vec<Turn>,
 }
@@ -21,6 +26,7 @@ impl ConversationHistory {
 }
 
 /// A single entry recording what a phase did and how many tokens it used.
+#[derive(Clone, Serialize)]
 pub struct TraceEntry {
     pub phase:       String,
     pub tokens_used: usize,
@@ -79,6 +85,14 @@ impl RequestContext {
             phase:   phase.to_string(),
             tokens_used,
             summary: None,
+        });
+    }
+
+    pub fn trace_summary(&mut self, phase: &str, summary: impl Into<String>) {
+        self.trace.push(TraceEntry {
+            phase: phase.to_string(),
+            tokens_used: 0,
+            summary: Some(summary.into()),
         });
     }
 

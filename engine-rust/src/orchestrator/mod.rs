@@ -1,17 +1,17 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use crate::classifier::Classifier;
 use crate::workflow::registry::WorkflowRegistry;
-use crate::workflow::phases::Phase;
 use crate::compactor::Compactor;
 use crate::prompt_builder::PromptBuilder;
 use crate::inference::InferenceBackend;
-use crate::plan_parser::PlanParser;
+use crate::plan_parser::{ParsedPlan, PlanParser, StepResult};
 use crate::rag_client::RagClient;
 use crate::tool_registry::ToolRegistry;
 use crate::model_registry::ModelRegistry;
-use crate::memory_store::MemoryStore;
+use crate::memory_store::{MemoryStore, Session, SessionSummary};
 use crate::context::RequestContext;
 use crate::network::handlers::chat::ChatRequest;
 
@@ -54,62 +54,127 @@ impl Orchestrator {
     /// The only public method — called by the network layer.
     /// Runs the full request lifecycle and streams tokens into tx.
     pub async fn handle(&self, req: ChatRequest, tx: mpsc::Sender<String>) {
-        // 1. load or create session
-        let session = self.memory_store.load_or_create(&req.session_id);
+        let session_id = req
+            .session_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        // 2. load model profile
-        let model = self.model_registry.get_active();
-
-        // 3. build the central state object for this request
-        let mut ctx = RequestContext::new(req.session_id.clone(), req.message.clone(), session.history, model);
-
-        // 4. classify → which workflow to run
-        let workflow_id = self.classifier.classify(&ctx);
-
-        // 5. fetch the workflow phases
-        let workflow = self.workflow_registry.get(workflow_id);
-
-        // 6. run each phase in order
-        for phase in &workflow.phases {
-            match phase {
-                Phase::Plan       => self.run_plan_phase(&mut ctx).await,
-                Phase::Execute    => self.run_execute_phase(&mut ctx).await,
-                Phase::Synthesize => self.run_synthesize_phase(&mut ctx, &tx).await,
-                Phase::Compact    => self.compactor.compact(&mut ctx),
-                _                 => {} // other phases handled later
+        match self.handle_fallback(req, session_id, tx.clone()).await {
+            Ok(_) => {
+                let _ = tx.send("[DONE]".to_string()).await;
+            }
+            Err(error) => {
+                let _ = tx.send(format!("[ERROR] {error}")).await;
             }
         }
-
-        // 7. save the turn to memory
-        self.memory_store.append_turn(&req.session_id, &ctx);
     }
 
-    // ---------------------------------------------------------------
-    // Private phase runners
-    // ---------------------------------------------------------------
-
-    async fn run_plan_phase(&self, ctx: &mut RequestContext) {
-        // compact before touching the LLM — always
-        self.compactor.compact(ctx);
-
-        // TODO: build plan prompt
-        // TODO: call inference
-        // TODO: parse plan → ctx.slots
+    pub fn list_sessions(&self) -> Vec<SessionSummary> {
+        self.memory_store.list_sessions()
     }
 
-    async fn run_execute_phase(&self, ctx: &mut RequestContext) {
-        // TODO: read plan from ctx.slots
-        // TODO: for each step:
-        //   compact
-        //   match action → rag_client / tool_registry / direct
-        //   store result in ctx.slots
+    pub fn get_session(&self, session_id: &str) -> Option<Session> {
+        self.memory_store.get_session(session_id)
     }
 
-    async fn run_synthesize_phase(&self, ctx: &mut RequestContext, tx: &mpsc::Sender<String>) {
-        // compact before touching the LLM — always
-        self.compactor.compact(ctx);
+    async fn handle_fallback(
+        &self,
+        req: ChatRequest,
+        session_id: String,
+        tx: mpsc::Sender<String>,
+    ) -> anyhow::Result<String> {
+        let session = self.memory_store.load_or_create(&session_id);
+        let model = self.model_registry.get_active();
+        let mut ctx = RequestContext::new(
+            session_id.clone(),
+            req.message.clone(),
+            session.history.clone(),
+            model,
+        );
 
-        // TODO: build synthesis prompt
-        // TODO: inference.stream(prompt, tx) → tokens into channel → SSE → client
+        let workflow_id = self.classifier.classify(&ctx);
+        let workflow = self.workflow_registry.get(workflow_id);
+        ctx.trace_summary("classify", "fallback");
+        ctx.trace_summary("workflow", format!("{} phase(s)", workflow.phases.len()));
+        if !req.attachments.is_empty() {
+            ctx.trace_summary(
+                "attachments",
+                "attachments are accepted by the MVP API but not executed yet",
+            );
+        }
+
+        self.compactor.compact(&mut ctx);
+
+        let planning_prompt = self
+            .prompt_builder
+            .build_planning_prompt(&ctx.history, &ctx.original_query);
+        let planner_output = self
+            .inference
+            .call(&planning_prompt, &ctx.model.name)
+            .await?;
+        ctx.trace_summary("plan", "planner response received");
+
+        let final_answer = match self.plan_parser.parse(&planner_output) {
+            ParsedPlan::Final { answer } => {
+                ctx.trace_summary("plan_parse", "model returned final");
+                tx.send(answer.clone()).await.ok();
+                answer
+            }
+            ParsedPlan::Steps { steps } => {
+                ctx.trace_summary("plan_parse", format!("{} step(s)", steps.len()));
+                let step_results = self.execute_steps(&ctx, steps).await?;
+                ctx.trace_summary("execute", format!("{} step result(s)", step_results.len()));
+
+                let synthesis_prompt = self.prompt_builder.build_synthesis_prompt(
+                    &ctx.history,
+                    &ctx.original_query,
+                    &step_results,
+                );
+
+                self.inference
+                    .stream(&synthesis_prompt, &ctx.model.name, tx)
+                    .await?
+            }
+        };
+
+        self.memory_store.append_turn(
+            &session_id,
+            req.message,
+            final_answer.clone(),
+        );
+
+        Ok(final_answer)
+    }
+
+    async fn execute_steps(
+        &self,
+        ctx: &RequestContext,
+        steps: Vec<crate::plan_parser::PlanStep>,
+    ) -> anyhow::Result<Vec<StepResult>> {
+        let mut results = Vec::new();
+
+        for step in steps.into_iter().take(3) {
+            let output = match step.tool.as_str() {
+                "think" => {
+                    let prompt = self.prompt_builder.build_step_prompt(
+                        &ctx.history,
+                        &ctx.original_query,
+                        &step.input,
+                    );
+                    self.inference.call(&prompt, &ctx.model.name).await?
+                }
+                unsupported => {
+                    format!("Unsupported MVP tool `{unsupported}`. Only `think` is enabled.")
+                }
+            };
+
+            results.push(StepResult {
+                step_id: step.id,
+                output,
+            });
+        }
+
+        Ok(results)
     }
 }

@@ -9,5 +9,5 @@
 // TODO: GET  /health handler — check engine + RAG process status
 
 pub mod handlers;
-mod router;
-mod state;
+pub mod router;
+pub mod state;

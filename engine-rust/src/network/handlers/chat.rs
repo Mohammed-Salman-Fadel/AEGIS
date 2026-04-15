@@ -15,9 +15,10 @@ use crate::network::state::AppState;
 /// Incoming JSON body for POST /chat
 #[derive(Deserialize)]
 pub struct ChatRequest {
-    pub session_id:  String,
+    pub session_id:  Option<String>,
     pub message:     String,
-    pub attachments: Vec<String>, // file paths, can be empty []
+    #[serde(default)]
+    pub attachments: Vec<String>,
 }
 
 /// Handler for POST /chat
@@ -40,8 +41,7 @@ pub async fn chat(
     });
 
     // convert the receiver into a Stream of SSE Events
-    let stream = ReceiverStream::new(rx)
-        .map(|token| Ok(Event::default().data(token)));
+    let stream = ReceiverStream::new(rx).map(|token| Ok(Event::default().data(token)));
 
     Sse::new(stream)
 }

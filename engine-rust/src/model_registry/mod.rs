@@ -1,3 +1,6 @@
+use std::env;
+
+#[derive(Clone)]
 pub struct ModelProfile {
     pub name:           String,
     pub context_window: usize,
@@ -16,9 +19,8 @@ impl ModelRegistry {
     pub fn new() -> Self { Self }
 
     pub fn get_active(&self) -> ModelProfile {
-        // TODO: load from config
         ModelProfile {
-            name:           "mistral:7b".to_string(),
+            name:           env::var("AEGIS_MODEL").unwrap_or_else(|_| "mistral:7b".to_string()),
             context_window: 8192,
             output_reserve: 512,
         }
