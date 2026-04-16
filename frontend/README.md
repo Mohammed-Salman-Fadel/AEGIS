@@ -18,6 +18,25 @@ The Web UI is responsible for:
 - exposing user-facing controls such as session reset and interface options
 - presenting feedback related to indexing, system state, and local-only operation
 
+## Start Guide
+
+Run the rust engine first:
+
+```cmd
+cd C:\AEGIS\AEGIS\engine-rust
+cargo run
+```
+
+In a seperate terminal, install frontend dependencies and run:
+
+```cmd
+cd C:\AEGIS\AEGIS\frontend
+npm install
+npm run dev
+```
+
+Web app should load in: `http://localhost:5173`.
+
 ## Role in the System
 
 The Web UI acts as a local client of the Rust engine. It does not directly communicate with the
@@ -45,19 +64,19 @@ A typical Web UI-based flow is:
 The Web UI is intended to provide the following user-facing capabilities:
 
 - **Chat Interface**
-    - allow users to submit natural language requests and view assistant responses
+  - allow users to submit natural language requests and view assistant responses
 - **Streamed Response Display**
-    - display assistant output progressively in real time
+  - display assistant output progressively in real time
 - **Status Indicators**
-    - show assistant state such as loading, generating, or idle
+  - show assistant state such as loading, generating, or idle
 - **Local-Only Confirmation**
-    - provide a visible indication that processing remains on the local machine
+  - provide a visible indication that processing remains on the local machine
 - **Session Controls**
-    - support actions such as resetting or starting a new conversation
+  - support actions such as resetting or starting a new conversation
 - **Document Processing Feedback**
-    - display indexing progress or retrieval-related feedback when relevant
+  - display indexing progress or retrieval-related feedback when relevant
 - **User Convenience Features**
-    - support features such as message editing, export, or interface preferences where applicable
+  - support features such as message editing, export, or interface preferences where applicable
 
 These functions define the Web UI as the primary graphical interaction layer of AEGIS.
 
@@ -66,15 +85,15 @@ These functions define the Web UI as the primary graphical interaction layer of 
 The Web UI operates together with the following components:
 
 - **Rust Engine**
-    - main backend and orchestration layer
+  - main backend and orchestration layer
 - **CLI**
-    - alternative local interaction and control interface
+  - alternative local interaction and control interface
 - **Ollama**
-    - inference backend used indirectly through the Rust engine
+  - inference backend used indirectly through the Rust engine
 - **Python RAG subsystem**
-    - document retrieval subsystem used indirectly through the Rust engine
+  - document retrieval subsystem used indirectly through the Rust engine
 - **MCP integrations**
-    - local tools accessed indirectly through the Rust engine when required
+  - local tools accessed indirectly through the Rust engine when required
 
 ## Future Possibilities
 

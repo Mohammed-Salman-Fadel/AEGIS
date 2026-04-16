@@ -7,7 +7,7 @@ use crate::inference::InferenceBackend;
 
 pub struct OllamaBackend {
     base_url: String,
-    client:   reqwest::Client,
+    client: reqwest::Client,
 }
 
 impl OllamaBackend {
@@ -21,7 +21,7 @@ impl OllamaBackend {
 
 #[derive(Serialize)]
 struct GenerateRequest<'a> {
-    model:  &'a str,
+    model: &'a str,
     prompt: &'a str,
     stream: bool,
 }
@@ -29,19 +29,20 @@ struct GenerateRequest<'a> {
 #[derive(Deserialize)]
 struct GenerateChunk {
     response: Option<String>,
-    done:     Option<bool>,
-    error:    Option<String>,
+    done: Option<bool>,
+    error: Option<String>,
 }
 
 #[async_trait]
 impl InferenceBackend for OllamaBackend {
     async fn call(&self, prompt: &str, _model: &str) -> anyhow::Result<String> {
-        // DIŞARIDAN GELEN MODEL İSMİNİ İPTAL EDİP "llama3" YAPIYORUZ
+        // Keep the current behavior of forcing a single local model for now,
+        // but align it with the model that is actually installed on this machine.
         let response = self
             .client
             .post(format!("{}/api/generate", self.base_url))
             .json(&GenerateRequest {
-                model: "llama3", 
+                model: "qwen3:4b",
                 prompt,
                 stream: false,
             })
@@ -64,12 +65,12 @@ impl InferenceBackend for OllamaBackend {
         _model: &str,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
-        // BURADA DA MODELİ "llama3" OLARAK SABİTLEDİK
+        // Keep streaming and non-streaming calls on the same default local model.
         let response = self
             .client
             .post(format!("{}/api/generate", self.base_url))
             .json(&GenerateRequest {
-                model: "llama3",
+                model: "llama3.2",
                 prompt,
                 stream: true,
             })

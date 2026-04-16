@@ -20,7 +20,7 @@ impl ModelRegistry {
 
     pub fn get_active(&self) -> ModelProfile {
         ModelProfile {
-            name:           env::var("AEGIS_MODEL").unwrap_or_else(|_| "mistral:7b".to_string()),
+            name:           env::var("AEGIS_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string()),
             context_window: 8192,
             output_reserve: 512,
         }
