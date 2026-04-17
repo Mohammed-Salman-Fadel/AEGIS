@@ -5,6 +5,7 @@ engine-rust/Cargo.lock
 
 .env
 .env.local
+frontend/.npm-cache/
 # CLI
 
 cli/target/

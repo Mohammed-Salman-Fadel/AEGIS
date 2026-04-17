@@ -35,20 +35,25 @@ struct GenerateChunk {
 
 #[async_trait]
 impl InferenceBackend for OllamaBackend {
-    async fn call(&self, prompt: &str, _model: &str) -> anyhow::Result<String> {
-        // Keep the current behavior of forcing a single local model for now,
-        // but align it with the model that is actually installed on this machine.
+    async fn call(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
         let response = self
             .client
             .post(format!("{}/api/generate", self.base_url))
             .json(&GenerateRequest {
-                model: "qwen3:4b",
+                model,
                 prompt,
                 stream: false,
             })
             .send()
-            .await?
-            .error_for_status()?
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("ollama error {status} for model `{model}`: {body}");
+        }
+
+        let response = response
             .json::<GenerateChunk>()
             .await?;
 
@@ -62,21 +67,25 @@ impl InferenceBackend for OllamaBackend {
     async fn stream(
         &self,
         prompt: &str,
-        _model: &str,
+        model: &str,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
-        // Keep streaming and non-streaming calls on the same default local model.
         let response = self
             .client
             .post(format!("{}/api/generate", self.base_url))
             .json(&GenerateRequest {
-                model: "llama3.2",
+                model,
                 prompt,
                 stream: true,
             })
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("ollama error {status} for model `{model}`: {body}");
+        }
 
         let mut full_response = String::new();
         let mut pending = String::new();

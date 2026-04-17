@@ -1,234 +1,369 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  ShieldCheck, Cpu, Database, Send, Activity, FileText, 
-  Trash2, Upload, X, CheckCircle2, Loader2, Sparkles,
-  Lock, MessageSquare, Plus, Edit2, Zap
-} from 'lucide-react';
-import { useChatStore } from './store/useChatStore';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
+import { Bot, MessageSquare, Plus, RefreshCw, Send, User } from 'lucide-react';
 
-interface ChatSession {
-  id: string;
-  name: string;
-  files: string[];
+type Role = 'user' | 'assistant';
+
+interface Message {
+  role: Role;
+  content: string;
 }
 
-const AegisApp: React.FC = () => {
-  const { 
-    messages, currentTrace, resources, isStreaming,
-    addMessage, updateStreamingMessage, setTrace, 
-    updateResources, resetChat 
-  } = useChatStore();
-  
-  const [input, setInput] = useState('');
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [isIndexing, setIsIndexing] = useState(false);
-  const [indexProgress, setIndexProgress] = useState(0);
-  const [showSuccess, setShowSuccess] = useState(false);
-  
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [tempName, setTempName] = useState('');
+interface EngineSessionSummary {
+  session_id: string;
+  title: string;
+  turn_count: number;
+  updated_at: string;
+}
 
+interface EngineSessionsResponse {
+  sessions: EngineSessionSummary[];
+}
+
+interface EngineTurn {
+  query: string;
+  response: string;
+}
+
+interface EngineSession {
+  session_id: string;
+  title: string;
+  history: {
+    turns: EngineTurn[];
+  };
+}
+
+const API_BASE = '/api';
+
+function createSessionId() {
+  return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
+}
+
+function sessionDescription(session: EngineSessionSummary) {
+  const turnLabel = session.turn_count === 1 ? 'turn' : 'turns';
+  return `${session.turn_count} ${turnLabel}`;
+}
+
+function turnsToMessages(turns: EngineTurn[]): Message[] {
+  return turns.flatMap((turn) => [
+    { role: 'user' as const, content: turn.query },
+    { role: 'assistant' as const, content: turn.response },
+  ]);
+}
+
+export default function App() {
+  const [sessions, setSessions] = useState<EngineSessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string>(() => createSessionId());
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [status, setStatus] = useState('Ready');
+  const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (sessions.length === 0) {
-      const newId = Math.random().toString(36).substring(7);
-      setSessions([{ id: newId, name: 'Initial Research', files: [] }]);
-      setActiveSessionId(newId);
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.session_id === activeSessionId),
+    [activeSessionId, sessions],
+  );
+
+  const loadSessions = useCallback(async () => {
+    setError(null);
+    const response = await fetch(`${API_BASE}/sessions`);
+
+    if (!response.ok) {
+      throw new Error(`Engine returned HTTP ${response.status} while loading sessions.`);
     }
-  }, [sessions.length]);
+
+    const data = (await response.json()) as EngineSessionsResponse;
+    setSessions(data.sessions);
+  }, []);
+
+  const loadSession = useCallback(async (sessionId: string) => {
+    setError(null);
+    setStatus('Loading session');
+    const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}`);
+
+    if (!response.ok) {
+      throw new Error(`Engine returned HTTP ${response.status} while loading the session.`);
+    }
+
+    const session = (await response.json()) as EngineSession;
+    setActiveSessionId(session.session_id);
+    setMessages(turnsToMessages(session.history.turns));
+    setStatus('Ready');
+  }, []);
 
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const res = await fetch('http://127.0.0.1:8080/system/stats'); 
-        const data = await res.json();
-        updateResources(data.cpu, data.ram);
-      } catch (e) { console.log("Engine offline"); }
-    };
-    const interval = setInterval(fetchStats, 2000);
-    return () => clearInterval(interval);
-  }, [updateResources]);
+    loadSessions().catch((loadError: unknown) => {
+      setError(loadError instanceof Error ? loadError.message : 'Could not load sessions.');
+      setStatus('Engine unavailable');
+    });
+  }, [loadSessions]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-    }
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: 'smooth',
+    });
   }, [messages, isStreaming]);
 
-  const handleNewChat = () => {
-    const newId = Math.random().toString(36).substring(7);
-    setSessions(prev => [{ id: newId, name: `New Strategy ${prev.length + 1}`, files: [] }, ...prev]);
-    setActiveSessionId(newId);
-    resetChat();
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setSelectedFiles(Array.from(e.target.files));
-      setShowSuccess(false);
+  async function handleSessionSelect(sessionId: string) {
+    if (isStreaming) {
+      return;
     }
-  };
-
-  const handleStartIndexing = async () => {
-    if (selectedFiles.length === 0) return;
-    setIsIndexing(true);
-    setIndexProgress(20);
-    const formData = new FormData();
-    selectedFiles.forEach(file => formData.append('files', file));
-    const fileNames = selectedFiles.map(f => f.name);
 
     try {
-      const response = await fetch('http://127.0.0.1:8080/ingest', { method: 'POST', body: formData });
-      if (response.ok) {
-        setIndexProgress(100);
-        setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, files: [...s.files, ...fileNames] } : s));
-        setShowSuccess(true);
-        setIsIndexing(false);
-        setSelectedFiles([]);
-        setTimeout(() => setShowSuccess(false), 3000);
-      }
-    } catch (e) { setIsIndexing(false); }
-  };
+      await loadSession(sessionId);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Could not load the session.');
+      setStatus('Session load failed');
+    }
+  }
 
-  const handleSendMessage = () => {
-    if (!input.trim() || isStreaming) return;
-    const userQuery = input;
-    addMessage(userQuery, 'user');
+  function handleNewSession() {
+    if (isStreaming) {
+      return;
+    }
+
+    setActiveSessionId(createSessionId());
+    setMessages([]);
+    setError(null);
+    setStatus('Ready');
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const prompt = input.trim();
+    if (!prompt || isStreaming) {
+      return;
+    }
+
     setInput('');
-    setTrace('Routing');
+    setError(null);
+    setStatus('Inference');
+    setIsStreaming(true);
+    setMessages((current) => [
+      ...current,
+      { role: 'user', content: prompt },
+      { role: 'assistant', content: '' },
+    ]);
 
-    const socket = new WebSocket('ws://127.0.0.1:8080/chat/stream');
-    socket.onopen = () => socket.send(JSON.stringify({ query: userQuery, session_id: activeSessionId }));
-    socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'token') {
-        if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') addMessage('', 'assistant');
-        updateStreamingMessage(data.content);
+    try {
+      const response = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          session_id: activeSessionId,
+          message: prompt,
+        }),
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Engine returned HTTP ${response.status} while sending chat.`);
       }
-    };
-    socket.onclose = () => setTrace('Complete');
-  };
 
-  const saveName = (id: string) => {
-    setSessions(prev => prev.map(s => s.id === id ? { ...s, name: tempName } : s));
-    setEditingId(null);
-  };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
 
-  const activeSession = sessions.find(s => s.id === activeSessionId);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        pending += decoder.decode(value, { stream: true });
+        const lines = pending.split('\n');
+        pending = lines.pop() ?? '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) {
+            continue;
+          }
+
+          const data = trimmed.replace(/^data:\s?/, '');
+          if (data === '[DONE]') {
+            setStatus('Complete');
+            continue;
+          }
+
+          if (data.startsWith('[ERROR]')) {
+            throw new Error(data);
+          }
+
+          setMessages((current) => {
+            const next = [...current];
+            const last = next[next.length - 1];
+
+            if (last?.role === 'assistant') {
+              next[next.length - 1] = {
+                ...last,
+                content: `${last.content}${data}`,
+              };
+            }
+
+            return next;
+          });
+        }
+      }
+
+      setStatus('Complete');
+      await loadSessions();
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : 'Could not send chat request.');
+      setStatus('Chat failed');
+      setMessages((current) => current.filter((message) => message.content.length > 0));
+    } finally {
+      setIsStreaming(false);
+    }
+  }
 
   return (
-    <div className="flex h-screen bg-[#09090B] text-zinc-100 font-sans overflow-hidden">
-      <aside className="w-72 border-r border-zinc-800 bg-[#0C0C0E] flex flex-col p-5 shrink-0 z-30">
-        <div className="flex items-center gap-3 mb-10 px-2">
-          <div className="p-2 bg-indigo-600 rounded-xl"><ShieldCheck size={22} className="text-white" /></div>
-          <span className="font-black text-xl tracking-tighter italic">AEGIS</span>
+    <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
+      <aside className="flex w-72 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950 p-4">
+        <div className="mb-6">
+          <div className="text-xl font-semibold tracking-wide">AEGIS</div>
+          <div className="mt-1 text-xs text-zinc-500">Rust engine client</div>
         </div>
 
-        <button onClick={handleNewChat} className="flex items-center gap-3 w-full p-4 mb-8 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-lg active:scale-95">
-          <Plus size={20} /> <span className="text-xs font-black uppercase tracking-widest">New Session</span>
+        <button
+          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+          disabled={isStreaming}
+          onClick={handleNewSession}
+          type="button"
+        >
+          <Plus size={16} />
+          New Chat
         </button>
 
-        <div className="flex-1 overflow-y-auto space-y-3">
-          <span className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] px-2">History</span>
-          {sessions.map(s => (
-            <div key={s.id} onClick={() => setActiveSessionId(s.id)} className={`group flex items-center justify-between p-4 rounded-2xl cursor-pointer border ${activeSessionId === s.id ? 'bg-zinc-800 border-zinc-700' : 'hover:bg-zinc-900/50 border-transparent'}`}>
-              <div className="flex items-center gap-3 overflow-hidden">
-                <MessageSquare size={16} className={activeSessionId === s.id ? 'text-indigo-400' : 'text-zinc-600'} />
-                {editingId === s.id ? (
-                  <input autoFocus className="bg-transparent outline-none text-xs font-bold w-full" value={tempName} onChange={e => setTempName(e.target.value)} onBlur={() => saveName(s.id)} onKeyDown={e => e.key === 'Enter' && saveName(s.id)} />
-                ) : (
-                  <span className={`text-xs font-bold truncate ${activeSessionId === s.id ? 'text-zinc-100' : 'text-zinc-500'}`}>{s.name}</span>
-                )}
-              </div>
-              <Edit2 size={12} className="opacity-0 group-hover:opacity-100 text-zinc-600" onClick={(e) => { e.stopPropagation(); setEditingId(s.id); setTempName(s.name); }} />
+        <button
+          className="mb-4 flex items-center justify-center gap-2 rounded-lg border border-zinc-800 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-900 disabled:opacity-60"
+          disabled={isStreaming}
+          onClick={() => {
+            loadSessions().catch((loadError: unknown) => {
+              setError(loadError instanceof Error ? loadError.message : 'Could not refresh sessions.');
+            });
+          }}
+          type="button"
+        >
+          <RefreshCw size={15} />
+          Refresh
+        </button>
+
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Sessions
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+          {sessions.length === 0 ? (
+            <div className="rounded-lg border border-zinc-800 p-3 text-sm text-zinc-500">
+              No saved sessions yet.
             </div>
-          ))}
+          ) : (
+            sessions.map((session) => (
+              <button
+                className={`w-full rounded-lg border p-3 text-left transition ${
+                  session.session_id === activeSessionId
+                    ? 'border-emerald-600 bg-emerald-950/30'
+                    : 'border-zinc-800 hover:bg-zinc-900'
+                }`}
+                disabled={isStreaming}
+                key={session.session_id}
+                onClick={() => {
+                  void handleSessionSelect(session.session_id);
+                }}
+                type="button"
+              >
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <MessageSquare size={15} />
+                  <span className="truncate">{session.title}</span>
+                </div>
+                <div className="mt-1 text-xs text-zinc-500">{sessionDescription(session)}</div>
+              </button>
+            ))
+          )}
         </div>
-        <button onClick={resetChat} className="mt-4 p-3 flex items-center gap-3 text-zinc-500 hover:text-red-400 transition-colors">
-          <Trash2 size={18} /> <span className="text-xs font-bold uppercase tracking-wider">Clear Memory</span>
-        </button>
       </aside>
 
-      <div className="flex-1 flex flex-col bg-[#0F0F12]">
-        <header className="h-16 border-b border-zinc-800/50 bg-[#09090B]/50 backdrop-blur-xl flex items-center justify-between px-10">
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/5 border border-emerald-500/20">
-            <Lock size={10} className="text-emerald-500" />
-            <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest leading-none">Secure Tunnel</span>
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-zinc-800 px-6">
+          <div>
+            <div className="text-sm font-medium">{activeSession?.title ?? 'New chat'}</div>
+            <div className="text-xs text-zinc-500">Session: {activeSessionId}</div>
           </div>
-          <div className="flex gap-8">
-            <div className="w-28 flex flex-col justify-center">
-              <div className="flex justify-between text-[9px] font-black mb-1"><div className="flex items-center gap-1"><Database size={10} className="text-zinc-500"/><span>RAM</span></div><span className="text-indigo-400">{resources.ram}%</span></div>
-              <div className="h-1 bg-zinc-800 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 transition-all duration-1000" style={{ width: `${resources.ram}%` }} /></div>
-            </div>
-            <div className="w-28 flex flex-col justify-center">
-              <div className="flex justify-between text-[9px] font-black mb-1"><div className="flex items-center gap-1"><Cpu size={10} className="text-zinc-500"/><span>CPU</span></div><span className="text-purple-400">{resources.cpu}%</span></div>
-              <div className="h-1 bg-zinc-800 rounded-full overflow-hidden"><div className="h-full bg-purple-500 transition-all duration-1000" style={{ width: `${resources.cpu}%` }} /></div>
-            </div>
+          <div className="rounded-lg border border-zinc-800 px-3 py-1 text-xs text-zinc-400">
+            {status}
           </div>
         </header>
 
-        <div className="bg-[#0C0C0E] border-b border-zinc-800/50 p-6 px-10">
-          <div className="max-w-4xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="p-2.5 bg-indigo-500/10 rounded-xl border border-indigo-500/20 text-indigo-400"><Sparkles size={18} /></div>
-              <div>
-                <h2 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em]">Session Assets</h2>
-                <div className="flex flex-wrap gap-2 mt-1">
-                  {activeSession?.files.map((name, i) => (
-                    <div key={i} className="flex items-center gap-1 bg-indigo-500/5 px-2 py-1 rounded border border-indigo-500/20 text-[9px] font-bold text-indigo-400">
-                      <FileText size={10} /> {name}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <input type="file" id="file-ingest" multiple onChange={handleFileChange} className="hidden" />
-              <label htmlFor="file-ingest" className="cursor-pointer bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-xl text-xs font-bold border border-zinc-700 flex items-center gap-2">
-                <Upload size={14} /> IMPORT
-              </label>
-              {selectedFiles.length > 0 && (
-                <button onClick={handleStartIndexing} className="bg-indigo-600 px-5 py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-2 shadow-lg">
-                  {isIndexing ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />} 
-                  {isIndexing ? `${indexProgress}%` : 'Sync'}
-                </button>
-              )}
-            </div>
+        {error && (
+          <div className="border-b border-red-900/60 bg-red-950/30 px-6 py-3 text-sm text-red-200">
+            {error}
           </div>
-          {showSuccess && <div className="max-w-4xl mx-auto mt-2 text-[9px] font-bold text-emerald-400 flex items-center gap-2 animate-pulse"><CheckCircle2 size={12}/> INDEXED SUCCESSFULLY</div>}
+        )}
+
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+          <div className="mx-auto flex max-w-3xl flex-col gap-4">
+            {messages.length === 0 ? (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-6 text-zinc-400">
+                Ask a question to start a session. The response streams from the Rust engine through
+                the same `/chat` endpoint used by the CLI.
+              </div>
+            ) : (
+              messages.map((message, index) => (
+                <div
+                  className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  key={`${message.role}-${index}`}
+                >
+                  {message.role === 'assistant' && (
+                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-800">
+                      <Bot size={16} />
+                    </div>
+                  )}
+                  <div
+                    className={`max-w-[78%] whitespace-pre-wrap rounded-lg px-4 py-3 text-sm leading-6 ${
+                      message.role === 'user'
+                        ? 'bg-emerald-600 text-white'
+                        : 'border border-zinc-800 bg-zinc-900 text-zinc-200'
+                    }`}
+                  >
+                    {message.content || '...'}
+                  </div>
+                  {message.role === 'user' && (
+                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-700">
+                      <User size={16} />
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
-        <main ref={scrollRef} className="flex-1 overflow-y-auto p-10 space-y-10 max-w-4xl mx-auto w-full">
-          {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in duration-500`}>
-              <div className={`p-6 rounded-[2rem] text-sm leading-relaxed max-w-[80%] ${m.role === 'user' ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-900/20' : 'bg-zinc-900 border border-zinc-800 text-zinc-300'}`}>
-                {m.content}
-              </div>
-            </div>
-          ))}
-        </main>
-
-        <footer className="p-10">
-          <div className="max-w-3xl mx-auto flex flex-col gap-6">
-            <div className="flex items-center gap-3 px-4 py-2 bg-zinc-900/50 border border-zinc-800 rounded-2xl w-fit mx-auto backdrop-blur-md shadow-sm">
-              <Activity size={12} className="text-indigo-400" />
-              <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">Status: <span className="text-indigo-400">{currentTrace}</span></span>
-            </div>
-            <div className="relative group flex items-center">
-              <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder="Search local documents or ask anything..." className="w-full p-6 pr-16 bg-zinc-900 border border-zinc-800 rounded-[2rem] outline-none focus:border-indigo-500 transition-all text-zinc-100 placeholder:text-zinc-700 shadow-2xl" />
-              <div className="absolute right-3 flex items-center gap-2">
-                {selectedFiles.length > 0 && <X size={16} className="text-zinc-500 cursor-pointer hover:text-red-400" onClick={() => setSelectedFiles([])} />}
-                <button onClick={handleSendMessage} className="p-4 rounded-2xl bg-indigo-600 text-white shadow-xl hover:bg-indigo-500 transition-all active:scale-90"><Send size={20} /></button>
-              </div>
-            </div>
-          </div>
+        <footer className="shrink-0 border-t border-zinc-800 p-4">
+          <form className="mx-auto flex max-w-3xl gap-3" onSubmit={handleSubmit}>
+            <input
+              className="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-emerald-600"
+              disabled={isStreaming}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Message AEGIS"
+              value={input}
+            />
+            <button
+              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+              disabled={isStreaming || !input.trim()}
+              type="submit"
+            >
+              <Send size={16} />
+              Send
+            </button>
+          </form>
         </footer>
-      </div>
+      </main>
     </div>
   );
-};
-
-export default AegisApp;
+}
