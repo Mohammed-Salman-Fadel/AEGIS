@@ -15,7 +15,7 @@ use crate::cli::Cli;
 use crate::cli::{CommandKind, ModelCommand, ProviderCommand, SessionCommand};
 use crate::doctor::{CheckItem, DoctorReport, Health};
 use crate::engine_client::{ActionStatus, ModelSummary, ProviderSummary, SessionSummary};
-use crate::install;
+use crate::install::{self, StartOutcome};
 use crate::menu::{self, MenuChoice};
 use crate::runner;
 use crate::signals;
@@ -37,6 +37,9 @@ pub fn dispatch(ctx: &AppContext, command: Option<CommandKind>) -> AppResult<()>
 fn dispatch_command(ctx: &AppContext, command: CommandKind) -> AppResult<()> {
     match command {
         CommandKind::Install(args) => handle_install(ctx, args),
+        CommandKind::Start => handle_start(ctx),
+        CommandKind::Stop => handle_stop(ctx),
+        CommandKind::Open => handle_open(ctx),
         CommandKind::Chat(args) => handle_chat(ctx, &args.prompt, args.session_id.as_deref()),
         CommandKind::Ask(args) => handle_ask(ctx, args.stdin, args.session_id.as_deref()),
         CommandKind::Repl(args) => handle_repl(ctx, args.session_id.as_deref()),
@@ -50,26 +53,18 @@ fn dispatch_command(ctx: &AppContext, command: CommandKind) -> AppResult<()> {
 
 //? PRIMARY HOME INTERFACE
 fn show_home(ctx: &AppContext) -> AppResult<()> {
-    let report = DoctorReport::collect(&ctx.workspace);
-    // ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+    let report = if ctx.runtime.is_installed() {
+        DoctorReport::collect_installed(&ctx.runtime, &ctx.engine)
+    } else {
+        DoctorReport::collect(&ctx.workspace)
+    };
+    let runtime_status = install::runtime_status(&ctx.runtime);
 
     println!("{}", ctx.ui.header("AEGIS CLI"));
-    println!("Private, local-first assistant scaffold built to stay inside the Rust CLI boundary.");
-    // println!("{}", ctx.ui.muted("This pass is intentionally TODO-heavy: commands explain how the CLI should connect to the engine without pretending the backend wiring is finished."));
+    println!("Private, local-first assistant with a Windows bootstrap installer and localhost runtime.");
     println!();
-    println!("Workspace : {}", ctx.workspace.root.display());
-    println!("Localhost URL: {}", ctx.engine.base_url());
-    // println!();
-    // println!("{}", ctx.ui.header("Command Families"));
-    // println!("- install");
-    // println!("- chat");
-    // println!("- ask --stdin");
-    // println!("- repl");
-    // println!("- session");
-    // println!("- provider");
-    // println!("- model");
-    // println!("- status");
-    // println!("- doctor");
+    println!("Install root : {}", ctx.runtime.root.display());
+    println!("Localhost URL: {}", runtime_status.engine_url);
     println!();
     println!("{}", ctx.ui.header("Readiness Snapshot"));
     println!(
@@ -78,14 +73,39 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
         report.warnings(),
         report.missing()
     );
-    // println!("{}", ctx.ui.todo("TODO: once the engine endpoints are real, this home screen should show active session, provider, and model summaries from the backend."));
+    if runtime_status.installed {
+        println!(
+            "Runtime      : {}",
+            runtime_status
+                .version
+                .clone()
+                .unwrap_or_else(|| "installed".to_string())
+        );
+        println!(
+            "Engine       : {}",
+            if runtime_status.engine_running {
+                "running"
+            } else {
+                "stopped"
+            }
+        );
+        println!(
+            "Model        : {} ({})",
+            runtime_status.model_name,
+            if runtime_status.model_present {
+                "present"
+            } else {
+                "missing"
+            }
+        );
+    }
     if io::stdin().is_terminal() {
         println!();
         println!("{}", ctx.ui.header("Live Shell"));
         println!(
             "{}",
             ctx.ui
-                .muted("Enter commands like `status`, `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
+                .muted("Enter commands like `install`, `start`, `status`, or `chat \"hello\"`, then type `help` for the full command list.")
         );
         println!(
             "{}",
@@ -98,18 +118,17 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
 
 fn handle_clear(ctx: &AppContext) -> AppResult<()> {
     ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+    let runtime_status = install::runtime_status(&ctx.runtime);
 
     println!("{}", ctx.ui.header("AEGIS CLI"));
-    // println!();
-    println!("Workspace : {}", ctx.workspace.root.display());
-    println!("Localhost URL: {}", ctx.engine.base_url());
+    println!("Install root : {}", ctx.runtime.root.display());
+    println!("Localhost URL: {}", runtime_status.engine_url);
 
     if io::stdin().is_terminal() {
         println!();
-        // println!("{}", ctx.ui.header("Live Shell"));
         println!(
             "{}",
-            ctx.ui.muted("Enter commands `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
+            ctx.ui.muted("Enter commands like `install`, `start`, `status`, or `chat \"hello\"`, then type `help` for the full command list.")
         );
         println!();
     }
@@ -117,20 +136,52 @@ fn handle_clear(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult<()> {
-    let plan = install::build_install_plan(&ctx.workspace);
-    install::print_install_plan(&ctx.ui, &plan);
-    println!();
+    let status = install::run_install(ctx, &args)?;
 
-    if args.yes && !args.plan_only {
-        println!("{}", ctx.ui.warning("TODO: map each install step to runner.rs subprocess plans before `--yes` performs system changes."));
+    if !args.plan_only {
+        println!();
+        println!("{}", ctx.ui.header("Install Result"));
+        println!(
+            "Version      : {}",
+            status.version.unwrap_or_else(|| "unknown".to_string())
+        );
+        println!("Install root : {}", status.install_root.display());
+        println!("Engine URL   : {}", status.engine_url);
+        println!("UI URL       : {}", status.ui_url);
+        println!("Model        : {}", status.model_name);
+    }
+
+    Ok(())
+}
+
+fn handle_start(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Start"));
+    match install::start_engine(&ctx.runtime)? {
+        StartOutcome::Started => println!("{}", ctx.ui.success("AEGIS engine started.")),
+        StartOutcome::AlreadyRunning => {
+            println!("{}", ctx.ui.muted("AEGIS engine is already running."))
+        }
+    }
+    Ok(())
+}
+
+fn handle_stop(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Stop"));
+    if install::stop_engine(&ctx.runtime)? {
+        println!("{}", ctx.ui.success("AEGIS engine stopped."));
     } else {
         println!(
             "{}",
-            ctx.ui
-                .muted("Scaffold mode: no dependency installation is executed yet.")
+            ctx.ui.muted("No managed AEGIS engine process was running.")
         );
     }
+    Ok(())
+}
 
+fn handle_open(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Open"));
+    install::open_ui(&ctx.runtime)?;
+    println!("{}", ctx.ui.success("Opened the AEGIS localhost UI."));
     Ok(())
 }
 
@@ -335,7 +386,10 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
 fn print_shell_help(ctx: &AppContext) {
     println!("{}", ctx.ui.header("Aegis Help"));
     println!("You can run the following commands without the `aegis` prefix:");
-    // println!("Examples:");
+    println!("- install");
+    println!("- start");
+    println!("- stop");
+    println!("- open");
     println!("- status");
     println!("- chat \"hello\"");
     println!("- repl");
@@ -505,12 +559,63 @@ fn handle_model(ctx: &AppContext, command: ModelCommand) -> AppResult<()> {
 
 //? HANDLES "STATUS" COMMAND
 fn show_status(ctx: &AppContext) -> AppResult<()> {
+    if ctx.runtime.is_installed() {
+        let status = install::runtime_status(&ctx.runtime);
+        let report = DoctorReport::collect_installed(&ctx.runtime, &ctx.engine);
+
+        println!("{}", ctx.ui.header("Status"));
+        println!("Install root : {}", status.install_root.display());
+        println!(
+            "Version      : {}",
+            status.version.unwrap_or_else(|| "unknown".to_string())
+        );
+        println!("Engine URL   : {}", status.engine_url);
+        println!("UI URL       : {}", status.ui_url);
+        println!(
+            "Engine       : {}",
+            if status.engine_running { "running" } else { "stopped" }
+        );
+        println!(
+            "PID          : {}",
+            status
+                .engine_pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "n/a".to_string())
+        );
+        println!(
+            "Ollama       : {}",
+            if status.ollama_reachable {
+                "reachable"
+            } else {
+                "unreachable"
+            }
+        );
+        println!(
+            "Model        : {} ({})",
+            status.model_name,
+            if status.model_present {
+                "present"
+            } else {
+                "missing"
+            }
+        );
+        println!();
+        println!("{}", ctx.ui.header("Doctor Snapshot"));
+        println!(
+            "{} blocking issue(s), {} warning(s), {} missing item(s)",
+            report.blocking_issues(),
+            report.warnings(),
+            report.missing()
+        );
+        return Ok(());
+    }
+
     let report = DoctorReport::collect(&ctx.workspace);
     let health = ctx.engine.health();
 
     println!("{}", ctx.ui.header("Status"));
     println!("Workspace root : {}", ctx.workspace.root.display());
-    println!("Localhost URL     : {}", health.base_url);
+    println!("Localhost URL  : {}", health.base_url);
     println!("Health path    : {}", health.request_path);
     println!(
         "Engine ready   : {}",
@@ -549,15 +654,22 @@ fn show_status(ctx: &AppContext) -> AppResult<()> {
     if let Some(plan) = runner::engine_launch_plan(&ctx.workspace) {
         println!("Engine start preview: {}", plan.command_preview());
     }
-    println!("{}", ctx.ui.todo("TODO: query the engine `/health` endpoint and report live provider/model/session state."));
     Ok(())
 }
 
 fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
-    let report = DoctorReport::collect(&ctx.workspace);
+    let report = if ctx.runtime.is_installed() {
+        DoctorReport::collect_installed(&ctx.runtime, &ctx.engine)
+    } else {
+        DoctorReport::collect(&ctx.workspace)
+    };
 
     println!("{}", ctx.ui.header("Doctor"));
-    println!("Workspace: {}", ctx.workspace.root.display());
+    if ctx.runtime.is_installed() {
+        println!("Install root: {}", ctx.runtime.root.display());
+    } else {
+        println!("Workspace: {}", ctx.workspace.root.display());
+    }
     println!();
     println!("{}", ctx.ui.header("Dependencies"));
     for item in &report.dependencies {

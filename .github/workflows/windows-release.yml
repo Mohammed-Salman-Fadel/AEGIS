@@ -1,0 +1,74 @@
+name: windows-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag or version label used in bundled metadata and manifest URLs.
+        required: true
+        default: v0.1.0
+      ollama_installer_url:
+        description: Direct download URL for the Windows Ollama installer.
+        required: true
+      ollama_installer_sha256:
+        description: SHA-256 for the Windows Ollama installer.
+        required: true
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows-artifacts:
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag || github.ref_name }}
+      OLLAMA_INSTALLER_URL: ${{ inputs.ollama_installer_url || vars.AEGIS_OLLAMA_INSTALLER_URL }}
+      OLLAMA_INSTALLER_SHA256: ${{ inputs.ollama_installer_sha256 || vars.AEGIS_OLLAMA_INSTALLER_SHA256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build CLI bootstrap binary
+        run: cargo build --release
+        working-directory: cli
+
+      - name: Build engine binary
+        run: cargo build --release
+        working-directory: engine-rust
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build frontend bundle
+        run: npm run build
+        working-directory: frontend
+
+      - name: Package bootstrap artifacts
+        shell: pwsh
+        run: >
+          .\scripts\build_runtime_bundle.ps1
+          -Version "$env:RELEASE_TAG"
+          -ReleaseBaseUrl "$env:RELEASE_BASE_URL"
+          -OllamaInstallerUrl "$env:OLLAMA_INSTALLER_URL"
+          -OllamaInstallerSha256 "$env:OLLAMA_INSTALLER_SHA256"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-artifacts
+          path: |
+            dist/aegis-bootstrap-windows-x64.exe
+            dist/aegis-runtime-windows-x64.zip
+            dist/installer-manifest.json

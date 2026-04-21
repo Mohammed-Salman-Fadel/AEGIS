@@ -16,6 +16,7 @@ mod process_manager;
 
 use config::{AppConfig, InferenceProvider};
 use inference::InferenceBackend;
+use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -47,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
 
     let orchestrator = orchestrator::Orchestrator::new(inference, rag_client, memory_store);
     let state = network::state::AppState::new(orchestrator);
-    let app = network::router::create_router(state);
+    let app = network::router::create_router(state, config.ui_dir.clone().map(PathBuf::from));
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("AEGIS engine listening on http://{bind_addr}");

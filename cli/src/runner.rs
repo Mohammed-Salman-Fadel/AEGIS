@@ -8,12 +8,20 @@
 //! Next TODOs: map installer and engine flows onto these helpers once the approved OS-specific commands are finalized.
 
 use std::io::{self, BufRead, BufReader};
+use std::fs::{self, File};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use crate::AppResult;
 use crate::ui::Ui;
 use crate::workspace::Workspace;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone)]
 pub struct LaunchPlan {
@@ -186,5 +194,213 @@ fn render_spawn_error(program: &str, error: io::Error) -> String {
         format!("`{program}` was not found on PATH.")
     } else {
         error.to_string()
+    }
+}
+
+pub fn spawn_detached_process(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    stdout_log: &Path,
+    stderr_log: &Path,
+) -> AppResult<u32> {
+    if let Some(parent) = stdout_log.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create process log directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    if let Some(parent) = stderr_log.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create process log directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let stdout = File::create(stdout_log).map_err(|error| {
+        format!(
+            "Could not create stdout log `{}`: {error}",
+            stdout_log.display()
+        )
+    })?;
+    let stderr = File::create(stderr_log).map_err(|error| {
+        format!(
+            "Could not create stderr log `{}`: {error}",
+            stderr_log.display()
+        )
+    })?;
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+
+    for (key, value) in env {
+        command.env(key, value);
+    }
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let child = command.spawn().map_err(|error| {
+        format!(
+            "Could not start `{}` in the background: {}",
+            program.display(),
+            render_spawn_error(&program.display().to_string(), error)
+        )
+    })?;
+
+    Ok(child.id())
+}
+
+pub fn stop_process(pid: u32) -> AppResult<()> {
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|error| format!("Could not stop process {pid}: {error}"))?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("taskkill could not stop process {pid}."))
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let status = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .map_err(|error| format!("Could not stop process {pid}: {error}"))?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("kill could not stop process {pid}."))
+        }
+    }
+}
+
+pub fn is_process_running(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; if ($p) {{ exit 0 }} else {{ exit 1 }}"),
+            ])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(windows))]
+    {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+}
+
+pub fn open_in_browser(url: &str) -> AppResult<()> {
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .arg(url)
+            .spawn()
+            .map_err(|error| format!("Could not open browser for `{url}`: {error}"))?;
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|error| format!("Could not open browser for `{url}`: {error}"))?;
+        Ok(())
+    }
+}
+
+pub fn expand_zip_archive(zip_path: &Path, destination: &Path) -> AppResult<()> {
+    let destination = destination.display().to_string();
+    let zip_path = zip_path.display().to_string();
+
+    let status = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+                zip_path.replace('\'', "''"),
+                destination.replace('\'', "''")
+            ),
+        ])
+        .status()
+        .map_err(|error| format!("Could not extract `{zip_path}`: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("PowerShell could not extract `{zip_path}`."))
+    }
+}
+
+pub fn sha256_file(path: &Path) -> AppResult<String> {
+    let path = path.display().to_string();
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "(Get-FileHash -LiteralPath '{}' -Algorithm SHA256).Hash",
+                path.replace('\'', "''")
+            ),
+        ])
+        .output()
+        .map_err(|error| format!("Could not hash `{path}`: {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!("Could not hash `{path}` with PowerShell."));
+    }
+
+    let hash = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+    if hash.is_empty() {
+        Err(format!("Hash output for `{path}` was empty."))
+    } else {
+        Ok(hash)
+    }
+}
+
+pub fn run_program_and_wait(program: &str, args: &[String], cwd: &Path) -> AppResult<()> {
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| format!("Could not start `{program}`: {}", render_spawn_error(program, error)))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("`{program}` exited with status {status}."))
     }
 }

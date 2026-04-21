@@ -12,6 +12,13 @@ interface ChatSession {
   files: string[];
 }
 
+const apiPath = (path: string) => path;
+
+const websocketPath = (path: string) => {
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${protocol}://${window.location.host}${path}`;
+};
+
 const AegisApp: React.FC = () => {
   const { 
     messages, currentTrace, resources, isStreaming,
@@ -43,7 +50,7 @@ const AegisApp: React.FC = () => {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await fetch('http://127.0.0.1:8080/system/stats'); 
+        const res = await fetch(apiPath('/system/stats'));
         const data = await res.json();
         updateResources(data.cpu, data.ram);
       } catch (e) { console.log("Engine offline"); }
@@ -81,7 +88,7 @@ const AegisApp: React.FC = () => {
     const fileNames = selectedFiles.map(f => f.name);
 
     try {
-      const response = await fetch('http://127.0.0.1:8080/ingest', { method: 'POST', body: formData });
+      const response = await fetch(apiPath('/ingest'), { method: 'POST', body: formData });
       if (response.ok) {
         setIndexProgress(100);
         setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, files: [...s.files, ...fileNames] } : s));
@@ -100,7 +107,7 @@ const AegisApp: React.FC = () => {
     setInput('');
     setTrace('Routing');
 
-    const socket = new WebSocket('ws://127.0.0.1:8080/chat/stream');
+    const socket = new WebSocket(websocketPath('/chat/stream'));
     socket.onopen = () => socket.send(JSON.stringify({ query: userQuery, session_id: activeSessionId }));
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);

@@ -16,12 +16,15 @@ pub const HELP_EXAMPLES: &str = "\
 Examples:
   aegis
   aegis install
+  aegis start
+  aegis stop
+  aegis open
   aegis chat \"What can you do?\"
   aegis repl
   aegis ask --stdin
   aegis session new
   aegis provider list
-  aegis model select mistral:7b
+  aegis model select qwen3:4b
   aegis status
   aegis doctor";
 
@@ -52,6 +55,9 @@ pub struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum CommandKind {
     Install(InstallArgs),
+    Start,
+    Stop,
+    Open,
     Chat(ChatArgs),
     Ask(AskArgs),
     Repl(ReplArgs),

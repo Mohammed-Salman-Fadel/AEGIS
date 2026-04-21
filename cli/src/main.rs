@@ -14,6 +14,7 @@ mod engine_client;
 mod install;
 mod menu;
 mod runner;
+mod runtime;
 mod signals;
 mod ui;
 mod workspace;
@@ -22,6 +23,7 @@ use clap::Parser;
 
 use cli::Cli;
 use engine_client::EngineClient;
+use runtime::RuntimeLayout;
 use ui::Ui;
 use workspace::Workspace;
 
@@ -31,6 +33,7 @@ pub(crate) type AppResult<T> = Result<T, String>;
 pub(crate) struct AppContext {
     pub ui: Ui,
     pub workspace: Workspace,
+    pub runtime: RuntimeLayout,
     // The engine client is the only planned backend connection surface for runtime commands.
     // Keep orchestration state behind the Rust engine instead of recreating it inside the CLI.
     pub engine: EngineClient,
@@ -38,10 +41,12 @@ pub(crate) struct AppContext {
 
 fn main() {
     let cli = Cli::parse();
+    let runtime = RuntimeLayout::discover();
     let ctx = AppContext {
         ui: Ui::new(cli.no_color, cli.verbose),
         workspace: Workspace::discover(),
-        engine: EngineClient::from_env(),
+        engine: EngineClient::from_sources(&runtime),
+        runtime,
     };
 
     if let Err(error) = signals::install_handler() {

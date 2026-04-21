@@ -39,6 +39,7 @@ pub struct ServerConfig {
 pub struct AppConfig {
     pub server: ServerConfig,
     pub inference: InferenceConfig,
+    pub ui_dir: Option<String>,
 }
 
 impl AppConfig {
@@ -57,6 +58,7 @@ impl AppConfig {
                 provider,
                 api_key: non_empty_env("AEGIS_OPENAI_COMPAT_API_KEY"),
             },
+            ui_dir: non_empty_env("AEGIS_UI_DIR"),
         })
     }
 }

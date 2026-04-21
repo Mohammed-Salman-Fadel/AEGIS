@@ -70,7 +70,7 @@ impl InferenceBackend for OllamaBackend {
             .client
             .post(format!("{}/api/generate", self.base_url))
             .json(&GenerateRequest {
-                model: "llama3.2",
+                model: "qwen3:4b",
                 prompt,
                 stream: true,
             })

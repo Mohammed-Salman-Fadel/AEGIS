@@ -5,10 +5,10 @@
 //! Does not own: orchestration logic, session history, provider state, or model state.
 //! Next TODOs: replace placeholder returns with real HTTP requests and source endpoint paths from shared engine config.
 
-use std::env;
 use std::io::{BufRead, BufReader};
 
 use crate::AppResult;
+use crate::runtime::RuntimeLayout;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -67,15 +67,11 @@ pub struct ModelSummary {
 }
 
 impl EngineClient {
-    pub fn from_env() -> Self {
+    pub fn from_sources(layout: &RuntimeLayout) -> Self {
         let base_url =
-            env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+            std::env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| layout.current_engine_url());
 
         Self { base_url }
-    }
-
-    pub fn base_url(&self) -> &str {
-        &self.base_url
     }
 
     pub fn health(&self) -> EngineHealth {
@@ -281,14 +277,15 @@ impl EngineClient {
         // TODO: source models from `/models` so menus and commands render backend-owned choices.
         Ok(vec![
             ModelSummary {
-                name: "mistral:7b".to_string(),
+                name: "qwen3:4b".to_string(),
                 provider: "ollama".to_string(),
-                description: "can add random predefined description".to_string(),
+                description: "Default local model expected by the v1 Windows installer."
+                    .to_string(),
             },
             ModelSummary {
-                name: "llama3.1".to_string(),
+                name: "llama3.2:latest".to_string(),
                 provider: "ollama".to_string(),
-                description: "".to_string(),
+                description: "Example alternate Ollama model placeholder.".to_string(),
             },
         ])
     }

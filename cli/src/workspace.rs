@@ -39,7 +39,11 @@ impl Workspace {
     pub fn discover() -> Self {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let current_dir = env::current_dir().unwrap_or_else(|_| manifest_dir.clone());
+        let current_exe_dir = env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf));
         let root = Self::locate_root(&current_dir)
+            .or_else(|| current_exe_dir.as_deref().and_then(Self::locate_root))
             .or_else(|| Self::locate_root(&manifest_dir))
             .unwrap_or_else(|| {
                 manifest_dir

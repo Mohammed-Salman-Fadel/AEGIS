@@ -1,0 +1,12 @@
+{
+  "version": "v0.1.0",
+  "runtime_url": "https://github.com/example/AEGIS/releases/download/v0.1.0/aegis-runtime-windows-x64.zip",
+  "runtime_sha256": "replace-with-runtime-zip-sha256",
+  "ollama_installer_url": "https://example.invalid/OllamaSetup.exe",
+  "ollama_installer_sha256": "replace-with-ollama-installer-sha256",
+  "default_model": "qwen3:4b",
+  "engine_host": "127.0.0.1",
+  "engine_port": 8080,
+  "ui_url": "http://localhost:8080",
+  "minimum_supported_windows": "Windows 10 x64"
+}
