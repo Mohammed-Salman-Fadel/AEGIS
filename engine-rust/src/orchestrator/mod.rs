@@ -3,50 +3,51 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::classifier::Classifier;
-use crate::workflow::registry::WorkflowRegistry;
 use crate::compactor::Compactor;
-use crate::prompt_builder::PromptBuilder;
+use crate::context::RequestContext;
 use crate::inference::InferenceBackend;
+use crate::memory_store::{MemoryStore, Session, SessionSummary};
+use crate::model_registry::ModelRegistry;
+use crate::network::handlers::chat::ChatRequest;
 use crate::plan_parser::{PlanParser, StepResult};
+use crate::prompt_builder::PromptBuilder;
 use crate::rag_client::RagClient;
 use crate::tool_registry::ToolRegistry;
-use crate::model_registry::ModelRegistry;
-use crate::memory_store::{MemoryStore, Session, SessionSummary};
-use crate::context::RequestContext;
-use crate::network::handlers::chat::ChatRequest;
+use crate::user_profile;
+use crate::workflow::registry::WorkflowRegistry;
 
 /// The central orchestrator — coordinates every subsystem.
 /// This is the primary entry point for all incoming chat requests.
 pub struct Orchestrator {
-    classifier:        Classifier,
+    classifier: Classifier,
     workflow_registry: WorkflowRegistry,
-    compactor:         Compactor,
-    prompt_builder:    PromptBuilder,
-    inference:         Box<dyn InferenceBackend + Send + Sync>,
-    plan_parser:       PlanParser,
-    pub rag_client:    Arc<RagClient>, // Public access for the network layer to ingest files
-    tool_registry:     ToolRegistry,
-    model_registry:    ModelRegistry,
-    memory_store:      MemoryStore,
+    compactor: Compactor,
+    prompt_builder: PromptBuilder,
+    inference: Box<dyn InferenceBackend + Send + Sync>,
+    plan_parser: PlanParser,
+    pub rag_client: Arc<RagClient>, // Public access for the network layer to ingest files
+    tool_registry: ToolRegistry,
+    model_registry: ModelRegistry,
+    memory_store: MemoryStore,
 }
 
 impl Orchestrator {
     /// Initializes the Orchestrator with required backend services.
     pub fn new(
-        inference:    Box<dyn InferenceBackend + Send + Sync>,
-        rag_client:   Arc<RagClient>,
+        inference: Box<dyn InferenceBackend + Send + Sync>,
+        rag_client: Arc<RagClient>,
         memory_store: MemoryStore,
     ) -> Self {
         Self {
-            classifier:        Classifier::new(),
+            classifier: Classifier::new(),
             workflow_registry: WorkflowRegistry::new(),
-            compactor:         Compactor::new(),
-            prompt_builder:    PromptBuilder::new(),
+            compactor: Compactor::new(),
+            prompt_builder: PromptBuilder::new(),
             inference,
-            plan_parser:       PlanParser::new(),
+            plan_parser: PlanParser::new(),
             rag_client,
-            tool_registry:     ToolRegistry::new(),
-            model_registry:    ModelRegistry::new(),
+            tool_registry: ToolRegistry::new(),
+            model_registry: ModelRegistry::new(),
             memory_store,
         }
     }
@@ -135,9 +136,13 @@ impl Orchestrator {
         );
 
         ctx.trace_summary("classify", "fallback");
-        
+
         // 1. RAG (Retrieval-Augmented Generation): Retrieve relevant chunks from uploaded documents
-        let relevant_chunks = self.rag_client.retrieve(&ctx.original_query, 5).await.unwrap_or_default();
+        let relevant_chunks = self
+            .rag_client
+            .retrieve(&ctx.original_query, 5)
+            .await
+            .unwrap_or_default();
         let context_from_docs = relevant_chunks.join("\n---\n");
 
         // 2. Prompt Synthesis: Perform "Context Injection" if document data is available
@@ -152,15 +157,14 @@ impl Orchestrator {
             )
         } else {
             ctx.trace_summary("rag", "no relevant document context found");
-            self.prompt_builder.build_synthesis_prompt(
-                &ctx.history,
-                &ctx.original_query,
-                &[],
-            )
+            self.prompt_builder
+                .build_synthesis_prompt(&ctx.history, &ctx.original_query, &[])
         };
+        let synthesis_prompt = user_profile::personalize_prompt(&synthesis_prompt);
 
         // 3. Inference: Call the local LLM and stream tokens back to the client
-        let final_answer = self.inference
+        let final_answer = self
+            .inference
             .stream(&synthesis_prompt, &ctx.model.name, tx)
             .await?;
 
@@ -198,7 +202,11 @@ impl Orchestrator {
                     self.inference.call(&prompt, &ctx.model.name).await?
                 }
                 "rag" | "search" | "document" => {
-                    let chunks = self.rag_client.retrieve(&step.input, 5).await.unwrap_or_default();
+                    let chunks = self
+                        .rag_client
+                        .retrieve(&step.input, 5)
+                        .await
+                        .unwrap_or_default();
                     if chunks.is_empty() {
                         "No relevant information was found in the document.".to_string()
                     } else {

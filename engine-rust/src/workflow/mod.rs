@@ -1,5 +1,5 @@
-pub mod registry;
 pub mod phases;
+pub mod registry;
 
 pub enum WorkflowId {
     Default,
@@ -12,6 +12,6 @@ pub enum WorkflowId {
 }
 
 pub struct WorkflowDef {
-    pub id:     WorkflowId,
+    pub id: WorkflowId,
     pub phases: Vec<phases::Phase>,
 }

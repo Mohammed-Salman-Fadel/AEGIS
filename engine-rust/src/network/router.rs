@@ -1,16 +1,19 @@
-use axum::{
-    extract::{Multipart, ws::{WebSocketUpgrade, Message}, State},
-    http::{Method, HeaderValue, StatusCode},
-    routing::{get, post},
-    Json, Router,
-};
-use tower_http::cors::CorsLayer;
-use serde_json::{json, Value};
-use sysinfo::System;
-use tokio::sync::mpsc;
-use futures::{sink::SinkExt, stream::StreamExt};
 use super::{handlers, state::AppState};
 use crate::network::handlers::chat::ChatRequest;
+use axum::{
+    Json, Router,
+    extract::{
+        Multipart, State,
+        ws::{Message, WebSocketUpgrade},
+    },
+    http::{HeaderValue, Method, StatusCode},
+    routing::{get, post},
+};
+use futures::{sink::SinkExt, stream::StreamExt};
+use serde_json::{Value, json};
+use sysinfo::System;
+use tokio::sync::mpsc;
+use tower_http::cors::CorsLayer;
 
 // SYSTEM RESOURCE MONITORING
 async fn get_system_stats() -> Json<Value> {
@@ -19,11 +22,18 @@ async fn get_system_stats() -> Json<Value> {
     let cpu_usage = sys.global_cpu_usage();
     let total_mem = sys.total_memory();
     let used_mem = sys.used_memory();
-    let ram_usage = if total_mem > 0 { (used_mem as f32 / total_mem as f32) * 100.0 } else { 0.0 };
+    let ram_usage = if total_mem > 0 {
+        (used_mem as f32 / total_mem as f32) * 100.0
+    } else {
+        0.0
+    };
     Json(json!({ "cpu": cpu_usage.round() as u32, "ram": ram_usage.round() as u32 }))
 }
 
-async fn handle_chat_ws(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl axum::response::IntoResponse {
+async fn handle_chat_ws(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
     ws.on_upgrade(|socket| async move {
         let (mut sender, mut receiver) = socket.split();
 
@@ -46,7 +56,9 @@ async fn handle_chat_ws(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
             });
 
             while let Some(token) = rx.recv().await {
-                if token == "[DONE]" { break; }
+                if token == "[DONE]" {
+                    break;
+                }
                 if token.starts_with("[ERROR]") {
                     full_ai_response = token;
                     break;
@@ -54,12 +66,14 @@ async fn handle_chat_ws(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
                 full_ai_response.push_str(&token);
             }
 
-            let response = json!({ 
-                "type": "token", 
-                "content": full_ai_response 
+            let response = json!({
+                "type": "token",
+                "content": full_ai_response
             });
-            
-            let _ = sender.send(Message::Text(response.to_string().into())).await;
+
+            let _ = sender
+                .send(Message::Text(response.to_string().into()))
+                .await;
 
             let trace = json!({ "type": "trace", "phase": "Complete" });
             let _ = sender.send(Message::Text(trace.to_string().into())).await;
@@ -99,7 +113,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/system/stats", get(get_system_stats))
         .route("/ingest", post(handle_pdf_ingest)) // State desteği eklendi
         .route("/index/progress", get(handle_progress_ws))
-        .route("/chat/stream", get(handle_chat_ws)) 
+        .route("/chat/stream", get(handle_chat_ws))
         .route(
             "/sessions",
             get(handlers::sessions::list_sessions).post(handlers::sessions::create_session),

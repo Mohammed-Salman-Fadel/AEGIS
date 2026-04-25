@@ -2,10 +2,15 @@
 # Rust
 engine-rust/target/
 engine-rust/Cargo.lock
+.cargo-target-*/
+dist/
 
 .env
 .env.local
 frontend/.npm-cache/
+frontend/dist/
+.aegis/
+.test-aegis/
 # CLI
 
 cli/target/

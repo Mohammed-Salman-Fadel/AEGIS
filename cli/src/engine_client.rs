@@ -122,7 +122,10 @@ impl EngineClient {
             .map_err(|error| format!("Could not send chat request to engine: {error}"))?;
 
         if !response.status().is_success() {
-            return Err(format!("Engine chat request failed with HTTP {}.", response.status()));
+            return Err(format!(
+                "Engine chat request failed with HTTP {}.",
+                response.status()
+            ));
         }
 
         let reader = BufReader::new(response);
@@ -130,7 +133,8 @@ impl EngineClient {
         let mut event_lines = Vec::new();
 
         for line in reader.lines() {
-            let line = line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
+            let line =
+                line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
             if let Some(data) = line.strip_prefix("data: ") {
                 event_lines.push(data.to_string());
                 continue;
@@ -178,9 +182,9 @@ impl EngineClient {
             ));
         }
 
-        let response = response
-            .json::<EngineSession>()
-            .map_err(|error| format!("Could not parse engine session creation response: {error}"))?;
+        let response = response.json::<EngineSession>().map_err(|error| {
+            format!("Could not parse engine session creation response: {error}")
+        })?;
 
         Ok(CreatedSession {
             id: response.session_id,

@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 
 use crate::args::{
     AskArgs, ChatArgs, InstallArgs, OptionalNameArg, OptionalSessionIdArg, ReplArgs,
-    RequiredSessionIdArg,
+    RequiredSessionIdArg, SaveArgs,
 };
 
 pub const HELP_EXAMPLES: &str = "\
@@ -17,9 +17,11 @@ Examples:
   aegis
   aegis install
   aegis chat \"What can you do?\"
+  aegis load 1189578c-9c96-4b4c-8015-4d0673544a6a
   aegis repl
   aegis ask --stdin
   aegis session new
+  aegis save \"my name is Sam\"
   aegis provider list
   aegis model
   aegis model list
@@ -54,7 +56,9 @@ pub struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum CommandKind {
     Install(InstallArgs),
+    Save(SaveArgs),
     Chat(ChatArgs),
+    Load(RequiredSessionIdArg),
     Ask(AskArgs),
     Repl(ReplArgs),
     Session {

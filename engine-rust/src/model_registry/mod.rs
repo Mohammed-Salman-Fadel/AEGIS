@@ -3,7 +3,7 @@ use std::sync::RwLock;
 
 #[derive(Clone)]
 pub struct ModelProfile {
-    pub name:           String,
+    pub name: String,
     pub context_window: usize,
     pub output_reserve: usize,
 }
@@ -48,7 +48,7 @@ impl ModelRegistry {
 
     pub fn get_active(&self) -> ModelProfile {
         ModelProfile {
-            name:           self.current_model_name(),
+            name: self.current_model_name(),
             context_window: 8192,
             output_reserve: 512,
         }

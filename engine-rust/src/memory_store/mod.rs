@@ -1,18 +1,19 @@
-//! Role: session persistence layer for stored conversations.
+//! Role: file-backed session persistence layer for stored conversations.
 //! Called by: `main.rs` during engine startup and `orchestrator/mod.rs` for session lifecycle and turn persistence.
-//! Calls into: PostgreSQL through `tokio-postgres`.
+//! Calls into: the local filesystem under the shared AEGIS data directory.
 //! Owns: creating, loading, listing, deleting, and appending stored session history.
 //! Does not own: inference execution, HTTP routing, or CLI rendering.
-//! Next TODOs: add session metadata updates, richer audit events, and connection pooling when traffic grows.
+//! Next TODOs: add lightweight file locking, session export/import helpers, and richer audit summaries when the UI needs them.
 
 use std::env;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
-use serde_json::{Value, json};
-use tokio_postgres::{Client, NoTls};
+use serde::{Deserialize, Serialize};
+use tokio::fs;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -25,32 +26,42 @@ pub struct MemoryStore {
 
 #[derive(Clone)]
 enum SessionBackend {
-    Postgres(Arc<PostgresSessionStore>),
+    Files(Arc<FileSessionStore>),
     Unavailable { reason: Arc<String> },
 }
 
-struct PostgresSessionStore {
-    client: Arc<Client>,
+struct FileSessionStore {
+    sessions_dir: PathBuf,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct StoredSessionFile {
+    session_id: String,
+    title: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    turns: Vec<StoredTurnRecord>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct StoredTurnRecord {
+    query: String,
+    response: String,
+    model_name: String,
+    created_at: DateTime<Utc>,
+    trace: Vec<TraceEntry>,
 }
 
 impl MemoryStore {
     pub async fn new() -> Self {
-        let Some(database_url) = env::var("AEGIS_DATABASE_URL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        else {
-            let reason =
-                "Set AEGIS_DATABASE_URL to enable Postgres-backed session persistence.".to_string();
-            warn!("{reason}");
-            return Self::unavailable(reason);
-        };
-
-        match PostgresSessionStore::connect(&database_url).await {
+        match FileSessionStore::initialize().await {
             Ok(store) => {
-                info!("Session persistence enabled with PostgreSQL.");
+                info!(
+                    sessions_dir = %store.sessions_dir.display(),
+                    "Session persistence enabled with local files."
+                );
                 Self {
-                    backend: SessionBackend::Postgres(Arc::new(store)),
+                    backend: SessionBackend::Files(Arc::new(store)),
                 }
             }
             Err(error) => {
@@ -63,21 +74,21 @@ impl MemoryStore {
 
     pub async fn create_session(&self) -> anyhow::Result<Session> {
         match &self.backend {
-            SessionBackend::Postgres(store) => store.create_session().await,
+            SessionBackend::Files(store) => store.create_session().await,
             SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
         }
     }
 
     pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
         match &self.backend {
-            SessionBackend::Postgres(store) => store.list_sessions().await,
+            SessionBackend::Files(store) => store.list_sessions().await,
             SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
         }
     }
 
     pub async fn get_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
         match &self.backend {
-            SessionBackend::Postgres(store) => store.get_session(session_id).await,
+            SessionBackend::Files(store) => store.get_session(session_id).await,
             SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
         }
     }
@@ -91,7 +102,7 @@ impl MemoryStore {
         trace: &[TraceEntry],
     ) -> anyhow::Result<()> {
         match &self.backend {
-            SessionBackend::Postgres(store) => {
+            SessionBackend::Files(store) => {
                 store
                     .append_turn(session_id, query, response, model_name, trace)
                     .await
@@ -102,7 +113,7 @@ impl MemoryStore {
 
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
         match &self.backend {
-            SessionBackend::Postgres(store) => store.delete_session(session_id).await,
+            SessionBackend::Files(store) => store.delete_session(session_id).await,
             SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
         }
     }
@@ -116,158 +127,75 @@ impl MemoryStore {
     }
 }
 
-impl PostgresSessionStore {
-    async fn connect(database_url: &str) -> anyhow::Result<Self> {
-        let (client, connection) = tokio_postgres::connect(database_url, NoTls)
-            .await
-            .with_context(|| "Could not connect to PostgreSQL.")?;
-
-        tokio::spawn(async move {
-            if let Err(error) = connection.await {
-                warn!("PostgreSQL connection task ended: {error}");
-            }
-        });
-
-        let store = Self {
-            client: Arc::new(client),
-        };
-        store.initialize_schema().await?;
-        Ok(store)
-    }
-
-    async fn initialize_schema(&self) -> anyhow::Result<()> {
-        self.client
-            .batch_execute(
-                r#"
-                CREATE TABLE IF NOT EXISTS aegis_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
-                );
-
-                CREATE TABLE IF NOT EXISTS aegis_session_turns (
-                    id BIGSERIAL PRIMARY KEY,
-                    session_id TEXT NOT NULL REFERENCES aegis_sessions(session_id) ON DELETE CASCADE,
-                    user_message TEXT NOT NULL,
-                    assistant_message TEXT NOT NULL,
-                    model_name TEXT NOT NULL,
-                    trace JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                );
-
-                CREATE INDEX IF NOT EXISTS aegis_session_turns_session_id_created_idx
-                    ON aegis_session_turns (session_id, created_at, id);
-                "#,
+impl FileSessionStore {
+    async fn initialize() -> anyhow::Result<Self> {
+        let sessions_dir = session_storage_dir();
+        fs::create_dir_all(&sessions_dir).await.with_context(|| {
+            format!(
+                "Could not create the AEGIS session storage directory `{}`.",
+                sessions_dir.display()
             )
-            .await
-            .with_context(|| "Could not initialize the PostgreSQL schema for sessions.")?;
+        })?;
 
-        Ok(())
+        Ok(Self { sessions_dir })
     }
 
     async fn create_session(&self) -> anyhow::Result<Session> {
         let now = Utc::now();
-        let session_id = Uuid::new_v4().to_string();
-        let metadata = json!({
-            "storage": "postgres",
-            "created_by": "aegis-engine"
-        });
-
-        self.client
-            .execute(
-                "INSERT INTO aegis_sessions (session_id, title, created_at, updated_at, metadata)
-                 VALUES ($1, $2, $3, $4, $5)",
-                &[&session_id, &"New chat", &now, &now, &metadata],
-            )
-            .await
-            .with_context(|| "Could not create a new stored session.")?;
-
-        Ok(Session {
-            session_id,
+        let stored = StoredSessionFile {
+            session_id: Uuid::new_v4().to_string(),
             title: "New chat".to_string(),
-            history: ConversationHistory::empty(),
             created_at: now,
             updated_at: now,
-        })
+            turns: Vec::new(),
+        };
+
+        self.write_session_file(&stored).await?;
+        Ok(stored.into_session())
     }
 
     async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
-        let rows = self
-            .client
-            .query(
-                r#"
-                SELECT
-                    s.session_id,
-                    s.title,
-                    s.updated_at,
-                    COUNT(t.id) AS turn_count
-                FROM aegis_sessions s
-                LEFT JOIN aegis_session_turns t ON t.session_id = s.session_id
-                GROUP BY s.session_id, s.title, s.updated_at
-                ORDER BY s.updated_at DESC
-                "#,
-                &[],
+        let mut sessions = Vec::new();
+        let mut directory = fs::read_dir(&self.sessions_dir).await.with_context(|| {
+            format!(
+                "Could not read the AEGIS session storage directory `{}`.",
+                self.sessions_dir.display()
             )
-            .await
-            .with_context(|| "Could not list stored sessions.")?;
+        })?;
 
-        Ok(rows
-            .into_iter()
-            .map(|row| SessionSummary {
-                session_id: row.get("session_id"),
-                title: row.get("title"),
-                turn_count: row.get::<_, i64>("turn_count") as usize,
-                updated_at: row.get("updated_at"),
-            })
-            .collect())
+        while let Some(entry) = directory.next_entry().await.with_context(|| {
+            format!(
+                "Could not iterate through the AEGIS session storage directory `{}`.",
+                self.sessions_dir.display()
+            )
+        })? {
+            if !entry
+                .file_type()
+                .await
+                .with_context(|| format!("Could not inspect `{}`.", entry.path().display()))?
+                .is_file()
+            {
+                continue;
+            }
+
+            match self.read_session_path(&entry.path()).await {
+                Ok(session) => sessions.push(session.summary()),
+                Err(error) => warn!(
+                    path = %entry.path().display(),
+                    "Skipping unreadable stored session file: {error}"
+                ),
+            }
+        }
+
+        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        Ok(sessions)
     }
 
     async fn get_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
-        let session_row = self
-            .client
-            .query_opt(
-                "SELECT session_id, title, created_at, updated_at
-                 FROM aegis_sessions
-                 WHERE session_id = $1",
-                &[&session_id],
-            )
-            .await
-            .with_context(|| format!("Could not load stored session `{session_id}`."))?;
-
-        let Some(session_row) = session_row else {
-            return Ok(None);
-        };
-
-        let turn_rows = self
-            .client
-            .query(
-                "SELECT user_message, assistant_message, created_at
-                 FROM aegis_session_turns
-                 WHERE session_id = $1
-                 ORDER BY created_at ASC, id ASC",
-                &[&session_id],
-            )
-            .await
-            .with_context(|| format!("Could not load turn history for session `{session_id}`."))?;
-
-        let turns = turn_rows
-            .into_iter()
-            .map(|row| Turn {
-                query: row.get("user_message"),
-                response: row.get("assistant_message"),
-                created_at: row.get("created_at"),
-            })
-            .collect();
-
-        Ok(Some(Session {
-            session_id: session_row.get("session_id"),
-            title: session_row.get("title"),
-            history: ConversationHistory { turns },
-            created_at: session_row.get("created_at"),
-            updated_at: session_row.get("updated_at"),
-        }))
+        Ok(self
+            .read_session_file(session_id)
+            .await?
+            .map(StoredSessionFile::into_session))
     }
 
     async fn append_turn(
@@ -278,53 +206,117 @@ impl PostgresSessionStore {
         model_name: &str,
         trace: &[TraceEntry],
     ) -> anyhow::Result<()> {
-        let next_title = trimmed_title(query);
-        let trace_value = trace_json(trace);
+        let mut stored = self
+            .read_session_file(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?;
 
-        let updated_rows = self
-            .client
-            .execute(
-                "UPDATE aegis_sessions
-                 SET title = CASE WHEN title = 'New chat' THEN $2 ELSE title END,
-                     updated_at = NOW()
-                 WHERE session_id = $1",
-                &[&session_id, &next_title],
-            )
-            .await
-            .with_context(|| format!("Could not update stored session `{session_id}`."))?;
-
-        if updated_rows == 0 {
-            anyhow::bail!("Session `{session_id}` was not found.");
+        let now = Utc::now();
+        if stored.title == "New chat" {
+            stored.title = trimmed_title(query);
         }
+        stored.updated_at = now;
+        stored.turns.push(StoredTurnRecord {
+            query: query.to_string(),
+            response: response.to_string(),
+            model_name: model_name.to_string(),
+            created_at: now,
+            trace: trace.to_vec(),
+        });
 
-        self.client
-            .execute(
-                "INSERT INTO aegis_session_turns
-                    (session_id, user_message, assistant_message, model_name, trace, created_at)
-                 VALUES ($1, $2, $3, $4, $5, NOW())",
-                &[&session_id, &query, &response, &model_name, &trace_value],
-            )
-            .await
-            .with_context(|| format!("Could not append a turn to session `{session_id}`."))?;
-
-        Ok(())
+        self.write_session_file(&stored).await
     }
 
     async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
-        let deleted_rows = self
-            .client
-            .execute(
-                "DELETE FROM aegis_sessions WHERE session_id = $1",
-                &[&session_id],
-            )
-            .await
-            .with_context(|| format!("Could not delete stored session `{session_id}`."))?;
+        let path = self.session_path(session_id)?;
 
-        if deleted_rows == 0 {
-            return Ok(false);
+        match fs::remove_file(&path).await {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(anyhow::Error::new(error)
+                .context(format!("Could not delete stored session `{session_id}`."))),
         }
+    }
 
-        Ok(true)
+    async fn read_session_file(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Option<StoredSessionFile>> {
+        let path = self.session_path(session_id)?;
+
+        match fs::read_to_string(&path).await {
+            Ok(contents) => self.parse_session_file(&path, &contents).map(Some),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(anyhow::Error::new(error)
+                .context(format!("Could not load stored session `{session_id}`."))),
+        }
+    }
+
+    async fn read_session_path(&self, path: &Path) -> anyhow::Result<StoredSessionFile> {
+        let contents = fs::read_to_string(path)
+            .await
+            .with_context(|| format!("Could not read stored session file `{}`.", path.display()))?;
+
+        self.parse_session_file(path, &contents)
+    }
+
+    fn parse_session_file(&self, path: &Path, contents: &str) -> anyhow::Result<StoredSessionFile> {
+        serde_json::from_str(contents).with_context(|| {
+            format!(
+                "Stored session file `{}` is not valid JSON text.",
+                path.display()
+            )
+        })
+    }
+
+    async fn write_session_file(&self, session: &StoredSessionFile) -> anyhow::Result<()> {
+        let path = self.session_path(&session.session_id)?;
+        let payload = serde_json::to_string_pretty(session).with_context(|| {
+            format!(
+                "Could not serialize stored session `{}` into JSON text.",
+                session.session_id
+            )
+        })?;
+
+        fs::write(&path, payload)
+            .await
+            .with_context(|| format!("Could not write stored session `{}`.", path.display()))
+    }
+
+    fn session_path(&self, session_id: &str) -> anyhow::Result<PathBuf> {
+        let session_id = normalize_session_id(session_id)?;
+        Ok(self.sessions_dir.join(session_id))
+    }
+}
+
+impl StoredSessionFile {
+    fn into_session(self) -> Session {
+        Session {
+            session_id: self.session_id,
+            title: self.title,
+            history: ConversationHistory {
+                turns: self
+                    .turns
+                    .into_iter()
+                    .map(|turn| Turn {
+                        query: turn.query,
+                        response: turn.response,
+                        created_at: turn.created_at,
+                    })
+                    .collect(),
+            },
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+
+    fn summary(&self) -> SessionSummary {
+        SessionSummary {
+            session_id: self.session_id.clone(),
+            title: self.title.clone(),
+            turn_count: self.turns.len(),
+            updated_at: self.updated_at.clone(),
+        }
     }
 }
 
@@ -341,11 +333,47 @@ fn trimmed_title(query: &str) -> String {
     }
 }
 
-fn trace_json(trace: &[TraceEntry]) -> Value {
-    serde_json::to_value(trace).unwrap_or_else(|_| json!([]))
+fn normalize_session_id(session_id: &str) -> anyhow::Result<&str> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        anyhow::bail!("Session ids cannot be empty.");
+    }
+
+    if !session_id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        anyhow::bail!(
+            "Session id `{session_id}` contains unsupported characters for local file storage."
+        );
+    }
+
+    Ok(session_id)
 }
 
-#[derive(Clone, Serialize)]
+fn session_storage_dir() -> PathBuf {
+    env::var("AEGIS_SESSIONS_DIR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(default_session_storage_dir)
+}
+
+fn default_session_storage_dir() -> PathBuf {
+    resolve_home_dir()
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join(".aegis")
+        .join("sessions")
+}
+
+fn resolve_home_dir() -> Option<PathBuf> {
+    env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(PathBuf::from))
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
     pub title: String,
@@ -354,7 +382,7 @@ pub struct Session {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session_id: String,
     pub title: String,

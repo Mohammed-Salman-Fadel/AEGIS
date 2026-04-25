@@ -1,18 +1,19 @@
+mod classifier;
+mod compactor;
 mod config;
+mod context;
+mod inference;
+mod memory_store;
+mod model_registry;
 mod network;
 mod orchestrator;
-mod context;
-mod classifier;
-mod workflow;
-mod compactor;
-mod prompt_builder;
-mod inference;
 mod plan_parser;
+mod process_manager;
+mod prompt_builder;
 mod rag_client;
 mod tool_registry;
-mod model_registry;
-mod memory_store;
-mod process_manager;
+mod user_profile;
+mod workflow;
 
 use config::{AppConfig, InferenceProvider};
 use inference::InferenceBackend;

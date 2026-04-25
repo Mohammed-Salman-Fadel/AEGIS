@@ -5,11 +5,7 @@
 //! Does not own: Ollama model discovery, inference execution, or CLI rendering.
 //! Next TODOs: validate requested models against the provider catalog before accepting switches.
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::network::state::AppState;

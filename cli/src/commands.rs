@@ -15,11 +15,14 @@ use crate::banner;
 use crate::cli::Cli;
 use crate::cli::{CommandKind, ModelCommand, ProviderCommand, SessionCommand};
 use crate::doctor::{CheckItem, DoctorReport, Health};
-use crate::engine_client::{ActionStatus, CreatedSession, ModelSummary, ProviderSummary, SessionSummary};
+use crate::engine_client::{
+    ActionStatus, CreatedSession, ModelSummary, ProviderSummary, SessionSummary,
+};
 use crate::install;
 use crate::menu::{self, MenuChoice};
 use crate::runner;
 use crate::signals;
+use crate::user_profile;
 use crate::{AppContext, AppResult};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,7 +51,9 @@ fn dispatch_command(
 ) -> AppResult<()> {
     match command {
         CommandKind::Install(args) => handle_install(ctx, args),
+        CommandKind::Save(args) => handle_save(ctx, &args.note),
         CommandKind::Chat(args) => handle_chat(ctx, &args.prompt, args.session_id.as_deref()),
+        CommandKind::Load(args) => handle_load(ctx, &args.id, invocation_mode),
         CommandKind::Ask(args) => handle_ask(ctx, args.stdin, args.session_id.as_deref()),
         CommandKind::Repl(args) => handle_repl(ctx, args.session_id.as_deref()),
         CommandKind::Session { command } => handle_session(ctx, command, invocation_mode),
@@ -144,6 +149,24 @@ fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult
         );
     }
 
+    Ok(())
+}
+
+fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {
+    let path = user_profile::append_note(note)?;
+    println!("{}", ctx.ui.header("Personalization Saved"));
+    println!(
+        "{}",
+        ctx.ui.success("Saved your note for future responses.")
+    );
+    println!(
+        "{}",
+        ctx.ui
+            .muted("AEGIS will feed this information to the model when it is relevant.")
+    );
+    if ctx.ui.verbose {
+        println!("File: {}", path.display());
+    }
     Ok(())
 }
 
@@ -363,6 +386,8 @@ fn print_shell_help(ctx: &AppContext) {
     // println!("Examples:");
     println!("- status");
     println!("- chat \"hello\"");
+    println!("- load 1189578c-9c96-4b4c-8015-4d0673544a6a");
+    println!("- save \"my name is Sam\"");
     println!("- repl");
     println!("- session list");
     println!("- provider select ollama");
@@ -381,6 +406,15 @@ fn print_shell_help(ctx: &AppContext) {
         ctx.ui
             .muted("Type `quit` or `exit` at any time to stop the CLI immediately.")
     );
+}
+
+fn handle_load(
+    ctx: &AppContext,
+    session_id: &str,
+    invocation_mode: InvocationMode,
+) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Session Load"));
+    enter_session(ctx, session_id, invocation_mode)
 }
 
 fn parse_shell_cli(line: &str) -> AppResult<Option<Cli>> {
@@ -813,11 +847,10 @@ fn handle_model_switch(ctx: &AppContext, new_model: &str) -> AppResult<()> {
         &format!("Unloading {current_model}"),
         Duration::from_millis(550),
     );
-    let switch_result = run_with_loading_message(
-        ctx,
-        &format!("Now switching to {new_model}"),
-        || ctx.engine.select_model(new_model),
-    )?;
+    let switch_result =
+        run_with_loading_message(ctx, &format!("Now switching to {new_model}"), || {
+            ctx.engine.select_model(new_model)
+        })?;
 
     println!("{}", ctx.ui.success(&switch_result.message));
     Ok(())
@@ -846,8 +879,10 @@ fn enter_session(
 
     println!(
         "{}",
-        ctx.ui
-            .success(&format!("Entering session: {} ({session_id})", detail.title))
+        ctx.ui.success(&format!(
+            "Entering session: {} ({session_id})",
+            detail.title
+        ))
     );
     print_session_mode_hint(ctx);
     run_session_prompt_loop(ctx, session_id, invocation_mode)
@@ -977,6 +1012,21 @@ mod tests {
                 command: SessionCommand::Use(args),
             }) => assert_eq!(args.id.as_deref(), Some("todo-session-001")),
             _ => panic!("expected session use command"),
+        }
+    }
+
+    #[test]
+    fn tokenizes_load_command() {
+        let parsed = parse_shell_cli("load 1189578c-9c96-4b4c-8015-4d0673544a6a").unwrap();
+        let Some(cli) = parsed else {
+            panic!("shell parser should produce a CLI command");
+        };
+
+        match cli.command {
+            Some(CommandKind::Load(args)) => {
+                assert_eq!(args.id, "1189578c-9c96-4b4c-8015-4d0673544a6a")
+            }
+            _ => panic!("expected load command"),
         }
     }
 }

@@ -60,9 +60,12 @@ pub async fn get_session(
         .await
         .map_err(session_error)?;
 
-    session
-        .map(Json)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Session `{session_id}` was not found.")))
+    session.map(Json).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("Session `{session_id}` was not found."),
+        )
+    })
 }
 
 pub async fn delete_session(

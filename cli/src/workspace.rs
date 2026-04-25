@@ -115,9 +115,7 @@ impl Workspace {
             }
         }
 
-        let port = self
-            .frontend_dev_port()
-            .unwrap_or(5173);
+        let port = self.frontend_dev_port().unwrap_or(5173);
 
         format!("http://localhost:{port}")
     }

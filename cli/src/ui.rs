@@ -7,8 +7,8 @@
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -325,7 +325,9 @@ fn normalize_model_response(text: &str) -> String {
         normalized.push(current);
 
         if matches!(current, '.' | '!' | '?' | ':')
-            && chars.get(index + 1).is_some_and(|next| !next.is_whitespace())
+            && chars
+                .get(index + 1)
+                .is_some_and(|next| !next.is_whitespace())
         {
             if current == ':' && is_list_start(&chars, index + 1) {
                 normalized.push('\n');
@@ -380,10 +382,7 @@ fn is_list_start(chars: &[char], index: usize) -> bool {
         cursor += 1;
     }
 
-    saw_digit
-        && cursor + 1 < chars.len()
-        && chars[cursor] == '.'
-        && chars[cursor + 1] == ' '
+    saw_digit && cursor + 1 < chars.len() && chars[cursor] == '.' && chars[cursor + 1] == ' '
 }
 
 fn starts_with(chars: &[char], index: usize, needle: &str) -> bool {
@@ -409,8 +408,7 @@ mod tests {
 
     #[test]
     fn normalizes_missing_spaces_and_lists() {
-        let raw =
-            "Differential Equations!A differential equation is useful.Applications:1. **Physics**2. **Biology**";
+        let raw = "Differential Equations!A differential equation is useful.Applications:1. **Physics**2. **Biology**";
         let normalized = normalize_model_response(raw);
 
         assert!(normalized.contains("Differential Equations! A differential equation is useful."));
