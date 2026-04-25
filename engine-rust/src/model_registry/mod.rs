@@ -1,8 +1,9 @@
 use std::env;
+use std::sync::RwLock;
 
 #[derive(Clone)]
 pub struct ModelProfile {
-    pub name:           String,
+    pub name: String,
     pub context_window: usize,
     pub output_reserve: usize,
 }
@@ -13,14 +14,41 @@ impl ModelProfile {
     }
 }
 
-pub struct ModelRegistry;
+pub struct ModelRegistry {
+    active_model: RwLock<String>,
+}
 
 impl ModelRegistry {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self {
+            active_model: RwLock::new(
+                env::var("AEGIS_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string()),
+            ),
+        }
+    }
+
+    pub fn current_model_name(&self) -> String {
+        self.active_model
+            .read()
+            .map(|model| model.clone())
+            .unwrap_or_else(|_| "qwen3:4b".to_string())
+    }
+
+    pub fn set_active_model(&self, name: impl Into<String>) -> String {
+        let name = name.into();
+        match self.active_model.write() {
+            Ok(mut active_model) => {
+                let previous = active_model.clone();
+                *active_model = name;
+                previous
+            }
+            Err(_) => "qwen3:4b".to_string(),
+        }
+    }
 
     pub fn get_active(&self) -> ModelProfile {
         ModelProfile {
-            name:           env::var("AEGIS_MODEL").unwrap_or_else(|_| "qwen2.5-coder:3b".to_string()),
+            name: self.current_model_name(),
             context_window: 8192,
             output_reserve: 512,
         }

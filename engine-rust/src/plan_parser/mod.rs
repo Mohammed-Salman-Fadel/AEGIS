@@ -3,7 +3,9 @@ use serde::Deserialize;
 pub struct PlanParser;
 
 impl PlanParser {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 
     pub fn parse(&self, raw: &str) -> ParsedPlan {
         let json = extract_json(raw);
@@ -25,25 +27,21 @@ pub enum ParsedPlan {
 
 #[derive(Debug, Deserialize)]
 pub struct PlanStep {
-    pub id:    String,
-    pub tool:  String,
+    pub id: String,
+    pub tool: String,
     pub input: String,
 }
 
 pub struct StepResult {
     pub step_id: String,
-    pub output:  String,
+    pub output: String,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum PlannerResponse {
-    Final {
-        answer: String,
-    },
-    Steps {
-        steps: Vec<PlanStep>,
-    },
+    Final { answer: String },
+    Steps { steps: Vec<PlanStep> },
 }
 
 fn extract_json(raw: &str) -> String {

@@ -53,9 +53,7 @@ impl InferenceBackend for OllamaBackend {
             anyhow::bail!("ollama error {status} for model `{model}`: {body}");
         }
 
-        let response = response
-            .json::<GenerateChunk>()
-            .await?;
+        let response = response.json::<GenerateChunk>().await?;
 
         if let Some(error) = response.error {
             anyhow::bail!("ollama error: {error}");

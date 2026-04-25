@@ -46,6 +46,6 @@ _____/\\\\\\\\\_____/\\\\\\\\\\\\\\\_____/\\\\\\\\\\\\__/\\\\\\\\\\\_____/\\\\\\
 pub fn should_render_banner(command: Option<&CommandKind>) -> bool {
     matches!(
         command,
-        None | Some(CommandKind::Chat(_)) | Some(CommandKind::Ask(_)) | Some(CommandKind::Repl(_))
+        None | Some(CommandKind::Ask(_)) | Some(CommandKind::Repl(_))
     )
 }

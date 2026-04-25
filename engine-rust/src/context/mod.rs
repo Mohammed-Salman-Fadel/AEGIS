@@ -1,20 +1,20 @@
-use std::collections::HashMap;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::model_registry::ModelProfile;
 
 /// One turn in the conversation — a user message and the assistant's response.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Turn {
-    pub query:      String,
-    pub response:   String,
+    pub query: String,
+    pub response: String,
     pub created_at: DateTime<Utc>,
 }
 
 /// The conversation history for a session.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ConversationHistory {
     pub turns: Vec<Turn>,
 }
@@ -26,11 +26,11 @@ impl ConversationHistory {
 }
 
 /// A single entry recording what a phase did and how many tokens it used.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TraceEntry {
-    pub phase:       String,
+    pub phase: String,
     pub tokens_used: usize,
-    pub summary:     Option<String>,
+    pub summary: Option<String>,
 }
 
 /// Values stored in context slots — what nodes read from and write to.
@@ -42,21 +42,21 @@ pub enum SlotValue {
 /// The central state object — lives for the entire duration of one request.
 /// Every phase reads from and writes to this.
 pub struct RequestContext {
-    pub request_id:     Uuid,
-    pub session_id:     String,
+    pub request_id: Uuid,
+    pub session_id: String,
     pub original_query: String,
-    pub history:        ConversationHistory,
-    pub model:          ModelProfile,
-    pub slots:          HashMap<String, SlotValue>,
-    pub trace:          Vec<TraceEntry>,
+    pub history: ConversationHistory,
+    pub model: ModelProfile,
+    pub slots: HashMap<String, SlotValue>,
+    pub trace: Vec<TraceEntry>,
 }
 
 impl RequestContext {
     pub fn new(
-        session_id:     String,
+        session_id: String,
         original_query: String,
-        history:        ConversationHistory,
-        model:          ModelProfile,
+        history: ConversationHistory,
+        model: ModelProfile,
     ) -> Self {
         Self {
             request_id: Uuid::new_v4(),
@@ -82,7 +82,7 @@ impl RequestContext {
     /// Append a trace entry.
     pub fn trace(&mut self, phase: &str, tokens_used: usize) {
         self.trace.push(TraceEntry {
-            phase:   phase.to_string(),
+            phase: phase.to_string(),
             tokens_used,
             summary: None,
         });

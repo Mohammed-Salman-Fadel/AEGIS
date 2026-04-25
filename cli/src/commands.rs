@@ -7,6 +7,7 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::mem;
+use std::time::Duration;
 
 use clap::Parser;
 
@@ -14,12 +15,21 @@ use crate::banner;
 use crate::cli::Cli;
 use crate::cli::{CommandKind, ModelCommand, ProviderCommand, SessionCommand};
 use crate::doctor::{CheckItem, DoctorReport, Health};
-use crate::engine_client::{ActionStatus, ModelSummary, ProviderSummary, SessionSummary};
+use crate::engine_client::{
+    ActionStatus, CreatedSession, ModelSummary, ProviderSummary, SessionSummary,
+};
 use crate::install;
 use crate::menu::{self, MenuChoice};
 use crate::runner;
 use crate::signals;
+use crate::user_profile;
 use crate::{AppContext, AppResult};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InvocationMode {
+    Direct,
+    Shell,
+}
 
 pub fn dispatch(ctx: &AppContext, command: Option<CommandKind>) -> AppResult<()> {
     match command {
@@ -30,17 +40,23 @@ pub fn dispatch(ctx: &AppContext, command: Option<CommandKind>) -> AppResult<()>
             }
             Ok(())
         }
-        Some(command) => dispatch_command(ctx, command),
+        Some(command) => dispatch_command(ctx, command, InvocationMode::Direct),
     }
 }
 
-fn dispatch_command(ctx: &AppContext, command: CommandKind) -> AppResult<()> {
+fn dispatch_command(
+    ctx: &AppContext,
+    command: CommandKind,
+    invocation_mode: InvocationMode,
+) -> AppResult<()> {
     match command {
         CommandKind::Install(args) => handle_install(ctx, args),
+        CommandKind::Save(args) => handle_save(ctx, &args.note),
         CommandKind::Chat(args) => handle_chat(ctx, &args.prompt, args.session_id.as_deref()),
+        CommandKind::Load(args) => handle_load(ctx, &args.id, invocation_mode),
         CommandKind::Ask(args) => handle_ask(ctx, args.stdin, args.session_id.as_deref()),
         CommandKind::Repl(args) => handle_repl(ctx, args.session_id.as_deref()),
-        CommandKind::Session { command } => handle_session(ctx, command),
+        CommandKind::Session { command } => handle_session(ctx, command, invocation_mode),
         CommandKind::Provider { command } => handle_provider(ctx, command),
         CommandKind::Model { command } => handle_model(ctx, command),
         CommandKind::Status => show_status(ctx),
@@ -51,6 +67,7 @@ fn dispatch_command(ctx: &AppContext, command: CommandKind) -> AppResult<()> {
 //? PRIMARY HOME INTERFACE
 fn show_home(ctx: &AppContext) -> AppResult<()> {
     let report = DoctorReport::collect(&ctx.workspace);
+    let web_ui_url = ctx.workspace.web_ui_url();
     // ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
 
     println!("{}", ctx.ui.header("AEGIS CLI"));
@@ -58,7 +75,7 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
     // println!("{}", ctx.ui.muted("This pass is intentionally TODO-heavy: commands explain how the CLI should connect to the engine without pretending the backend wiring is finished."));
     println!();
     println!("Workspace : {}", ctx.workspace.root.display());
-    println!("Localhost URL: {}", ctx.engine.base_url());
+    println!("Web UI URL: {web_ui_url}");
     // println!();
     // println!("{}", ctx.ui.header("Command Families"));
     // println!("- install");
@@ -97,12 +114,13 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn handle_clear(ctx: &AppContext) -> AppResult<()> {
+    let web_ui_url = ctx.workspace.web_ui_url();
     ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
 
     println!("{}", ctx.ui.header("AEGIS CLI"));
     // println!();
     println!("Workspace : {}", ctx.workspace.root.display());
-    println!("Localhost URL: {}", ctx.engine.base_url());
+    println!("Web UI URL: {web_ui_url}");
 
     if io::stdin().is_terminal() {
         println!();
@@ -134,9 +152,27 @@ fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult
     Ok(())
 }
 
+fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {
+    let path = user_profile::append_note(note)?;
+    println!("{}", ctx.ui.header("Personalization Saved"));
+    println!(
+        "{}",
+        ctx.ui.success("Saved your note for future responses.")
+    );
+    println!(
+        "{}",
+        ctx.ui
+            .muted("AEGIS will feed this information to the model when it is relevant.")
+    );
+    if ctx.ui.verbose {
+        println!("File: {}", path.display());
+    }
+    Ok(())
+}
+
 fn handle_chat(ctx: &AppContext, prompt: &str, session_id: Option<&str>) -> AppResult<()> {
-    println!("{}", ctx.ui.header("Chat"));
-    let reply = ctx.engine.chat(prompt, session_id)?;
+    let reply = run_with_llm_loading(ctx, || ctx.engine.chat(prompt, session_id))?;
+    ctx.ui.print_markdownish_response(&reply.message);
     if ctx.ui.verbose {
         println!();
         println!("Endpoint: {}", reply.request_path);
@@ -177,9 +213,11 @@ fn handle_ask(ctx: &AppContext, read_from_stdin: bool, session_id: Option<&str>)
         return Ok(());
     }
 
-    let reply = ctx.engine.chat_from_stdin(prompt, session_id)?;
-    println!("{}", reply.message);
-    println!("Endpoint: {}", reply.request_path);
+    let reply = run_with_llm_loading(ctx, || ctx.engine.chat_from_stdin(prompt, session_id))?;
+    ctx.ui.print_markdownish_response(&reply.message);
+    if ctx.ui.verbose {
+        println!("Endpoint: {}", reply.request_path);
+    }
     Ok(())
 }
 
@@ -225,11 +263,21 @@ fn handle_repl(ctx: &AppContext, session_id: Option<&str>) -> AppResult<()> {
             break;
         }
 
-        let reply = ctx.engine.repl_turn(prompt, session_id)?;
-        println!("{}", reply.message);
+        let reply = run_with_llm_loading(ctx, || ctx.engine.repl_turn(prompt, session_id))?;
+        ctx.ui.print_markdownish_response(&reply.message);
     }
 
     Ok(())
+}
+
+fn run_with_llm_loading<T, F>(ctx: &AppContext, operation: F) -> AppResult<T>
+where
+    F: FnOnce() -> AppResult<T>,
+{
+    let loading = ctx.ui.start_loading_animation("Calling LLM");
+    let result = operation();
+    loading.finish();
+    result
 }
 
 // Interactive shell logic
@@ -317,7 +365,7 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
                 ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
             }
 
-            if let Err(error) = dispatch_command(ctx, command) {
+            if let Err(error) = dispatch_command(ctx, command, InvocationMode::Shell) {
                 if signals::is_ctrl_c_error(&error) {
                     return Err(error);
                 }
@@ -338,10 +386,14 @@ fn print_shell_help(ctx: &AppContext) {
     // println!("Examples:");
     println!("- status");
     println!("- chat \"hello\"");
+    println!("- load 1189578c-9c96-4b4c-8015-4d0673544a6a");
+    println!("- save \"my name is Sam\"");
     println!("- repl");
     println!("- session list");
     println!("- provider select ollama");
+    println!("- model");
     println!("- model list");
+    println!("- model switch qwen3:4b");
     println!("");
     println!("Built-ins:");
     println!("- help");
@@ -354,6 +406,15 @@ fn print_shell_help(ctx: &AppContext) {
         ctx.ui
             .muted("Type `quit` or `exit` at any time to stop the CLI immediately.")
     );
+}
+
+fn handle_load(
+    ctx: &AppContext,
+    session_id: &str,
+    invocation_mode: InvocationMode,
+) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Session Load"));
+    enter_session(ctx, session_id, invocation_mode)
 }
 
 fn parse_shell_cli(line: &str) -> AppResult<Option<Cli>> {
@@ -419,13 +480,22 @@ fn tokenize_command_line(line: &str) -> AppResult<Vec<String>> {
     Ok(tokens)
 }
 
-fn handle_session(ctx: &AppContext, command: SessionCommand) -> AppResult<()> {
+fn handle_session(
+    ctx: &AppContext,
+    command: SessionCommand,
+    invocation_mode: InvocationMode,
+) -> AppResult<()> {
     // Sessions are engine-owned. The CLI should only request operations and maybe
     // remember a lightweight "active session" pointer later for convenience.
     match command {
         SessionCommand::New => {
             println!("{}", ctx.ui.header("Session New"));
-            print_action_status(ctx, ctx.engine.create_session()?);
+            let session = ctx.engine.create_session()?;
+            let session_id = session.id.clone();
+            print_created_session(ctx, session);
+            if io::stdin().is_terminal() {
+                run_session_prompt_loop(ctx, &session_id, invocation_mode)?;
+            }
         }
         SessionCommand::List => {
             println!("{}", ctx.ui.header("Session List"));
@@ -445,14 +515,14 @@ fn handle_session(ctx: &AppContext, command: SessionCommand) -> AppResult<()> {
         SessionCommand::Use(args) => {
             println!("{}", ctx.ui.header("Session Use"));
             if let Some(session_id) = args.id {
-                print_action_status(ctx, ctx.engine.use_session(&session_id)?);
+                enter_session(ctx, &session_id, invocation_mode)?;
             } else {
-                handle_interactive_session_use(ctx)?;
+                handle_interactive_session_use(ctx, invocation_mode)?;
             }
         }
-        SessionCommand::Reset(args) => {
-            println!("{}", ctx.ui.header("Session Reset"));
-            print_action_status(ctx, ctx.engine.reset_session(&args.id)?);
+        SessionCommand::Delete(args) => {
+            println!("{}", ctx.ui.header("Session Delete"));
+            print_action_status(ctx, ctx.engine.delete_session(&args.id)?);
         }
     }
 
@@ -481,19 +551,24 @@ fn handle_provider(ctx: &AppContext, command: ProviderCommand) -> AppResult<()> 
     Ok(())
 }
 
-fn handle_model(ctx: &AppContext, command: ModelCommand) -> AppResult<()> {
+fn handle_model(ctx: &AppContext, command: Option<ModelCommand>) -> AppResult<()> {
     // Model selection follows the same rule as provider selection:
     // ask the engine to own it instead of persisting model state only in the CLI.
     match command {
-        ModelCommand::List => {
+        None => {
+            println!("{}", ctx.ui.header("Current Model"));
+            println!("Using : {}", ctx.engine.current_model()?);
+        }
+        Some(ModelCommand::List) => {
             println!("{}", ctx.ui.header("Model List"));
             let models = ctx.engine.list_models()?;
-            print_models(ctx, &models);
+            let current_model = ctx.engine.current_model().ok();
+            print_models(ctx, &models, current_model.as_deref());
         }
-        ModelCommand::Select(args) => {
-            println!("{}", ctx.ui.header("Model Select"));
+        Some(ModelCommand::Switch(args)) => {
+            println!("{}", ctx.ui.header("Model Switch"));
             if let Some(name) = args.name {
-                print_action_status(ctx, ctx.engine.select_model(&name)?);
+                handle_model_switch(ctx, &name)?;
             } else {
                 handle_interactive_model_select(ctx)?;
             }
@@ -507,10 +582,12 @@ fn handle_model(ctx: &AppContext, command: ModelCommand) -> AppResult<()> {
 fn show_status(ctx: &AppContext) -> AppResult<()> {
     let report = DoctorReport::collect(&ctx.workspace);
     let health = ctx.engine.health();
+    let web_ui_url = ctx.workspace.web_ui_url();
 
     println!("{}", ctx.ui.header("Status"));
     println!("Workspace root : {}", ctx.workspace.root.display());
-    println!("Localhost URL     : {}", health.base_url);
+    println!("Web UI URL     : {}", web_ui_url);
+    println!("Engine URL     : {}", health.base_url);
     println!("Health path    : {}", health.request_path);
     println!(
         "Engine ready   : {}",
@@ -592,7 +669,10 @@ fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
     Ok(())
 }
 
-fn handle_interactive_session_use(ctx: &AppContext) -> AppResult<()> {
+fn handle_interactive_session_use(
+    ctx: &AppContext,
+    invocation_mode: InvocationMode,
+) -> AppResult<()> {
     if !io::stdin().is_terminal() {
         println!("{}", ctx.ui.warning("No session id was provided."));
         println!(
@@ -622,7 +702,7 @@ fn handle_interactive_session_use(ctx: &AppContext) -> AppResult<()> {
         "Select a session number: ",
         &choices,
     )? {
-        Some(choice) => print_action_status(ctx, ctx.engine.use_session(&choice.value)?),
+        Some(choice) => enter_session(ctx, &choice.value, invocation_mode)?,
         None => println!("{}", ctx.ui.warning("No session was selected.")),
     }
 
@@ -667,7 +747,7 @@ fn handle_interactive_model_select(ctx: &AppContext) -> AppResult<()> {
         println!(
             "{}",
             ctx.ui
-                .muted("Use `aegis model select <name>` in non-interactive environments.")
+                .muted("Use `aegis model switch <name>` in non-interactive environments.")
         );
         return Ok(());
     }
@@ -691,7 +771,7 @@ fn handle_interactive_model_select(ctx: &AppContext) -> AppResult<()> {
         "Select a model number: ",
         &choices,
     )? {
-        Some(choice) => print_action_status(ctx, ctx.engine.select_model(&choice.value)?),
+        Some(choice) => handle_model_switch(ctx, &choice.value)?,
         None => println!("{}", ctx.ui.warning("No model was selected.")),
     }
 
@@ -722,24 +802,178 @@ fn print_providers(ctx: &AppContext, providers: &[ProviderSummary]) {
     }
 }
 
-fn print_models(ctx: &AppContext, models: &[ModelSummary]) {
+fn print_models(ctx: &AppContext, models: &[ModelSummary], current_model: Option<&str>) {
     if models.is_empty() {
         println!("{}", ctx.ui.warning("No models are available yet."));
         return;
     }
 
     for model in models {
-        println!("- {} [{}]", model.name, model.provider);
-        println!("  {}", model.description);
+        let active = current_model
+            .map(|current| current.eq_ignore_ascii_case(&model.name))
+            .unwrap_or(false);
+        println!(
+            "- {} [{}]{}",
+            model.name,
+            model.provider,
+            if active { " (active)" } else { "" }
+        );
     }
 }
 
-fn print_action_status(ctx: &AppContext, status: ActionStatus) {
+fn handle_model_switch(ctx: &AppContext, new_model: &str) -> AppResult<()> {
+    let available_models = ctx.engine.list_models()?;
+    let model_exists = available_models
+        .iter()
+        .any(|model| model.name.eq_ignore_ascii_case(new_model));
+
+    if !model_exists {
+        return Err(format!(
+            "Model `{new_model}` is not installed locally in Ollama. Run `model list` to see available models."
+        ));
+    }
+
+    let current_model = ctx.engine.current_model()?;
+    if current_model.eq_ignore_ascii_case(new_model) {
+        println!(
+            "{}",
+            ctx.ui
+                .muted(&format!("`{new_model}` is already the active model."))
+        );
+        return Ok(());
+    }
+
+    ctx.ui.play_loading_step(
+        &format!("Unloading {current_model}"),
+        Duration::from_millis(550),
+    );
+    let switch_result =
+        run_with_loading_message(ctx, &format!("Now switching to {new_model}"), || {
+            ctx.engine.select_model(new_model)
+        })?;
+
+    println!("{}", ctx.ui.success(&switch_result.message));
+    Ok(())
+}
+
+fn enter_session(
+    ctx: &AppContext,
+    session_id: &str,
+    invocation_mode: InvocationMode,
+) -> AppResult<()> {
+    let detail = ctx.engine.show_session(session_id)?;
+
+    if !io::stdin().is_terminal() {
+        println!(
+            "{}",
+            ctx.ui.success(&format!("Session `{session_id}` is ready."))
+        );
+        println!(
+            "{}",
+            ctx.ui.muted(&format!(
+                "Run `aegis chat --session-id {session_id} \"your message\"` to continue it from a non-interactive terminal."
+            ))
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        ctx.ui.success(&format!(
+            "Entering session: {} ({session_id})",
+            detail.title
+        ))
+    );
+    print_session_mode_hint(ctx);
+    run_session_prompt_loop(ctx, session_id, invocation_mode)
+}
+
+fn print_created_session(ctx: &AppContext, session: CreatedSession) {
+    println!("{}", ctx.ui.success("New session started"));
+    println!("Session ID: {}", session.id);
+    print_session_mode_hint(ctx);
+    if ctx.ui.verbose {
+        println!("Created at: {}", session.created_at);
+    }
+}
+
+fn print_session_mode_hint(ctx: &AppContext) {
+    println!(
+        "{}",
+        ctx.ui
+            .muted("Type `quit` or `exit` to leave this session and return to the CLI home page.")
+    );
+    println!();
+}
+
+fn run_session_prompt_loop(
+    ctx: &AppContext,
+    session_id: &str,
+    invocation_mode: InvocationMode,
+) -> AppResult<()> {
+    loop {
+        print!("prompt> ");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("Could not flush session prompt: {error}"))?;
+
+        let mut input = String::new();
+        let bytes = match io::stdin().read_line(&mut input) {
+            Ok(bytes) => bytes,
+            Err(error) if signals::was_ctrl_c(&error) => {
+                return Err(signals::ctrl_c_exit_error());
+            }
+            Err(error) => return Err(format!("Could not read session input: {error}")),
+        };
+
+        if bytes == 0 {
+            println!();
+            break;
+        }
+
+        let prompt = input.trim();
+        if prompt.is_empty() {
+            continue;
+        }
+
+        if matches!(prompt, "quit" | "exit") {
+            break;
+        }
+
+        let reply = run_with_llm_loading(ctx, || ctx.engine.chat(prompt, Some(session_id)))?;
+        ctx.ui.print_markdownish_response(&reply.message);
+    }
+
+    leave_session_prompt(ctx, invocation_mode)
+}
+
+fn leave_session_prompt(ctx: &AppContext, invocation_mode: InvocationMode) -> AppResult<()> {
+    println!("{}", ctx.ui.success("Session saved. Returning to home."));
+    println!();
+    show_home(ctx)?;
+
+    if matches!(invocation_mode, InvocationMode::Direct) && io::stdin().is_terminal() {
+        run_interactive_shell(ctx)?;
+    }
+
+    Ok(())
+}
+
+fn print_action_status(_ctx: &AppContext, status: ActionStatus) {
     println!("Target   : {}", status.target);
     println!("Endpoint : {}", status.request_path);
     println!("Persisted: {}", if status.persisted { "yes" } else { "no" });
     println!("{}", status.message);
-    println!("{}", ctx.ui.todo("TODO: confirm these actions with real engine endpoints instead of placeholder acceptance messages."));
+}
+
+fn run_with_loading_message<T, F>(ctx: &AppContext, message: &str, operation: F) -> AppResult<T>
+where
+    F: FnOnce() -> AppResult<T>,
+{
+    let loading = ctx.ui.start_loading_animation(message);
+    let result = operation();
+    loading.finish();
+    result
 }
 
 fn print_check(ctx: &AppContext, item: &CheckItem) {
@@ -778,6 +1012,21 @@ mod tests {
                 command: SessionCommand::Use(args),
             }) => assert_eq!(args.id.as_deref(), Some("todo-session-001")),
             _ => panic!("expected session use command"),
+        }
+    }
+
+    #[test]
+    fn tokenizes_load_command() {
+        let parsed = parse_shell_cli("load 1189578c-9c96-4b4c-8015-4d0673544a6a").unwrap();
+        let Some(cli) = parsed else {
+            panic!("shell parser should produce a CLI command");
+        };
+
+        match cli.command {
+            Some(CommandKind::Load(args)) => {
+                assert_eq!(args.id, "1189578c-9c96-4b4c-8015-4d0673544a6a")
+            }
+            _ => panic!("expected load command"),
         }
     }
 }

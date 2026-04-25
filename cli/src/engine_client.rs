@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct EngineClient {
     base_url: String,
+    ollama_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,12 @@ pub struct ActionStatus {
     pub target: String,
     pub persisted: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreatedSession {
+    pub id: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -70,12 +77,13 @@ impl EngineClient {
     pub fn from_env() -> Self {
         let base_url =
             env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let ollama_url =
+            env::var("AEGIS_OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
 
-        Self { base_url }
-    }
-
-    pub fn base_url(&self) -> &str {
-        &self.base_url
+        Self {
+            base_url,
+            ollama_url,
+        }
     }
 
     pub fn health(&self) -> EngineHealth {
@@ -114,27 +122,32 @@ impl EngineClient {
             .map_err(|error| format!("Could not send chat request to engine: {error}"))?;
 
         if !response.status().is_success() {
-            return Err(format!("Engine chat request failed with HTTP {}.", response.status()));
+            return Err(format!(
+                "Engine chat request failed with HTTP {}.",
+                response.status()
+            ));
         }
 
         let reader = BufReader::new(response);
         let mut message = String::new();
+        let mut event_lines = Vec::new();
 
         for line in reader.lines() {
-            let line = line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
+            let line =
+                line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
             if let Some(data) = line.strip_prefix("data: ") {
-                if data == "[DONE]" {
+                event_lines.push(data.to_string());
+                continue;
+            }
+
+            if line.is_empty() {
+                if flush_sse_event(&mut event_lines, &mut message)? {
                     break;
                 }
-                if data.starts_with("[ERROR]") {
-                    return Err(data.to_string());
-                }
-                print!("{data}");
-                message.push_str(data);
             }
         }
 
-        println!();
+        let _ = flush_sse_event(&mut event_lines, &mut message)?;
 
         Ok(ChatReply {
             request_path,
@@ -152,14 +165,30 @@ impl EngineClient {
         self.chat(prompt, session_id)
     }
 
-    pub fn create_session(&self) -> AppResult<ActionStatus> {
-        // TODO: POST `/sessions` so the engine remains the source of truth for session lifecycle.
-        Ok(ActionStatus {
-            request_path: format!("{}/sessions", self.base_url),
-            target: "<new-session-id>".to_string(),
-            persisted: false,
-            message: "TODO: POST /sessions to let the engine create and own session state."
-                .to_string(),
+    pub fn create_session(&self) -> AppResult<CreatedSession> {
+        let request_path = format!("{}/sessions", self.base_url);
+        let response = reqwest::blocking::Client::new()
+            .post(&request_path)
+            .send()
+            .map_err(|error| format!("Could not create a new session in the engine: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine session creation failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response.json::<EngineSession>().map_err(|error| {
+            format!("Could not parse engine session creation response: {error}")
+        })?;
+
+        Ok(CreatedSession {
+            id: response.session_id,
+            created_at: response.created_at,
         })
     }
 
@@ -169,7 +198,13 @@ impl EngineClient {
             .map_err(|error| format!("Could not fetch sessions from engine: {error}"))?;
 
         if !response.status().is_success() {
-            return Err(format!("Engine sessions request failed with HTTP {}.", response.status()));
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine sessions request failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
         }
 
         let response = response
@@ -200,7 +235,13 @@ impl EngineClient {
         }
 
         if !response.status().is_success() {
-            return Err(format!("Engine session request failed with HTTP {}.", response.status()));
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine session request failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
         }
 
         let response = response
@@ -228,25 +269,36 @@ impl EngineClient {
         })
     }
 
-    pub fn use_session(&self, session_id: &str) -> AppResult<ActionStatus> {
-        Ok(ActionStatus {
-            request_path: format!("{}/sessions/{session_id}/use", self.base_url),
-            target: session_id.to_string(),
-            persisted: false,
-            message:
-                "TODO: tell the engine which session should become active for future chat flows."
-                    .to_string(),
-        })
-    }
+    pub fn delete_session(&self, session_id: &str) -> AppResult<ActionStatus> {
+        let request_path = format!("{}/sessions/{session_id}", self.base_url);
+        let response = reqwest::blocking::Client::new()
+            .delete(&request_path)
+            .send()
+            .map_err(|error| format!("Could not delete the session in the engine: {error}"))?;
 
-    pub fn reset_session(&self, session_id: &str) -> AppResult<ActionStatus> {
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(format!("Session `{session_id}` was not found."));
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine session delete failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response
+            .json::<DeleteSessionResponse>()
+            .map_err(|error| format!("Could not parse engine session delete response: {error}"))?;
+
         Ok(ActionStatus {
-            request_path: format!("{}/sessions/{session_id}/reset", self.base_url),
-            target: session_id.to_string(),
-            persisted: false,
-            message:
-                "TODO: ask the engine to clear session history without making the CLI the source of truth."
-                    .to_string(),
+            request_path,
+            target: response.session_id,
+            persisted: response.persisted,
+            message: response.message,
         })
     }
 
@@ -278,27 +330,89 @@ impl EngineClient {
     }
 
     pub fn list_models(&self) -> AppResult<Vec<ModelSummary>> {
-        // TODO: source models from `/models` so menus and commands render backend-owned choices.
-        Ok(vec![
-            ModelSummary {
-                name: "mistral:7b".to_string(),
-                provider: "ollama".to_string(),
-                description: "can add random predefined description".to_string(),
-            },
-            ModelSummary {
-                name: "llama3.1".to_string(),
-                provider: "ollama".to_string(),
-                description: "".to_string(),
-            },
-        ])
+        let current_model = self.current_model().ok();
+        let request_path = format!("{}/api/tags", self.ollama_url.trim_end_matches('/'));
+        let response = reqwest::blocking::get(&request_path)
+            .map_err(|error| format!("Could not fetch Ollama models: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Ollama model list request failed with HTTP {}.",
+                response.status()
+            ));
+        }
+
+        let response = response
+            .json::<OllamaTagsResponse>()
+            .map_err(|error| format!("Could not parse Ollama model list: {error}"))?;
+
+        Ok(response
+            .models
+            .into_iter()
+            .map(|model| {
+                let is_active = current_model
+                    .as_deref()
+                    .map(|current| current.eq_ignore_ascii_case(&model.name))
+                    .unwrap_or(false);
+
+                ModelSummary {
+                    description: if is_active {
+                        "Currently active in the engine.".to_string()
+                    } else {
+                        String::new()
+                    },
+                    name: model.name,
+                    provider: "ollama".to_string(),
+                }
+            })
+            .collect())
+    }
+
+    pub fn current_model(&self) -> AppResult<String> {
+        let request_path = format!("{}/models/current", self.base_url);
+        let response = reqwest::blocking::get(&request_path)
+            .map_err(|error| format!("Could not fetch the active model from engine: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Engine current model request failed with HTTP {}.",
+                response.status()
+            ));
+        }
+
+        let response = response
+            .json::<CurrentModelResponse>()
+            .map_err(|error| format!("Could not parse current model response: {error}"))?;
+
+        Ok(response.model)
     }
 
     pub fn select_model(&self, name: &str) -> AppResult<ActionStatus> {
+        let request_path = format!("{}/models/select", self.base_url);
+        let response = reqwest::blocking::Client::new()
+            .post(&request_path)
+            .json(&SwitchModelRequest {
+                name: name.to_string(),
+            })
+            .send()
+            .map_err(|error| format!("Could not switch the active model: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Engine model switch request failed with HTTP {}.",
+                response.status()
+            ));
+        }
+
+        let response = response
+            .json::<SwitchModelResponse>()
+            .map_err(|error| format!("Could not parse model switch response: {error}"))?;
+
         Ok(ActionStatus {
-            request_path: format!("{}/models/{name}/select", self.base_url),
-            target: name.to_string(),
-            persisted: false,
-            message: "TODO: ask the engine to make this model active in shared config.".to_string(),
+            request_path,
+            target: response.current,
+            persisted: response.persisted,
+            message: response.message,
         })
     }
 }
@@ -307,6 +421,11 @@ impl EngineClient {
 struct ChatRequestBody {
     session_id: Option<String>,
     message: String,
+}
+
+#[derive(Serialize)]
+struct SwitchModelRequest {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -332,6 +451,13 @@ struct EngineSession {
 }
 
 #[derive(Deserialize)]
+struct DeleteSessionResponse {
+    session_id: String,
+    persisted: bool,
+    message: String,
+}
+
+#[derive(Deserialize)]
 struct EngineHistory {
     turns: Vec<EngineTurn>,
 }
@@ -340,4 +466,46 @@ struct EngineHistory {
 struct EngineTurn {
     query: String,
     response: String,
+}
+
+#[derive(Deserialize)]
+struct CurrentModelResponse {
+    model: String,
+}
+
+#[derive(Deserialize)]
+struct SwitchModelResponse {
+    current: String,
+    persisted: bool,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaModel>,
+}
+
+#[derive(Deserialize)]
+struct OllamaModel {
+    name: String,
+}
+
+fn flush_sse_event(event_lines: &mut Vec<String>, message: &mut String) -> AppResult<bool> {
+    if event_lines.is_empty() {
+        return Ok(false);
+    }
+
+    let data = event_lines.join("\n");
+    event_lines.clear();
+
+    if data == "[DONE]" {
+        return Ok(true);
+    }
+
+    if data.starts_with("[ERROR]") {
+        return Err(data);
+    }
+
+    message.push_str(&data);
+    Ok(false)
 }

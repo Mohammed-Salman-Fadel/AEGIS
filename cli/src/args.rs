@@ -22,6 +22,15 @@ pub struct InstallArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct SaveArgs {
+    #[arg(
+        value_name = "note",
+        help = "A personalization note to store locally for future responses"
+    )]
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct ChatArgs {
     #[arg(
         value_name = "prompt",

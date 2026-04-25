@@ -16,6 +16,7 @@ mod menu;
 mod runner;
 mod signals;
 mod ui;
+mod user_profile;
 mod workspace;
 
 use clap::Parser;

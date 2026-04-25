@@ -4,9 +4,15 @@ use crate::plan_parser::StepResult;
 pub struct PromptBuilder;
 
 impl PromptBuilder {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 
-    pub fn build_planning_prompt(&self, history: &ConversationHistory, user_message: &str) -> String {
+    pub fn build_planning_prompt(
+        &self,
+        history: &ConversationHistory,
+        user_message: &str,
+    ) -> String {
         format!(
             r#"You are the AEGIS fallback workflow planner.
 
@@ -47,7 +53,12 @@ User message:
         )
     }
 
-    pub fn build_step_prompt(&self, history: &ConversationHistory, user_message: &str, step_input: &str) -> String {
+    pub fn build_step_prompt(
+        &self,
+        history: &ConversationHistory,
+        user_message: &str,
+        step_input: &str,
+    ) -> String {
         format!(
             r#"You are executing one internal AEGIS workflow step.
 

@@ -3,63 +3,71 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::classifier::Classifier;
-use crate::workflow::registry::WorkflowRegistry;
 use crate::compactor::Compactor;
-use crate::prompt_builder::PromptBuilder;
+use crate::context::RequestContext;
 use crate::inference::InferenceBackend;
+use crate::memory_store::{MemoryStore, Session, SessionSummary};
+use crate::model_registry::ModelRegistry;
+use crate::network::handlers::chat::ChatRequest;
 use crate::plan_parser::{PlanParser, StepResult};
+use crate::prompt_builder::PromptBuilder;
 use crate::rag_client::RagClient;
 use crate::tool_registry::ToolRegistry;
-use crate::model_registry::ModelRegistry;
-use crate::memory_store::{MemoryStore, Session, SessionSummary};
-use crate::context::RequestContext;
-use crate::network::handlers::chat::ChatRequest;
+use crate::user_profile;
+use crate::workflow::registry::WorkflowRegistry;
 
 /// The central orchestrator — coordinates every subsystem.
 /// This is the primary entry point for all incoming chat requests.
 pub struct Orchestrator {
-    classifier:        Classifier,
+    classifier: Classifier,
     workflow_registry: WorkflowRegistry,
-    compactor:         Compactor,
-    prompt_builder:    PromptBuilder,
-    inference:         Box<dyn InferenceBackend + Send + Sync>,
-    plan_parser:       PlanParser,
-    pub rag_client:    Arc<RagClient>, // Public access for the network layer to ingest files
-    tool_registry:     ToolRegistry,
-    model_registry:    ModelRegistry,
-    memory_store:      MemoryStore,
+    compactor: Compactor,
+    prompt_builder: PromptBuilder,
+    inference: Box<dyn InferenceBackend + Send + Sync>,
+    plan_parser: PlanParser,
+    pub rag_client: Arc<RagClient>, // Public access for the network layer to ingest files
+    tool_registry: ToolRegistry,
+    model_registry: ModelRegistry,
+    memory_store: MemoryStore,
 }
 
 impl Orchestrator {
     /// Initializes the Orchestrator with required backend services.
     pub fn new(
-        inference:    Box<dyn InferenceBackend + Send + Sync>,
-        rag_client:   Arc<RagClient>,
+        inference: Box<dyn InferenceBackend + Send + Sync>,
+        rag_client: Arc<RagClient>,
         memory_store: MemoryStore,
     ) -> Self {
         Self {
-            classifier:        Classifier::new(),
+            classifier: Classifier::new(),
             workflow_registry: WorkflowRegistry::new(),
-            compactor:         Compactor::new(),
-            prompt_builder:    PromptBuilder::new(),
+            compactor: Compactor::new(),
+            prompt_builder: PromptBuilder::new(),
             inference,
-            plan_parser:       PlanParser::new(),
+            plan_parser: PlanParser::new(),
             rag_client,
-            tool_registry:     ToolRegistry::new(),
-            model_registry:    ModelRegistry::new(),
+            tool_registry: ToolRegistry::new(),
+            model_registry: ModelRegistry::new(),
             memory_store,
         }
     }
 
     /// Handles incoming requests, manages session IDs, and streams responses to the network layer.
     pub async fn handle(&self, req: ChatRequest, tx: mpsc::Sender<String>) {
-        let session_id = req
+        let persisted_session_id = req
             .session_id
             .clone()
             .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string());
+
+        let working_session_id = persisted_session_id
+            .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        match self.handle_fallback(req, session_id, tx.clone()).await {
+        match self
+            .handle_fallback(req, working_session_id, persisted_session_id, tx.clone())
+            .await
+        {
             Ok(_) => {
                 let _ = tx.send("[DONE]".to_string()).await;
             }
@@ -69,36 +77,72 @@ impl Orchestrator {
         }
     }
 
-    /// Returns a list of all active chat sessions.
-    pub fn list_sessions(&self) -> Vec<SessionSummary> {
-        self.memory_store.list_sessions()
+    /// Creates a new persisted chat session.
+    pub async fn create_session(&self) -> anyhow::Result<Session> {
+        self.memory_store.create_session().await
     }
 
-    /// Retrieves a specific session by its unique ID.
-    pub fn get_session(&self, session_id: &str) -> Option<Session> {
-        self.memory_store.get_session(session_id)
+    /// Returns a list of all persisted chat sessions.
+    pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
+        self.memory_store.list_sessions().await
+    }
+
+    /// Retrieves a specific stored session by its unique ID.
+    pub async fn get_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
+        self.memory_store.get_session(session_id).await
+    }
+
+    pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
+        self.memory_store.delete_session(session_id).await
+    }
+
+    pub fn current_model_name(&self) -> String {
+        self.model_registry.current_model_name()
+    }
+
+    pub fn set_active_model(&self, name: &str) -> String {
+        self.model_registry.set_active_model(name)
     }
 
     /// The core logic for handling queries using a fallback-to-synthesis approach.
     async fn handle_fallback(
         &self,
         req: ChatRequest,
-        session_id: String,
+        working_session_id: String,
+        persisted_session_id: Option<String>,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
-        let session = self.memory_store.load_or_create(&session_id);
+        let session = if let Some(session_id) = persisted_session_id.as_deref() {
+            self.memory_store
+                .get_session(session_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?
+        } else {
+            Session {
+                session_id: working_session_id.clone(),
+                title: "Temporary chat".to_string(),
+                history: crate::context::ConversationHistory::empty(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }
+        };
+
         let model = self.model_registry.get_active();
         let mut ctx = RequestContext::new(
-            session_id.clone(),
+            working_session_id.clone(),
             req.message.clone(),
             session.history.clone(),
             model,
         );
 
         ctx.trace_summary("classify", "fallback");
-        
+
         // 1. RAG (Retrieval-Augmented Generation): Retrieve relevant chunks from uploaded documents
-        let relevant_chunks = self.rag_client.retrieve(&ctx.original_query, 5).await.unwrap_or_default();
+        let relevant_chunks = self
+            .rag_client
+            .retrieve(&ctx.original_query, 5)
+            .await
+            .unwrap_or_default();
         let context_from_docs = relevant_chunks.join("\n---\n");
 
         // 2. Prompt Synthesis: Perform "Context Injection" if document data is available
@@ -113,24 +157,28 @@ impl Orchestrator {
             )
         } else {
             ctx.trace_summary("rag", "no relevant document context found");
-            self.prompt_builder.build_synthesis_prompt(
-                &ctx.history,
-                &ctx.original_query,
-                &[],
-            )
+            self.prompt_builder
+                .build_synthesis_prompt(&ctx.history, &ctx.original_query, &[])
         };
+        let synthesis_prompt = user_profile::personalize_prompt(&synthesis_prompt);
 
         // 3. Inference: Call the local LLM and stream tokens back to the client
-        let final_answer = self.inference
+        let final_answer = self
+            .inference
             .stream(&synthesis_prompt, &ctx.model.name, tx)
             .await?;
 
-        // Persist the conversation turn in local memory
-        self.memory_store.append_turn(
-            &session_id,
-            req.message,
-            final_answer.clone(),
-        );
+        if let Some(session_id) = persisted_session_id.as_deref() {
+            self.memory_store
+                .append_turn(
+                    session_id,
+                    &req.message,
+                    &final_answer,
+                    &ctx.model.name,
+                    &ctx.trace,
+                )
+                .await?;
+        }
 
         Ok(final_answer)
     }
@@ -154,7 +202,11 @@ impl Orchestrator {
                     self.inference.call(&prompt, &ctx.model.name).await?
                 }
                 "rag" | "search" | "document" => {
-                    let chunks = self.rag_client.retrieve(&step.input, 5).await.unwrap_or_default();
+                    let chunks = self
+                        .rag_client
+                        .retrieve(&step.input, 5)
+                        .await
+                        .unwrap_or_default();
                     if chunks.is_empty() {
                         "No relevant information was found in the document.".to_string()
                     } else {
