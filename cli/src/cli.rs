@@ -21,7 +21,9 @@ Examples:
   aegis ask --stdin
   aegis session new
   aegis provider list
-  aegis model select mistral:7b
+  aegis model
+  aegis model list
+  aegis model switch qwen3:4b
   aegis status
   aegis doctor";
 
@@ -65,7 +67,7 @@ pub enum CommandKind {
     },
     Model {
         #[command(subcommand)]
-        command: ModelCommand,
+        command: Option<ModelCommand>,
     },
     Status,
     Doctor {
@@ -80,7 +82,8 @@ pub enum SessionCommand {
     List,
     Show(RequiredSessionIdArg),
     Use(OptionalSessionIdArg),
-    Reset(RequiredSessionIdArg),
+    #[command(alias = "reset")]
+    Delete(RequiredSessionIdArg),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -92,5 +95,6 @@ pub enum ProviderCommand {
 #[derive(Debug, Clone, Subcommand)]
 pub enum ModelCommand {
     List,
-    Select(OptionalNameArg),
+    #[command(alias = "select")]
+    Switch(OptionalNameArg),
 }

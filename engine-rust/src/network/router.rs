@@ -88,18 +88,26 @@ async fn handle_pdf_ingest(State(state): State<AppState>, mut multipart: Multipa
 pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
         .allow_headers(tower_http::cors::Any);
 
     Router::new()
         .route("/health", get(handlers::health::health))
         .route("/chat", post(handlers::chat::chat))
+        .route("/models/current", get(handlers::models::current_model))
+        .route("/models/select", post(handlers::models::select_model))
         .route("/system/stats", get(get_system_stats))
         .route("/ingest", post(handle_pdf_ingest)) // State desteği eklendi
         .route("/index/progress", get(handle_progress_ws))
         .route("/chat/stream", get(handle_chat_ws)) 
-        .route("/sessions", get(handlers::sessions::list_sessions))
-        .route("/sessions/{session_id}", get(handlers::sessions::get_session))
+        .route(
+            "/sessions",
+            get(handlers::sessions::list_sessions).post(handlers::sessions::create_session),
+        )
+        .route(
+            "/sessions/{session_id}",
+            get(handlers::sessions::get_session).delete(handlers::sessions::delete_session),
+        )
         .layer(cors)
         .with_state(state)
 }

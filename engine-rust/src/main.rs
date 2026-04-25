@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let rag_client = std::sync::Arc::new(rag_client::RagClient::new());
-    let memory_store = memory_store::MemoryStore::new();
+    let memory_store = memory_store::MemoryStore::new().await;
 
     let orchestrator = orchestrator::Orchestrator::new(inference, rag_client, memory_store);
     let state = network::state::AppState::new(orchestrator);

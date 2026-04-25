@@ -53,13 +53,20 @@ impl Orchestrator {
 
     /// Handles incoming requests, manages session IDs, and streams responses to the network layer.
     pub async fn handle(&self, req: ChatRequest, tx: mpsc::Sender<String>) {
-        let session_id = req
+        let persisted_session_id = req
             .session_id
             .clone()
             .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string());
+
+        let working_session_id = persisted_session_id
+            .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        match self.handle_fallback(req, session_id, tx.clone()).await {
+        match self
+            .handle_fallback(req, working_session_id, persisted_session_id, tx.clone())
+            .await
+        {
             Ok(_) => {
                 let _ = tx.send("[DONE]".to_string()).await;
             }
@@ -69,27 +76,59 @@ impl Orchestrator {
         }
     }
 
-    /// Returns a list of all active chat sessions.
-    pub fn list_sessions(&self) -> Vec<SessionSummary> {
-        self.memory_store.list_sessions()
+    /// Creates a new persisted chat session.
+    pub async fn create_session(&self) -> anyhow::Result<Session> {
+        self.memory_store.create_session().await
     }
 
-    /// Retrieves a specific session by its unique ID.
-    pub fn get_session(&self, session_id: &str) -> Option<Session> {
-        self.memory_store.get_session(session_id)
+    /// Returns a list of all persisted chat sessions.
+    pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
+        self.memory_store.list_sessions().await
+    }
+
+    /// Retrieves a specific stored session by its unique ID.
+    pub async fn get_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
+        self.memory_store.get_session(session_id).await
+    }
+
+    pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
+        self.memory_store.delete_session(session_id).await
+    }
+
+    pub fn current_model_name(&self) -> String {
+        self.model_registry.current_model_name()
+    }
+
+    pub fn set_active_model(&self, name: &str) -> String {
+        self.model_registry.set_active_model(name)
     }
 
     /// The core logic for handling queries using a fallback-to-synthesis approach.
     async fn handle_fallback(
         &self,
         req: ChatRequest,
-        session_id: String,
+        working_session_id: String,
+        persisted_session_id: Option<String>,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
-        let session = self.memory_store.load_or_create(&session_id);
+        let session = if let Some(session_id) = persisted_session_id.as_deref() {
+            self.memory_store
+                .get_session(session_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?
+        } else {
+            Session {
+                session_id: working_session_id.clone(),
+                title: "Temporary chat".to_string(),
+                history: crate::context::ConversationHistory::empty(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }
+        };
+
         let model = self.model_registry.get_active();
         let mut ctx = RequestContext::new(
-            session_id.clone(),
+            working_session_id.clone(),
             req.message.clone(),
             session.history.clone(),
             model,
@@ -125,12 +164,17 @@ impl Orchestrator {
             .stream(&synthesis_prompt, &ctx.model.name, tx)
             .await?;
 
-        // Persist the conversation turn in local memory
-        self.memory_store.append_turn(
-            &session_id,
-            req.message,
-            final_answer.clone(),
-        );
+        if let Some(session_id) = persisted_session_id.as_deref() {
+            self.memory_store
+                .append_turn(
+                    session_id,
+                    &req.message,
+                    &final_answer,
+                    &ctx.model.name,
+                    &ctx.trace,
+                )
+                .await?;
+        }
 
         Ok(final_answer)
     }

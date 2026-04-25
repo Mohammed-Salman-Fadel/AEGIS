@@ -103,6 +103,25 @@ impl Workspace {
         self.frontend_dir.join("package.json")
     }
 
+    pub fn frontend_vite_config(&self) -> PathBuf {
+        self.frontend_dir.join("vite.config.ts")
+    }
+
+    pub fn web_ui_url(&self) -> String {
+        if let Ok(url) = env::var("AEGIS_WEB_URL") {
+            let url = url.trim();
+            if !url.is_empty() {
+                return url.to_string();
+            }
+        }
+
+        let port = self
+            .frontend_dev_port()
+            .unwrap_or(5173);
+
+        format!("http://localhost:{port}")
+    }
+
     pub fn installer_readme(&self) -> PathBuf {
         self.installer_dir.join("README.md")
     }
@@ -284,5 +303,19 @@ impl Workspace {
             self.rag_component(),
             self.installer_component(),
         ]
+    }
+
+    fn frontend_dev_port(&self) -> Option<u16> {
+        let vite_config = self.frontend_vite_config();
+        let source = fs::read_to_string(vite_config).ok()?;
+        let marker = "port:";
+        let start = source.find(marker)? + marker.len();
+        let digits: String = source[start..]
+            .chars()
+            .skip_while(|ch| ch.is_whitespace())
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+
+        digits.parse().ok()
     }
 }
