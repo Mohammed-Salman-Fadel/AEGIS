@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Bot, MessageSquare, Plus, RefreshCw, Send, User } from 'lucide-react';
+import { Bot, MessageSquare, Plus, RefreshCw, Send, User, Upload } from 'lucide-react';
 
 type Role = 'user' | 'assistant';
 
@@ -59,6 +59,7 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const activeSession = useMemo(
@@ -117,6 +118,38 @@ export default function App() {
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Could not load the session.');
       setStatus('Session load failed');
+    }
+  }
+
+  async function handleFileUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    setStatus('Uploading and Indexing...');
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      for (let i = 0; i < files.length; i++) {
+        formData.append('file', files[i]);
+      }
+      
+      const res = await fetch(`${API_BASE}/ingest`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!res.ok) {
+        throw new Error(`Engine returned HTTP ${res.status} while uploading.`);
+      }
+      setStatus('Indexed Successfully');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed');
+      setStatus('Upload failed');
+    } finally {
+      setIsUploading(false);
+      event.target.value = '';
     }
   }
 
@@ -353,9 +386,20 @@ export default function App() {
               placeholder="Message AEGIS"
               value={input}
             />
+            <label className={`flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-800 cursor-pointer ${(isStreaming || isUploading) ? 'opacity-60 cursor-not-allowed' : ''}`}>
+              <Upload size={16} />
+              <span className="ml-2">Import</span>
+              <input 
+                type="file" 
+                className="hidden" 
+                multiple 
+                onChange={handleFileUpload}
+                disabled={isStreaming || isUploading}
+              />
+            </label>
             <button
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
-              disabled={isStreaming || !input.trim()}
+              disabled={isStreaming || !input.trim() || isUploading}
               type="submit"
             >
               <Send size={16} />
