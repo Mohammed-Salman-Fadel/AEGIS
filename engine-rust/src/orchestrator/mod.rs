@@ -113,10 +113,19 @@ impl Orchestrator {
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
         let session = if let Some(session_id) = persisted_session_id.as_deref() {
-            self.memory_store
-                .get_session(session_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?
+            match self.memory_store.get_session(session_id).await? {
+                Some(s) => s,
+                None => {
+                    let now = chrono::Utc::now();
+                    Session {
+                        session_id: session_id.to_string(),
+                        title: "New chat".to_string(),
+                        history: crate::context::ConversationHistory::empty(),
+                        created_at: now,
+                        updated_at: now,
+                    }
+                }
+            }
         } else {
             Session {
                 session_id: working_session_id.clone(),
