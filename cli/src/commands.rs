@@ -7,7 +7,6 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::mem;
-use std::time::Duration;
 
 use clap::Parser;
 
@@ -171,8 +170,9 @@ fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {
 }
 
 fn handle_chat(ctx: &AppContext, prompt: &str, session_id: Option<&str>) -> AppResult<()> {
-    let reply = run_with_llm_loading(ctx, || ctx.engine.chat(prompt, session_id))?;
-    ctx.ui.print_markdownish_response(&reply.message);
+    let reply = stream_llm_response(ctx, |on_token| {
+        ctx.engine.chat(prompt, session_id, on_token)
+    })?;
     if ctx.ui.verbose {
         println!();
         println!("Endpoint: {}", reply.request_path);
@@ -213,8 +213,9 @@ fn handle_ask(ctx: &AppContext, read_from_stdin: bool, session_id: Option<&str>)
         return Ok(());
     }
 
-    let reply = run_with_llm_loading(ctx, || ctx.engine.chat_from_stdin(prompt, session_id))?;
-    ctx.ui.print_markdownish_response(&reply.message);
+    let reply = stream_llm_response(ctx, |on_token| {
+        ctx.engine.chat_from_stdin(prompt, session_id, on_token)
+    })?;
     if ctx.ui.verbose {
         println!("Endpoint: {}", reply.request_path);
     }
@@ -263,21 +264,63 @@ fn handle_repl(ctx: &AppContext, session_id: Option<&str>) -> AppResult<()> {
             break;
         }
 
-        let reply = run_with_llm_loading(ctx, || ctx.engine.repl_turn(prompt, session_id))?;
-        ctx.ui.print_markdownish_response(&reply.message);
+        let _reply = stream_llm_response(ctx, |on_token| {
+            ctx.engine.repl_turn(prompt, session_id, on_token)
+        })?;
     }
 
     Ok(())
 }
 
-fn run_with_llm_loading<T, F>(ctx: &AppContext, operation: F) -> AppResult<T>
+fn stream_llm_response<F>(
+    ctx: &AppContext,
+    operation: F,
+) -> AppResult<crate::engine_client::ChatReply>
 where
-    F: FnOnce() -> AppResult<T>,
+    F: FnOnce(&mut dyn FnMut(&str) -> AppResult<()>) -> AppResult<crate::engine_client::ChatReply>,
 {
-    let loading = ctx.ui.start_loading_animation("Calling LLM");
-    let result = operation();
-    loading.finish();
-    result
+    let mut loading = Some(ctx.ui.start_loading_animation("Calling LLM"));
+    let mut saw_token = false;
+    let mut on_token = |token: &str| -> AppResult<()> {
+        if !saw_token {
+            if let Some(active) = loading.take() {
+                active.finish();
+            }
+            println!();
+            saw_token = true;
+        }
+
+        print!("{token}");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("Could not flush streamed response: {error}"))?;
+        Ok(())
+    };
+
+    let result = operation(&mut on_token);
+
+    if let Some(active) = loading.take() {
+        active.finish();
+    }
+
+    match result {
+        Ok(reply) => {
+            if saw_token {
+                println!();
+                println!();
+            } else {
+                ctx.ui.print_markdownish_response(&reply.message);
+            }
+            Ok(reply)
+        }
+        Err(error) => {
+            if saw_token {
+                println!();
+                println!();
+            }
+            Err(error)
+        }
+    }
 }
 
 // Interactive shell logic
@@ -286,7 +329,7 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
 
     // Shell command loop
     loop {
-        print!("aegis-shell> ");
+        print!("{} ", ctx.ui.info("aegis-shell>"));
         io::stdout()
             .flush()
             .map_err(|error| format!("Could not flush shell prompt: {error}"))?;
@@ -631,7 +674,7 @@ fn show_status(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
-    let report = DoctorReport::collect(&ctx.workspace);
+    let report = DoctorReport::collect_live(&ctx.workspace, &ctx.engine);
 
     println!("{}", ctx.ui.header("Doctor"));
     println!("Workspace: {}", ctx.workspace.root.display());
@@ -639,6 +682,13 @@ fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
     println!("{}", ctx.ui.header("Dependencies"));
     for item in &report.dependencies {
         print_check(ctx, item);
+    }
+    if !report.runtime.is_empty() {
+        println!();
+        println!("{}", ctx.ui.header("Runtime"));
+        for item in &report.runtime {
+            print_check(ctx, item);
+        }
     }
     println!();
     println!("{}", ctx.ui.header("Components"));
@@ -843,10 +893,6 @@ fn handle_model_switch(ctx: &AppContext, new_model: &str) -> AppResult<()> {
         return Ok(());
     }
 
-    ctx.ui.play_loading_step(
-        &format!("Unloading {current_model}"),
-        Duration::from_millis(550),
-    );
     let switch_result =
         run_with_loading_message(ctx, &format!("Now switching to {new_model}"), || {
             ctx.engine.select_model(new_model)
@@ -940,8 +986,9 @@ fn run_session_prompt_loop(
             break;
         }
 
-        let reply = run_with_llm_loading(ctx, || ctx.engine.chat(prompt, Some(session_id)))?;
-        ctx.ui.print_markdownish_response(&reply.message);
+        let _reply = stream_llm_response(ctx, |on_token| {
+            ctx.engine.chat(prompt, Some(session_id), on_token)
+        })?;
     }
 
     leave_session_prompt(ctx, invocation_mode)

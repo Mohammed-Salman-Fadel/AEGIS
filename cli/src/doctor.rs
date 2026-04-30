@@ -1,12 +1,13 @@
 //! Role: read-only dependency and workspace preflight checks for the CLI scaffold.
 //! Called by: `commands.rs` for `status` and `doctor`.
-//! Calls into: `workspace.rs` for component detection and the host environment for command probes.
-//! Owns: the health model used to summarize missing dependencies and scaffolded subsystems.
+//! Calls into: `engine_client.rs` for live localhost probes, `workspace.rs` for component detection, and the host environment for command probes.
+//! Owns: the health model used to summarize missing dependencies, live runtime services, and scaffolded subsystems.
 //! Does not own: installation, engine startup, or any mutation of the local machine.
-//! Next TODOs: feed these checks into the installer flow and compare them with live engine `/health` output.
+//! Next TODOs: feed these checks into the installer flow and expand the engine `/health` validation to report provider/model details.
 
 use std::process::Command;
 
+use crate::engine_client::{EngineClient, EngineHealth};
 use crate::workspace::{ComponentInfo, ComponentState, Workspace};
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,7 @@ pub struct CheckItem {
 #[derive(Debug, Clone)]
 pub struct DoctorReport {
     pub dependencies: Vec<CheckItem>,
+    pub runtime: Vec<CheckItem>,
     pub components: Vec<CheckItem>,
 }
 
@@ -34,6 +36,19 @@ pub enum Health {
 
 impl DoctorReport {
     pub fn collect(workspace: &Workspace) -> Self {
+        Self::collect_with_runtime(workspace, Vec::new())
+    }
+
+    pub fn collect_live(workspace: &Workspace, engine: &EngineClient) -> Self {
+        let runtime = vec![
+            engine_runtime_check(engine.health()),
+            ollama_runtime_check(engine.ollama_health()),
+        ];
+
+        Self::collect_with_runtime(workspace, runtime)
+    }
+
+    fn collect_with_runtime(workspace: &Workspace, runtime: Vec<CheckItem>) -> Self {
         let engine = workspace.engine_component();
         let frontend = workspace.frontend_component();
         let rag = workspace.rag_component();
@@ -87,6 +102,7 @@ impl DoctorReport {
 
         Self {
             dependencies,
+            runtime,
             components,
         }
     }
@@ -94,6 +110,7 @@ impl DoctorReport {
     pub fn blocking_issues(&self) -> usize {
         self.dependencies
             .iter()
+            .chain(self.runtime.iter())
             .chain(self.components.iter())
             .filter(|item| item.blocking && matches!(item.health, Health::Warn | Health::Missing))
             .count()
@@ -102,6 +119,7 @@ impl DoctorReport {
     pub fn warnings(&self) -> usize {
         self.dependencies
             .iter()
+            .chain(self.runtime.iter())
             .chain(self.components.iter())
             .filter(|item| matches!(item.health, Health::Warn))
             .count()
@@ -110,6 +128,7 @@ impl DoctorReport {
     pub fn missing(&self) -> usize {
         self.dependencies
             .iter()
+            .chain(self.runtime.iter())
             .chain(self.components.iter())
             .filter(|item| matches!(item.health, Health::Missing))
             .count()
@@ -121,6 +140,7 @@ impl DoctorReport {
         for item in self
             .dependencies
             .iter()
+            .chain(self.runtime.iter())
             .chain(self.components.iter())
             .filter(|item| matches!(item.health, Health::Warn | Health::Missing))
         {
@@ -139,6 +159,55 @@ impl DoctorReport {
         }
 
         actions
+    }
+}
+
+fn engine_runtime_check(health: EngineHealth) -> CheckItem {
+    runtime_check(
+        "engine /health",
+        health,
+        "Start the AEGIS engine so its `/health` endpoint responds before you try inference."
+            .to_string(),
+    )
+}
+
+fn ollama_runtime_check(health: EngineHealth) -> CheckItem {
+    runtime_check(
+        "ollama serve",
+        health,
+        "Run `ollama serve` and keep it available on the configured localhost URL before you try inference."
+            .to_string(),
+    )
+}
+
+fn runtime_check(name: &str, health: EngineHealth, guidance: String) -> CheckItem {
+    let (item_health, detail) = if health.reachable {
+        (
+            Health::Ok,
+            format!("{} ({})", health.note, health.request_path),
+        )
+    } else if health.note.contains("HTTP") {
+        (
+            Health::Warn,
+            format!("{} ({})", health.note, health.request_path),
+        )
+    } else {
+        (
+            Health::Missing,
+            format!("{} ({})", health.note, health.request_path),
+        )
+    };
+
+    CheckItem {
+        name: name.to_string(),
+        health: item_health,
+        detail,
+        guidance: if matches!(item_health, Health::Warn | Health::Missing) {
+            Some(guidance)
+        } else {
+            None
+        },
+        blocking: !health.reachable,
     }
 }
 

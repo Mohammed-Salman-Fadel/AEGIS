@@ -132,12 +132,6 @@ impl Ui {
         }
     }
 
-    pub fn play_loading_step(&self, message: &str, duration: Duration) {
-        let loading = self.start_loading_animation(message);
-        thread::sleep(duration);
-        loading.finish();
-    }
-
     pub fn header(&self, text: &str) -> String {
         if self.no_color {
             text.to_string()

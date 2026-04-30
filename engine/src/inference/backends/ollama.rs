@@ -5,6 +5,9 @@ use tokio::sync::mpsc;
 
 use crate::inference::InferenceBackend;
 
+const KEEP_ALIVE_FOREVER: i64 = -1;
+const KEEP_ALIVE_UNLOAD: i64 = 0;
+
 pub struct OllamaBackend {
     base_url: String,
     client: reqwest::Client,
@@ -17,6 +20,23 @@ impl OllamaBackend {
             client: reqwest::Client::new(),
         }
     }
+
+    fn generate_request<'a>(
+        &'a self,
+        model: &'a str,
+        prompt: &'a str,
+        stream: bool,
+        keep_alive: Option<i64>,
+    ) -> reqwest::RequestBuilder {
+        self.client
+            .post(format!("{}/api/generate", self.base_url))
+            .json(&GenerateRequest {
+                model,
+                prompt,
+                stream,
+                keep_alive,
+            })
+    }
 }
 
 #[derive(Serialize)]
@@ -24,6 +44,8 @@ struct GenerateRequest<'a> {
     model: &'a str,
     prompt: &'a str,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -37,13 +59,7 @@ struct GenerateChunk {
 impl InferenceBackend for OllamaBackend {
     async fn call(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
         let response = self
-            .client
-            .post(format!("{}/api/generate", self.base_url))
-            .json(&GenerateRequest {
-                model,
-                prompt,
-                stream: false,
-            })
+            .generate_request(model, prompt, false, Some(KEEP_ALIVE_FOREVER))
             .send()
             .await?;
 
@@ -69,13 +85,7 @@ impl InferenceBackend for OllamaBackend {
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
         let response = self
-            .client
-            .post(format!("{}/api/generate", self.base_url))
-            .json(&GenerateRequest {
-                model,
-                prompt,
-                stream: true,
-            })
+            .generate_request(model, prompt, true, Some(KEEP_ALIVE_FOREVER))
             .send()
             .await?;
 
@@ -120,5 +130,45 @@ impl InferenceBackend for OllamaBackend {
         }
 
         Ok(full_response)
+    }
+
+    async fn warm_model(&self, model: &str) -> anyhow::Result<()> {
+        let response = self
+            .generate_request(model, "", false, Some(KEEP_ALIVE_FOREVER))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("ollama warmup error {status} for model `{model}`: {body}");
+        }
+
+        let response = response.json::<GenerateChunk>().await?;
+        if let Some(error) = response.error {
+            anyhow::bail!("ollama warmup error for model `{model}`: {error}");
+        }
+
+        Ok(())
+    }
+
+    async fn unload_model(&self, model: &str) -> anyhow::Result<()> {
+        let response = self
+            .generate_request(model, "", false, Some(KEEP_ALIVE_UNLOAD))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("ollama unload error {status} for model `{model}`: {body}");
+        }
+
+        let response = response.json::<GenerateChunk>().await?;
+        if let Some(error) = response.error {
+            anyhow::bail!("ollama unload error for model `{model}`: {error}");
+        }
+
+        Ok(())
     }
 }

@@ -7,6 +7,7 @@
 
 use std::env;
 use std::io::{BufRead, BufReader};
+use std::time::Duration;
 
 use crate::AppResult;
 use serde::{Deserialize, Serialize};
@@ -88,7 +89,7 @@ impl EngineClient {
 
     pub fn health(&self) -> EngineHealth {
         let request_path = format!("{}/health", self.base_url);
-        match reqwest::blocking::get(&request_path) {
+        match health_probe_client().get(&request_path).send() {
             Ok(response) if response.status().is_success() => EngineHealth {
                 base_url: self.base_url.clone(),
                 request_path,
@@ -110,7 +111,39 @@ impl EngineClient {
         }
     }
 
-    pub fn chat(&self, prompt: &str, session_id: Option<&str>) -> AppResult<ChatReply> {
+    pub fn ollama_health(&self) -> EngineHealth {
+        let request_path = format!("{}/api/tags", self.ollama_url.trim_end_matches('/'));
+        match health_probe_client().get(&request_path).send() {
+            Ok(response) if response.status().is_success() => EngineHealth {
+                base_url: self.ollama_url.clone(),
+                request_path,
+                reachable: true,
+                note: "Ollama serve responded successfully.".to_string(),
+            },
+            Ok(response) => EngineHealth {
+                base_url: self.ollama_url.clone(),
+                request_path,
+                reachable: false,
+                note: format!("Ollama serve returned HTTP {}.", response.status()),
+            },
+            Err(error) => EngineHealth {
+                base_url: self.ollama_url.clone(),
+                request_path,
+                reachable: false,
+                note: format!("Could not reach Ollama serve: {error}"),
+            },
+        }
+    }
+
+    pub fn chat<F>(
+        &self,
+        prompt: &str,
+        session_id: Option<&str>,
+        on_token: F,
+    ) -> AppResult<ChatReply>
+    where
+        F: FnMut(&str) -> AppResult<()>,
+    {
         let request_path = format!("{}/chat", self.base_url);
         let response = reqwest::blocking::Client::new()
             .post(&request_path)
@@ -128,41 +161,33 @@ impl EngineClient {
             ));
         }
 
-        let reader = BufReader::new(response);
-        let mut message = String::new();
-        let mut event_lines = Vec::new();
-
-        for line in reader.lines() {
-            let line =
-                line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
-            if let Some(data) = line.strip_prefix("data: ") {
-                event_lines.push(data.to_string());
-                continue;
-            }
-
-            if line.is_empty() {
-                if flush_sse_event(&mut event_lines, &mut message)? {
-                    break;
-                }
-            }
-        }
-
-        let _ = flush_sse_event(&mut event_lines, &mut message)?;
-
-        Ok(ChatReply {
-            request_path,
-            message,
-        })
+        self.consume_chat_stream(response, request_path, on_token)
     }
 
-    pub fn chat_from_stdin(&self, prompt: &str, session_id: Option<&str>) -> AppResult<ChatReply> {
+    pub fn chat_from_stdin<F>(
+        &self,
+        prompt: &str,
+        session_id: Option<&str>,
+        on_token: F,
+    ) -> AppResult<ChatReply>
+    where
+        F: FnMut(&str) -> AppResult<()>,
+    {
         // TODO: reuse the same /chat request body as `chat`, but feed the prompt text from stdin.
-        self.chat(prompt, session_id)
+        self.chat(prompt, session_id, on_token)
     }
 
-    pub fn repl_turn(&self, prompt: &str, session_id: Option<&str>) -> AppResult<ChatReply> {
+    pub fn repl_turn<F>(
+        &self,
+        prompt: &str,
+        session_id: Option<&str>,
+        on_token: F,
+    ) -> AppResult<ChatReply>
+    where
+        F: FnMut(&str) -> AppResult<()>,
+    {
         // TODO: keep the REPL thin by forwarding each turn through the same /chat API boundary.
-        self.chat(prompt, session_id)
+        self.chat(prompt, session_id, on_token)
     }
 
     pub fn create_session(&self) -> AppResult<CreatedSession> {
@@ -398,9 +423,12 @@ impl EngineClient {
             .map_err(|error| format!("Could not switch the active model: {error}"))?;
 
         if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
             return Err(format!(
-                "Engine model switch request failed with HTTP {}.",
-                response.status()
+                "Engine model switch request failed with HTTP {}. {}",
+                status,
+                body.trim()
             ));
         }
 
@@ -413,6 +441,42 @@ impl EngineClient {
             target: response.current,
             persisted: response.persisted,
             message: response.message,
+        })
+    }
+
+    fn consume_chat_stream<F>(
+        &self,
+        response: reqwest::blocking::Response,
+        request_path: String,
+        mut on_token: F,
+    ) -> AppResult<ChatReply>
+    where
+        F: FnMut(&str) -> AppResult<()>,
+    {
+        let reader = BufReader::new(response);
+        let mut message = String::new();
+        let mut event_lines = Vec::new();
+
+        for line in reader.lines() {
+            let line =
+                line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
+            if let Some(data) = line.strip_prefix("data: ") {
+                event_lines.push(data.to_string());
+                continue;
+            }
+
+            if line.is_empty() {
+                if flush_sse_event(&mut event_lines, &mut message, &mut on_token)? {
+                    break;
+                }
+            }
+        }
+
+        let _ = flush_sse_event(&mut event_lines, &mut message, &mut on_token)?;
+
+        Ok(ChatReply {
+            request_path,
+            message,
         })
     }
 }
@@ -490,7 +554,14 @@ struct OllamaModel {
     name: String,
 }
 
-fn flush_sse_event(event_lines: &mut Vec<String>, message: &mut String) -> AppResult<bool> {
+fn flush_sse_event<F>(
+    event_lines: &mut Vec<String>,
+    message: &mut String,
+    on_token: &mut F,
+) -> AppResult<bool>
+where
+    F: FnMut(&str) -> AppResult<()>,
+{
     if event_lines.is_empty() {
         return Ok(false);
     }
@@ -507,5 +578,13 @@ fn flush_sse_event(event_lines: &mut Vec<String>, message: &mut String) -> AppRe
     }
 
     message.push_str(&data);
+    on_token(&data)?;
     Ok(false)
+}
+
+fn health_probe_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("health probe client should build")
 }

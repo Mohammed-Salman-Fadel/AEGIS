@@ -1,7 +1,7 @@
 //! Role: file-backed session persistence layer for stored conversations.
 //! Called by: `main.rs` during engine startup and `orchestrator/mod.rs` for session lifecycle and turn persistence.
 //! Calls into: the local filesystem under the shared AEGIS data directory.
-//! Owns: creating, loading, listing, deleting, and appending stored session history.
+//! Owns: creating, loading, listing, renaming, deleting, and appending stored session history.
 //! Does not own: inference execution, HTTP routing, or CLI rendering.
 //! Next TODOs: add lightweight file locking, session export/import helpers, and richer audit summaries when the UI needs them.
 
@@ -111,6 +111,13 @@ impl MemoryStore {
         }
     }
 
+    pub async fn rename_session(&self, session_id: &str, title: &str) -> anyhow::Result<Session> {
+        match &self.backend {
+            SessionBackend::Files(store) => store.rename_session(session_id, title).await,
+            SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
+        }
+    }
+
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
         match &self.backend {
             SessionBackend::Files(store) => store.delete_session(session_id).await,
@@ -206,19 +213,10 @@ impl FileSessionStore {
         model_name: &str,
         trace: &[TraceEntry],
     ) -> anyhow::Result<()> {
-        let mut stored = match self.read_session_file(session_id).await? {
-            Some(s) => s,
-            None => {
-                let now = Utc::now();
-                StoredSessionFile {
-                    session_id: session_id.to_string(),
-                    title: "New chat".to_string(),
-                    created_at: now,
-                    updated_at: now,
-                    turns: Vec::new(),
-                }
-            }
-        };
+        let mut stored = self
+            .read_session_file(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?;
 
         let now = Utc::now();
         if stored.title == "New chat" {
@@ -234,6 +232,18 @@ impl FileSessionStore {
         });
 
         self.write_session_file(&stored).await
+    }
+
+    async fn rename_session(&self, session_id: &str, title: &str) -> anyhow::Result<Session> {
+        let mut stored = self
+            .read_session_file(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?;
+
+        stored.title = normalized_user_title(title)?;
+        stored.updated_at = Utc::now();
+        self.write_session_file(&stored).await?;
+        Ok(stored.into_session())
     }
 
     async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
@@ -340,6 +350,15 @@ fn trimmed_title(query: &str) -> String {
     } else {
         title
     }
+}
+
+fn normalized_user_title(title: &str) -> anyhow::Result<String> {
+    let title = title.trim();
+    if title.is_empty() {
+        anyhow::bail!("Session titles cannot be empty.");
+    }
+
+    Ok(title.chars().take(80).collect())
 }
 
 fn normalize_session_id(session_id: &str) -> anyhow::Result<&str> {

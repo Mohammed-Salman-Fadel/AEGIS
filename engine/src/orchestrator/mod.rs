@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -29,6 +30,13 @@ pub struct Orchestrator {
     tool_registry: ToolRegistry,
     model_registry: ModelRegistry,
     memory_store: MemoryStore,
+}
+
+pub struct ModelSwitchOutcome {
+    pub previous_model: String,
+    pub current_model: String,
+    pub changed: bool,
+    pub unload_warning: Option<String>,
 }
 
 impl Orchestrator {
@@ -92,6 +100,10 @@ impl Orchestrator {
         self.memory_store.get_session(session_id).await
     }
 
+    pub async fn rename_session(&self, session_id: &str, title: &str) -> anyhow::Result<Session> {
+        self.memory_store.rename_session(session_id, title).await
+    }
+
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
         self.memory_store.delete_session(session_id).await
     }
@@ -104,6 +116,53 @@ impl Orchestrator {
         self.model_registry.set_active_model(name)
     }
 
+    pub async fn warm_active_model(&self) -> anyhow::Result<()> {
+        let model_name = self.model_registry.current_model_name();
+        self.inference
+            .warm_model(&model_name)
+            .await
+            .with_context(|| format!("Could not warm the active model `{model_name}`."))?;
+
+        Ok(())
+    }
+
+    pub async fn switch_active_model(&self, name: &str) -> anyhow::Result<ModelSwitchOutcome> {
+        let next_model = name.trim();
+        if next_model.is_empty() {
+            anyhow::bail!("The requested model name cannot be empty.");
+        }
+
+        let current_model = self.model_registry.current_model_name();
+        if current_model.eq_ignore_ascii_case(next_model) {
+            return Ok(ModelSwitchOutcome {
+                previous_model: current_model.clone(),
+                current_model,
+                changed: false,
+                unload_warning: None,
+            });
+        }
+
+        self.inference
+            .warm_model(next_model)
+            .await
+            .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
+
+        let previous_model = self.model_registry.set_active_model(next_model);
+        let unload_warning = match self.inference.unload_model(&previous_model).await {
+            Ok(()) => None,
+            Err(error) => Some(format!(
+                "Switched successfully, but could not unload `{previous_model}`: {error}"
+            )),
+        };
+
+        Ok(ModelSwitchOutcome {
+            previous_model,
+            current_model: next_model.to_string(),
+            changed: true,
+            unload_warning,
+        })
+    }
+
     /// The core logic for handling queries using a fallback-to-synthesis approach.
     async fn handle_fallback(
         &self,
@@ -113,19 +172,10 @@ impl Orchestrator {
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
         let session = if let Some(session_id) = persisted_session_id.as_deref() {
-            match self.memory_store.get_session(session_id).await? {
-                Some(s) => s,
-                None => {
-                    let now = chrono::Utc::now();
-                    Session {
-                        session_id: session_id.to_string(),
-                        title: "New chat".to_string(),
-                        history: crate::context::ConversationHistory::empty(),
-                        created_at: now,
-                        updated_at: now,
-                    }
-                }
-            }
+            self.memory_store
+                .get_session(session_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?
         } else {
             Session {
                 session_id: working_session_id.clone(),

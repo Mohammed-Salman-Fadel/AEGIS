@@ -90,17 +90,10 @@ async fn handle_progress_ws(ws: WebSocketUpgrade) -> impl axum::response::IntoRe
 }
 
 async fn handle_pdf_ingest(State(state): State<AppState>, mut multipart: Multipart) -> StatusCode {
-    let ingest_dir = std::env::current_dir().unwrap_or_default().join("data").join("ingest");
-    let _ = tokio::fs::create_dir_all(&ingest_dir).await;
-
     while let Ok(Some(field)) = multipart.next_field().await {
-        let file_name = field.file_name().unwrap_or("upload.txt").to_string();
         if let Ok(data) = field.bytes().await {
-            let file_path = ingest_dir.join(&file_name);
-            if tokio::fs::write(&file_path, data).await.is_ok() {
-                let path_str = file_path.to_string_lossy().to_string();
-                let _ = state.orchestrator.rag_client.ingest(path_str).await;
-            }
+            let text = String::from_utf8_lossy(&data).to_string();
+            let _ = state.orchestrator.rag_client.ingest(text).await;
         }
     }
     StatusCode::OK
@@ -109,7 +102,7 @@ async fn handle_pdf_ingest(State(state): State<AppState>, mut multipart: Multipa
 pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
-        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers(tower_http::cors::Any);
 
     Router::new()
@@ -127,7 +120,9 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route(
             "/sessions/{session_id}",
-            get(handlers::sessions::get_session).delete(handlers::sessions::delete_session),
+            get(handlers::sessions::get_session)
+                .patch(handlers::sessions::rename_session)
+                .delete(handlers::sessions::delete_session),
         )
         .layer(cors)
         .with_state(state)

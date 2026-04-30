@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::memory_store::{Session, SessionSummary};
 use crate::network::state::AppState;
@@ -25,6 +25,11 @@ pub struct DeleteSessionResponse {
     session_id: String,
     persisted: bool,
     message: String,
+}
+
+#[derive(Deserialize)]
+pub struct RenameSessionRequest {
+    title: String,
 }
 
 pub async fn create_session(
@@ -68,6 +73,19 @@ pub async fn get_session(
     })
 }
 
+pub async fn rename_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(request): Json<RenameSessionRequest>,
+) -> Result<Json<Session>, (StatusCode, String)> {
+    state
+        .orchestrator
+        .rename_session(&session_id, &request.title)
+        .await
+        .map(Json)
+        .map_err(session_error)
+}
+
 pub async fn delete_session(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
@@ -96,6 +114,10 @@ fn session_error(error: anyhow::Error) -> (StatusCode, String) {
     let message = error.to_string();
     let status = if message.contains("Session persistence is unavailable") {
         StatusCode::SERVICE_UNAVAILABLE
+    } else if message.contains("was not found") {
+        StatusCode::NOT_FOUND
+    } else if message.contains("cannot be empty") {
+        StatusCode::BAD_REQUEST
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     };

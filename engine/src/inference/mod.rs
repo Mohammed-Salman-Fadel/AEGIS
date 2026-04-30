@@ -13,4 +13,12 @@ pub trait InferenceBackend {
         model: &str,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String>;
+
+    async fn warm_model(&self, _model: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn unload_model(&self, _model: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }

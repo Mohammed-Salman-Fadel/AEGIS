@@ -22,6 +22,7 @@ pub struct SelectModelRequest {
 
 #[derive(Serialize)]
 pub struct SelectModelResponse {
+    previous: String,
     current: String,
     persisted: bool,
     message: String,
@@ -36,17 +37,50 @@ pub async fn current_model(State(state): State<AppState>) -> Json<CurrentModelRe
 pub async fn select_model(
     State(state): State<AppState>,
     Json(payload): Json<SelectModelRequest>,
-) -> Result<Json<SelectModelResponse>, StatusCode> {
+) -> Result<Json<SelectModelResponse>, (StatusCode, String)> {
     let next_model = payload.name.trim();
     if next_model.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "The requested model name cannot be empty.".to_string(),
+        ));
     }
 
-    let previous_model = state.orchestrator.set_active_model(next_model);
+    let outcome = state
+        .orchestrator
+        .switch_active_model(next_model)
+        .await
+        .map_err(model_switch_error)?;
+
+    let message = if !outcome.changed {
+        format!("`{}` is already the active model.", outcome.current_model)
+    } else if let Some(warning) = &outcome.unload_warning {
+        format!(
+            "Switched from {} to {}. {}",
+            outcome.previous_model, outcome.current_model, warning
+        )
+    } else {
+        format!(
+            "Switched from {} to {}.",
+            outcome.previous_model, outcome.current_model
+        )
+    };
 
     Ok(Json(SelectModelResponse {
-        current: next_model.to_string(),
+        previous: outcome.previous_model,
+        current: outcome.current_model,
         persisted: true,
-        message: format!("Switched from {previous_model} to {next_model}."),
+        message,
     }))
+}
+
+fn model_switch_error(error: anyhow::Error) -> (StatusCode, String) {
+    let message = error.to_string();
+    let status = if message.contains("warm") {
+        StatusCode::BAD_GATEWAY
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+
+    (status, message)
 }

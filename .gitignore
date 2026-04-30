@@ -1,7 +1,7 @@
 .venv
 # Rust
-engine-rust/target/
-engine-rust/Cargo.lock
+engine/target/
+engine/Cargo.lock
 .cargo-target-*/
 dist/
 
