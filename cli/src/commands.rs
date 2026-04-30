@@ -434,9 +434,11 @@ fn print_shell_help(ctx: &AppContext) {
     println!("- repl");
     println!("- session list");
     println!("- provider select ollama");
+    println!("- provider select lmstudio");
     println!("- model");
     println!("- model list");
     println!("- model switch qwen3:4b");
+    println!("- model download qwen3:4b");
     println!("");
     println!("Built-ins:");
     println!("- help");
@@ -579,7 +581,8 @@ fn handle_provider(ctx: &AppContext, command: ProviderCommand) -> AppResult<()> 
         ProviderCommand::List => {
             println!("{}", ctx.ui.header("Provider List"));
             let providers = ctx.engine.list_providers()?;
-            print_providers(ctx, &providers);
+            let active_provider = ctx.engine.current_provider().ok();
+            print_providers(ctx, &providers, active_provider.as_deref());
         }
         ProviderCommand::Select(args) => {
             println!("{}", ctx.ui.header("Provider Select"));
@@ -591,6 +594,12 @@ fn handle_provider(ctx: &AppContext, command: ProviderCommand) -> AppResult<()> 
         }
     }
 
+    Ok(())
+}
+
+fn handle_provider_select(ctx: &AppContext, name: &str) -> AppResult<()> {
+    let result = ctx.engine.select_provider(name)?;
+    print_action_status(ctx, result);
     Ok(())
 }
 
@@ -614,6 +623,14 @@ fn handle_model(ctx: &AppContext, command: Option<ModelCommand>) -> AppResult<()
                 handle_model_switch(ctx, &name)?;
             } else {
                 handle_interactive_model_select(ctx)?;
+            }
+        }
+        Some(ModelCommand::Download(args)) => {
+            println!("{}", ctx.ui.header("Model Download"));
+            if let Some(name) = args.name {
+                handle_model_download(ctx, &name)?;
+            } else {
+                println!("{}", ctx.ui.warning("No model name was provided."));
             }
         }
     }
@@ -828,6 +845,17 @@ fn handle_interactive_model_select(ctx: &AppContext) -> AppResult<()> {
     Ok(())
 }
 
+fn handle_model_download(ctx: &AppContext, model_name: &str) -> AppResult<()> {
+    if ctx.engine.current_provider()? != "lmstudio" {
+        println!("{}", ctx.ui.warning("Model downloads are intended for LM Studio in this build. Switch to `provider select lmstudio` first."));
+        return Ok(());
+    }
+
+    println!("{}", ctx.ui.muted("LM Studio exposes model download through its OpenAI-compatible server; the engine currently switches providers but does not yet proxy the LM Studio download API."));
+    println!("Requested model: {model_name}");
+    Ok(())
+}
+
 fn print_sessions(ctx: &AppContext, sessions: &[SessionSummary]) {
     if sessions.is_empty() {
         println!("{}", ctx.ui.warning("No sessions are available yet."));
@@ -840,14 +868,17 @@ fn print_sessions(ctx: &AppContext, sessions: &[SessionSummary]) {
     }
 }
 
-fn print_providers(ctx: &AppContext, providers: &[ProviderSummary]) {
+fn print_providers(ctx: &AppContext, providers: &[ProviderSummary], current_provider: Option<&str>) {
     if providers.is_empty() {
         println!("{}", ctx.ui.warning("No providers are available yet."));
         return;
     }
 
     for provider in providers {
-        println!("- {}", provider.name);
+        let active = current_provider
+            .map(|current| current.eq_ignore_ascii_case(&provider.name))
+            .unwrap_or(false);
+        println!("- {}{}", provider.name, if active { " (active)" } else { "" });
         println!("  {}", provider.description);
     }
 }

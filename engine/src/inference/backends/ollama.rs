@@ -55,8 +55,35 @@ struct GenerateChunk {
     error: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct OllamaModelEntry {
+    name: String,
+}
+
 #[async_trait]
 impl InferenceBackend for OllamaBackend {
+    async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+        let response = self
+            .client
+            .get(format!("{}/api/tags", self.base_url))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("ollama tags error {status}: {body}");
+        }
+
+        let response = response.json::<OllamaTagsResponse>().await?;
+        Ok(response.models.into_iter().map(|m| m.name).collect())
+    }
+
     async fn call(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
         let response = self
             .generate_request(model, prompt, false, Some(KEEP_ALIVE_FOREVER))

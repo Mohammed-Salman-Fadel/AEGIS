@@ -9,6 +9,7 @@ mod network;
 mod orchestrator;
 mod plan_parser;
 mod process_manager;
+mod provider_registry;
 mod prompt_builder;
 mod rag_client;
 mod tool_registry;
@@ -47,7 +48,14 @@ async fn main() -> anyhow::Result<()> {
     let rag_client = std::sync::Arc::new(rag_client::RagClient::new());
     let memory_store = memory_store::MemoryStore::new().await;
 
-    let orchestrator = orchestrator::Orchestrator::new(inference, rag_client, memory_store);
+    let orchestrator = orchestrator::Orchestrator::new(
+        inference,
+        rag_client,
+        memory_store,
+        config.inference.provider,
+        config.inference.base_url,
+        config.inference.api_key,
+    );
     orchestrator
         .warm_active_model()
         .await

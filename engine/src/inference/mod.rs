@@ -14,6 +14,10 @@ pub trait InferenceBackend {
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String>;
 
+    async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+        Ok(vec![])
+    }
+
     async fn warm_model(&self, _model: &str) -> anyhow::Result<()> {
         Ok(())
     }

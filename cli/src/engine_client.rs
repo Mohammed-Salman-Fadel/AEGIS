@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 pub struct EngineClient {
     base_url: String,
     ollama_url: String,
+    lm_studio_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -80,10 +81,14 @@ impl EngineClient {
             env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
         let ollama_url =
             env::var("AEGIS_OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        let lm_studio_url = env::var("AEGIS_LM_STUDIO_URL")
+            .or_else(|_| env::var("AEGIS_LMSTUDIO_URL"))
+            .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
 
         Self {
             base_url,
             ollama_url,
+            lm_studio_url,
         }
     }
 
@@ -328,43 +333,165 @@ impl EngineClient {
     }
 
     pub fn list_providers(&self) -> AppResult<Vec<ProviderSummary>> {
-        // TODO: source providers from `/providers` so selection and discovery stay consistent
-        // across every AEGIS client surface.
-        Ok(vec![
-            ProviderSummary {
-                name: "ollama".to_string(),
-                description: "Local default provider placeholder.".to_string(),
-            },
-            ProviderSummary {
-                name: "openai-compat".to_string(),
-                description: "Placeholder for engines exposing an OpenAI-compatible local API."
-                    .to_string(),
-            },
-        ])
+        let request_path = format!("{}/providers", self.base_url);
+        let response = reqwest::blocking::get(&request_path)
+            .map_err(|error| format!("Could not fetch providers from engine: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine providers request failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response
+            .json::<ProvidersResponse>()
+            .map_err(|error| format!("Could not parse engine providers response: {error}"))?;
+
+        Ok(response
+            .providers
+            .into_iter()
+            .map(|provider| ProviderSummary {
+                name: provider.name,
+                description: provider.description,
+            })
+            .collect())
     }
 
     pub fn select_provider(&self, name: &str) -> AppResult<ActionStatus> {
+        let request_path = format!("{}/providers/select", self.base_url);
+        let response = reqwest::blocking::Client::new()
+            .post(&request_path)
+            .json(&SelectProviderRequest {
+                name: name.to_string(),
+            })
+            .send()
+            .map_err(|error| format!("Could not switch provider: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine provider switch request failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response
+            .json::<SwitchProviderResponse>()
+            .map_err(|error| format!("Could not parse provider switch response: {error}"))?;
+
         Ok(ActionStatus {
-            request_path: format!("{}/providers/{name}/select", self.base_url),
+            request_path,
             target: name.to_string(),
-            persisted: false,
-            message:
-                "TODO: persist provider selection through the engine, not inside CLI-only state."
-                    .to_string(),
+            persisted: response.persisted,
+            message: response.message,
         })
     }
 
     pub fn list_models(&self) -> AppResult<Vec<ModelSummary>> {
         let current_model = self.current_model().ok();
+        let request_path = format!("{}/models", self.base_url);
+        let response = reqwest::blocking::get(&request_path)
+            .map_err(|error| format!("Could not fetch models from engine: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return self.list_models_fallback(current_model);
+            }
+            return Err(format!(
+                "Engine models request failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response
+            .json::<ModelsResponse>()
+            .map_err(|error| format!("Could not parse engine models response: {error}"))?;
+
+        Ok(response
+            .models
+            .into_iter()
+            .map(|model| {
+                let is_active = current_model
+                    .as_deref()
+                    .map(|current| current.eq_ignore_ascii_case(&model.name))
+                    .unwrap_or(false);
+
+                ModelSummary {
+                    description: if is_active {
+                        "Currently active in the engine.".to_string()
+                    } else {
+                        String::new()
+                    },
+                    name: model.name,
+                    provider: response.provider.clone(),
+                }
+            })
+            .collect())
+    }
+
+    fn list_models_fallback(&self, current_model: Option<String>) -> AppResult<Vec<ModelSummary>> {
+        match self.current_provider()?.as_str() {
+            "lmstudio" => self.list_lm_studio_models(current_model),
+            "ollama" => self.list_ollama_models(current_model),
+            _ => self.list_lm_studio_models(current_model),
+        }
+    }
+
+    fn list_lm_studio_models(&self, current_model: Option<String>) -> AppResult<Vec<ModelSummary>> {
+        let request_path = format!("{}/v1/models", self.lm_studio_url.trim_end_matches('/'));
+        let response = reqwest::blocking::get(&request_path)
+            .map_err(|error| format!("Could not fetch LM Studio models: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!("LM Studio models request failed with HTTP {}. {}", status, body.trim()));
+        }
+
+        let response = response
+            .json::<LmStudioModelsResponse>()
+            .map_err(|error| format!("Could not parse LM Studio models response: {error}"))?;
+
+        Ok(response
+            .data
+            .into_iter()
+            .map(|model| {
+                let is_active = current_model
+                    .as_deref()
+                    .map(|current| current.eq_ignore_ascii_case(&model.id))
+                    .unwrap_or(false);
+
+                ModelSummary {
+                    name: model.id,
+                    provider: "lmstudio".to_string(),
+                    description: if is_active {
+                        "Currently active in the engine.".to_string()
+                    } else {
+                        String::new()
+                    },
+                }
+            })
+            .collect())
+    }
+
+    fn list_ollama_models(&self, current_model: Option<String>) -> AppResult<Vec<ModelSummary>> {
         let request_path = format!("{}/api/tags", self.ollama_url.trim_end_matches('/'));
         let response = reqwest::blocking::get(&request_path)
             .map_err(|error| format!("Could not fetch Ollama models: {error}"))?;
 
         if !response.status().is_success() {
-            return Err(format!(
-                "Ollama model list request failed with HTTP {}.",
-                response.status()
-            ));
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!("Ollama model list request failed with HTTP {}. {}", status, body.trim()));
         }
 
         let response = response
@@ -391,6 +518,25 @@ impl EngineClient {
                 }
             })
             .collect())
+    }
+
+    pub fn current_provider(&self) -> AppResult<String> {
+        let request_path = format!("{}/providers/current", self.base_url);
+        let response = reqwest::blocking::get(&request_path)
+            .map_err(|error| format!("Could not fetch the active provider from engine: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Engine current provider request failed with HTTP {}.",
+                response.status()
+            ));
+        }
+
+        let response = response
+            .json::<CurrentProviderResponse>()
+            .map_err(|error| format!("Could not parse current provider response: {error}"))?;
+
+        Ok(response.provider)
     }
 
     pub fn current_model(&self) -> AppResult<String> {
@@ -538,10 +684,59 @@ struct CurrentModelResponse {
 }
 
 #[derive(Deserialize)]
+struct CurrentProviderResponse {
+    provider: String,
+}
+
+#[derive(Deserialize)]
 struct SwitchModelResponse {
     current: String,
     persisted: bool,
     message: String,
+}
+
+#[derive(Deserialize)]
+struct ProvidersResponse {
+    providers: Vec<ProviderRecord>,
+}
+
+#[derive(Deserialize)]
+struct ProviderRecord {
+    name: String,
+    description: String,
+}
+
+#[derive(Serialize)]
+struct SelectProviderRequest {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct SwitchProviderResponse {
+    current: String,
+    persisted: bool,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct ModelsResponse {
+    provider: String,
+    models: Vec<ModelRecord>,
+}
+
+#[derive(Deserialize)]
+struct ModelRecord {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct LmStudioModelsResponse {
+    data: Vec<LmStudioModelRecord>,
+}
+
+#[derive(Deserialize)]
+struct LmStudioModelRecord {
+    id: String,
 }
 
 #[derive(Deserialize)]

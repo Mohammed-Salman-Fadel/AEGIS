@@ -1,5 +1,5 @@
-use axum::{Json, extract::{Path, State}, http::StatusCode};
-use serde::Serialize;
+use axum::{extract::State, http::StatusCode, Json};
+use serde::{Deserialize, Serialize};
 
 use crate::network::state::AppState;
 
@@ -16,6 +16,16 @@ pub struct ProviderResponse {
 }
 
 #[derive(Serialize)]
+pub struct CurrentProviderResponse {
+    provider: String,
+}
+
+#[derive(Deserialize)]
+pub struct SelectProviderRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
 pub struct ProviderSelectResponse {
     previous: String,
     current: String,
@@ -29,29 +39,45 @@ pub async fn list_providers(State(state): State<AppState>) -> Json<ProviderListR
             .orchestrator
             .list_providers()
             .into_iter()
-            .map(|provider| ProviderResponse {
-                name: provider.name,
-                description: provider.description,
-                active: provider.active,
+            .map(|(name, description, active)| ProviderResponse {
+                name,
+                description,
+                active,
             })
             .collect(),
     })
 }
 
+pub async fn current_provider(State(state): State<AppState>) -> Json<CurrentProviderResponse> {
+    Json(CurrentProviderResponse {
+        provider: state.orchestrator.current_provider_name(),
+    })
+}
+
 pub async fn select_provider(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Json(payload): Json<SelectProviderRequest>,
 ) -> Result<Json<ProviderSelectResponse>, (StatusCode, String)> {
-    let result = state
+    let outcome = state
         .orchestrator
-        .select_provider(&name)
+        .switch_provider(&payload.name)
+        .await
         .map_err(provider_error)?;
 
+    let message = if outcome.changed {
+        format!(
+            "Switched from {} to {}.",
+            outcome.previous_provider, outcome.current_provider
+        )
+    } else {
+        format!("`{}` is already the active provider.", outcome.current_provider)
+    };
+
     Ok(Json(ProviderSelectResponse {
-        previous: result.previous,
-        current: result.current,
-        persisted: false,
-        message: result.message,
+        previous: outcome.previous_provider,
+        current: outcome.current_provider,
+        persisted: true,
+        message,
     }))
 }
 

@@ -33,10 +33,6 @@ Table of Contents for all types of AEGIS commands:
 
 - `provider list` - list all inference providers.
 - `provider switch`
-- `Help`
-- `Help`
-- `Help`
-- `Help`
 
 #### `Model`
 

@@ -8,6 +8,16 @@ pub enum InferenceProvider {
 }
 
 impl InferenceProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ollama => "ollama",
+            Self::LmStudio => "lmstudio",
+            Self::OpenAiCompatible => "openai-compatible",
+        }
+    }
+}
+
+impl InferenceProvider {
     pub fn from_env_value(value: &str) -> anyhow::Result<Self> {
         match value.trim().to_lowercase().as_str() {
             "ollama" => Ok(Self::Ollama),

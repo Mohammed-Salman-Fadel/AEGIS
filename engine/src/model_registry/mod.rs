@@ -53,4 +53,10 @@ impl ModelRegistry {
             output_reserve: 512,
         }
     }
+
+    pub fn seed_active_model(&self, name: impl Into<String>) {
+        if let Ok(mut active_model) = self.active_model.write() {
+            *active_model = name.into();
+        }
+    }
 }

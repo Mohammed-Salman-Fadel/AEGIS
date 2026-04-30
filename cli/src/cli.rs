@@ -22,12 +22,13 @@ Examples:
   aegis ask --stdin
   aegis session new
   aegis save \"my name is Sam\"
-  aegis provider list
-  aegis model
-  aegis model list
-  aegis model switch qwen3:4b
-  aegis status
-  aegis doctor";
+    aegis provider list
+    aegis model
+    aegis model list
+    aegis model switch qwen3:4b
+    aegis model download qwen3:4b
+    aegis status
+    aegis doctor";
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -101,4 +102,5 @@ pub enum ModelCommand {
     List,
     #[command(alias = "select")]
     Switch(OptionalNameArg),
+    Download(OptionalNameArg),
 }

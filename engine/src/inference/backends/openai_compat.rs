@@ -36,6 +36,10 @@ impl OpenAiCompatBackend {
             None => builder,
         }
     }
+
+    fn models_url(&self) -> String {
+        format!("{}/v1/models", self.base_url)
+    }
 }
 
 #[derive(Serialize)]
@@ -88,8 +92,40 @@ struct OpenAiCompatError {
     message: String,
 }
 
+#[derive(Deserialize)]
+struct ModelListResponse {
+    data: Vec<ModelData>,
+}
+
+#[derive(Deserialize)]
+struct ModelData {
+    id: String,
+}
+
 #[async_trait]
 impl InferenceBackend for OpenAiCompatBackend {
+    async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+        let mut builder = self
+            .client
+            .get(self.models_url())
+            .header(CONTENT_TYPE, "application/json");
+
+        if let Some(api_key) = &self.api_key {
+            builder = builder.header(AUTHORIZATION, format!("Bearer {api_key}"));
+        }
+
+        let response = builder.send().await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("openai-compatible models error {status}: {body}");
+        }
+
+        let response = response.json::<ModelListResponse>().await?;
+        Ok(response.data.into_iter().map(|m| m.id).collect())
+    }
+
     async fn call(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
         let response = self
             .request_builder()

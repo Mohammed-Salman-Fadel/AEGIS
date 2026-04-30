@@ -28,6 +28,40 @@ pub struct SelectModelResponse {
     message: String,
 }
 
+#[derive(Serialize)]
+pub struct ModelListResponse {
+    provider: String,
+    models: Vec<ModelResponse>,
+}
+
+#[derive(Serialize)]
+pub struct ModelResponse {
+    name: String,
+    description: String,
+    active: bool,
+}
+
+pub async fn list_models(State(state): State<AppState>) -> Json<ModelListResponse> {
+    let (provider, model_names) = state.orchestrator.list_available_models().await.unwrap_or_else(|_| (state.orchestrator.current_provider_name(), vec![]));
+    let active_model = state.orchestrator.current_model_name();
+
+    Json(ModelListResponse {
+        provider,
+        models: model_names
+            .into_iter()
+            .map(|name| ModelResponse {
+                active: name.eq_ignore_ascii_case(&active_model),
+                description: if name.eq_ignore_ascii_case(&active_model) {
+                    "Currently active in the engine.".to_string()
+                } else {
+                    String::new()
+                },
+                name,
+            })
+            .collect(),
+    })
+}
+
 pub async fn current_model(State(state): State<AppState>) -> Json<CurrentModelResponse> {
     Json(CurrentModelResponse {
         model: state.orchestrator.current_model_name(),
