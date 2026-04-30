@@ -206,10 +206,19 @@ impl FileSessionStore {
         model_name: &str,
         trace: &[TraceEntry],
     ) -> anyhow::Result<()> {
-        let mut stored = self
-            .read_session_file(session_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?;
+        let mut stored = match self.read_session_file(session_id).await? {
+            Some(s) => s,
+            None => {
+                let now = Utc::now();
+                StoredSessionFile {
+                    session_id: session_id.to_string(),
+                    title: "New chat".to_string(),
+                    created_at: now,
+                    updated_at: now,
+                    turns: Vec::new(),
+                }
+            }
+        };
 
         let now = Utc::now();
         if stored.title == "New chat" {

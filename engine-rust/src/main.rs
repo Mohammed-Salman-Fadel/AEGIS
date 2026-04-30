@@ -44,6 +44,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let rag_client = std::sync::Arc::new(rag_client::RagClient::new());
+    if let Err(e) = rag_client.init().await {
+        tracing::warn!("Failed to initialize RAG client: {}. Ensure python RAG is running.", e);
+    }
     let memory_store = memory_store::MemoryStore::new().await;
 
     let orchestrator = orchestrator::Orchestrator::new(inference, rag_client, memory_store);
