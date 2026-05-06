@@ -40,6 +40,11 @@ pub struct InferenceConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RagConfig {
+    pub base_url: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerConfig {
     pub host: String,
     pub port: String,
@@ -49,6 +54,7 @@ pub struct ServerConfig {
 pub struct AppConfig {
     pub server: ServerConfig,
     pub inference: InferenceConfig,
+    pub rag: RagConfig,
 }
 
 impl AppConfig {
@@ -66,6 +72,9 @@ impl AppConfig {
                 base_url: inference_base_url(&provider),
                 provider,
                 api_key: non_empty_env("AEGIS_OPENAI_COMPAT_API_KEY"),
+            },
+            rag: RagConfig {
+                base_url: env::var("AEGIS_RAG_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
             },
         })
     }

@@ -1,30 +1,91 @@
-use std::sync::RwLock;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 
 pub struct RagClient {
-    storage: RwLock<Vec<String>>,
+    client: Client,
+    base_url: String,
+}
+
+#[derive(Serialize)]
+struct IndexRequest {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct QueryRequest {
+    query: String,
+    top_k: usize,
+}
+
+#[derive(Deserialize)]
+struct SearchResult {
+    text: String,
+    #[allow(dead_code)]
+    source: String,
+}
+
+#[derive(Deserialize)]
+struct QueryResponse {
+    results: Vec<SearchResult>,
 }
 
 impl RagClient {
-    pub fn new() -> Self {
+    pub fn new(base_url: String) -> Self {
         Self {
-            storage: RwLock::new(Vec::new()),
+            client: Client::new(),
+            base_url,
         }
     }
 
-    pub async fn ingest(&self, content: String) -> anyhow::Result<()> {
-        let mut docs = self
-            .storage
-            .write()
-            .map_err(|_| anyhow::anyhow!("Lock error"))?;
-        docs.push(content);
+    pub async fn init(&self) -> anyhow::Result<()> {
+        let resp = self
+            .client
+            .post(&format!("{}/init", self.base_url))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let txt = resp.text().await.unwrap_or_default();
+            anyhow::bail!("RAG init failed: {}", txt);
+        }
         Ok(())
     }
 
-    pub async fn retrieve(&self, _query: &str, _limit: usize) -> anyhow::Result<Vec<String>> {
-        let docs = self
-            .storage
-            .read()
-            .map_err(|_| anyhow::anyhow!("Lock error"))?;
-        Ok(docs.clone())
+    pub async fn ingest(&self, file_path: String) -> anyhow::Result<()> {
+        let _ = self.init().await; // Ensure it is initialized before ingesting
+
+        let resp = self
+            .client
+            .post(&format!("{}/index", self.base_url))
+            .json(&IndexRequest { path: file_path })
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let txt = resp.text().await.unwrap_or_default();
+            anyhow::bail!("RAG index failed: {}", txt);
+        }
+        Ok(())
+    }
+
+    pub async fn retrieve(&self, query: &str, limit: usize) -> anyhow::Result<Vec<String>> {
+        let _ = self.init().await; // Ensure it is initialized before querying
+
+        let resp = self
+            .client
+            .post(&format!("{}/query", self.base_url))
+            .json(&QueryRequest {
+                query: query.to_string(),
+                top_k: limit,
+            })
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let txt = resp.text().await.unwrap_or_default();
+            tracing::error!("RAG query failed: {}", txt);
+            return Ok(Vec::new());
+        }
+
+        let result: QueryResponse = resp.json().await?;
+        Ok(result.results.into_iter().map(|r| r.text).collect())
     }
 }

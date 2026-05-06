@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Bot, MessageSquare, Moon, Plus, RefreshCw, Send, Sun, Trash2, User } from 'lucide-react';
+import { Bot, MessageSquare, Moon, Plus, RefreshCw, Send, Sun, Trash2, Upload, User } from 'lucide-react';
 
 type Role = 'user' | 'assistant';
 type ThemeMode = 'dark' | 'light';
@@ -63,6 +63,7 @@ export default function App() {
     return storedTheme === 'light' ? 'light' : 'dark';
   });
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -274,6 +275,52 @@ export default function App() {
         renameError instanceof Error ? renameError.message : 'Could not rename the session.',
       );
       setStatus('Session rename failed');
+    }
+  }
+
+  async function handleFileUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = event.target.files;
+    if (!files || files.length === 0 || isUploading) {
+      return;
+    }
+
+    const validExtensions = ['.pdf', '.txt'];
+    const unsupportedFiles = Array.from(files).filter(
+      (file) => !validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext)),
+    );
+
+    if (unsupportedFiles.length > 0) {
+      setError(`Unsupported file types: ${unsupportedFiles.map((f) => f.name).join(', ')}. Only PDF and TXT are supported.`);
+      event.target.value = '';
+      return;
+    }
+
+    setIsUploading(true);
+    setStatus('Indexing documents');
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      for (let i = 0; i < files.length; i++) {
+        formData.append('file', files[i]);
+      }
+
+      const response = await fetch(`${API_BASE}/ingest`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Engine returned HTTP ${response.status} while uploading.`);
+      }
+
+      setStatus('Indexed successfully');
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : 'Upload failed');
+      setStatus('Upload failed');
+    } finally {
+      setIsUploading(false);
+      event.target.value = '';
     }
   }
 
@@ -649,9 +696,31 @@ export default function App() {
               placeholder="Message AEGIS"
               value={input}
             />
+            <label
+              className={`flex cursor-pointer items-center justify-center rounded-lg border px-4 py-3 text-sm transition ${
+                isStreaming || isUploading ? 'cursor-not-allowed opacity-60' : ''
+              } ${
+                isDark
+                  ? 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                  : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-50'
+              }`}
+              title="Supported: PDF, TXT"
+            >
+              <Upload size={16} />
+              <span className="ml-2">Import</span>
+              <input
+                accept=".pdf,.txt"
+                className="hidden"
+                disabled={isStreaming || isUploading}
+                multiple
+                onChange={(event) => void handleFileUpload(event)}
+                title="Supported files: PDF, TXT"
+                type="file"
+              />
+            </label>
             <button
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
-              disabled={isStreaming || !input.trim()}
+              disabled={isStreaming || !input.trim() || isUploading}
               type="submit"
             >
               <Send size={16} />

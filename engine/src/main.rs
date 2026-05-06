@@ -45,7 +45,10 @@ async fn main() -> anyhow::Result<()> {
         "configured inference backend"
     );
 
-    let rag_client = std::sync::Arc::new(rag_client::RagClient::new());
+    let rag_client = std::sync::Arc::new(rag_client::RagClient::new(config.rag.base_url.clone()));
+    if let Err(e) = rag_client.init().await {
+        tracing::warn!("Failed to initialize RAG client: {}. Ensure python RAG is running.", e);
+    }
     let memory_store = memory_store::MemoryStore::new().await;
 
     let orchestrator = orchestrator::Orchestrator::new(

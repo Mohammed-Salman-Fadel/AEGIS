@@ -90,10 +90,20 @@ async fn handle_progress_ws(ws: WebSocketUpgrade) -> impl axum::response::IntoRe
 }
 
 async fn handle_pdf_ingest(State(state): State<AppState>, mut multipart: Multipart) -> StatusCode {
+    let ingest_dir = std::env::current_dir()
+        .unwrap_or_default()
+        .join("data")
+        .join("ingest");
+    let _ = tokio::fs::create_dir_all(&ingest_dir).await;
+
     while let Ok(Some(field)) = multipart.next_field().await {
+        let file_name = field.file_name().unwrap_or("upload.txt").to_string();
         if let Ok(data) = field.bytes().await {
-            let text = String::from_utf8_lossy(&data).to_string();
-            let _ = state.orchestrator.rag_client.ingest(text).await;
+            let file_path = ingest_dir.join(&file_name);
+            if tokio::fs::write(&file_path, data).await.is_ok() {
+                let path_str = file_path.to_string_lossy().to_string();
+                let _ = state.orchestrator.rag_client.ingest(path_str).await;
+            }
         }
     }
     StatusCode::OK
