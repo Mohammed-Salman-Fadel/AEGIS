@@ -706,6 +706,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      fetch(`${API_BASE}/system/stats`)
+        .then((res) => res.json())
+        .then((data: { cpu: number; ram: number }) => {
+          setSystemStats(data);
+        })
+        .catch(() => {
+          // Silent fail for background stats
+        });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     loadSessions().catch((loadError: unknown) => {
       setError(loadError instanceof Error ? loadError.message : 'Could not load sessions.');
       setStatus('Engine unavailable');
@@ -1222,6 +1236,7 @@ export default function App() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let pending = '';
+      let accumulatedResponse = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1248,6 +1263,12 @@ export default function App() {
             throw new Error(data);
           }
 
+          if (accumulatedResponse === '' && inferenceStartTime.current) {
+            const ttft = Date.now() - inferenceStartTime.current;
+            setInferenceStats((prev) => ({ ...prev, ttft }));
+          }
+
+          accumulatedResponse += data;
           setMessages((current) => {
             const next = [...current];
             const last = next[next.length - 1];
@@ -1581,6 +1602,20 @@ export default function App() {
             >
               {isDark ? <Sun size={14} /> : <Moon size={14} />}
               {isDark ? 'Light mode' : 'Dark mode'}
+            </button>
+            <button
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${
+                isMetricsOpen
+                  ? 'border-emerald-600 bg-emerald-950/30 text-emerald-400'
+                  : isDark
+                    ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                    : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
+              }`}
+              onClick={() => setIsMetricsOpen((current) => !current)}
+              type="button"
+            >
+              <Activity size={14} />
+              Metrics
             </button>
             <div
               className={`rounded-lg border px-3 py-1 text-xs ${
