@@ -1,31 +1,60 @@
-.venv
-# Rust
+# System Files
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Object & Build Files (8000+ dosyanın asıl sebebi)
+*.o
+*.a
+*.so
+*.dylib
+*.out
+*.exe
+*.obj
+*.dll
+
+# Rust / Engine
 engine/target/
 engine/Cargo.lock
 .cargo-target-*/
-dist/
+cli/target/
+target/
 
+# Frontend / Node
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+build/
+.npm/
+.npm-cache/
+.eslintcache
+
+# Environment & Virtual Envs
 .env
 .env.local
-frontend/.npm-cache/
-frontend/dist/
-.aegis/
-.test-aegis/
-# CLI
+.env.*.local
+.venv/
+rag-env/
+venv/
+env/
 
-cli/target/
-
-# RAG
+# Python / RAG
 __pycache__/
 *.py[cod]
 *$py.class
-rag-env/
 .pytest_cache/
 *.log
-# Vector DB
-data/  
 
-# IDE
-.idea/
+# Data & Database
+.aegis/
+.test-aegis/
+data/
+*.sqlite
+*.db
+
+# IDE / Workspace
 .vscode/
+.idea/
+*.swp
 *.iml
