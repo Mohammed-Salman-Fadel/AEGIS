@@ -118,12 +118,31 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(handlers::health::health))
         .route("/chat", post(handlers::chat::chat))
-        .route("/providers/current", get(handlers::providers::current_provider))
+        .route(
+            "/providers/current",
+            get(handlers::providers::current_provider),
+        )
         .route("/providers", get(handlers::providers::list_providers))
-        .route("/providers/select", post(handlers::providers::select_provider))
+        .route(
+            "/providers/select",
+            post(handlers::providers::select_provider),
+        )
         .route("/models", get(handlers::models::list_models))
         .route("/models/current", get(handlers::models::current_model))
         .route("/models/select", post(handlers::models::select_model))
+        .route("/calendar/event", post(handlers::calendar::create_event))
+        .route(
+            "/calendar/outlook/calendars",
+            get(handlers::calendar::list_outlook_calendars),
+        )
+        .route(
+            "/calendar/outlook/select",
+            post(handlers::calendar::select_outlook_calendar),
+        )
+        .route(
+            "/calendar/create-from-prompt",
+            post(handlers::calendar::create_from_prompt),
+        )
         .route("/system/stats", get(get_system_stats))
         .route("/ingest", post(handle_pdf_ingest)) // State desteği eklendi
         .route("/index/progress", get(handle_progress_ws))

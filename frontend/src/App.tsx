@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Bot, MessageSquare, Moon, Plus, RefreshCw, Send, Sun, Trash2, Upload, User } from 'lucide-react';
+import {
+  Bot,
+  Calendar,
+  ChevronDown,
+  MessageSquare,
+  Moon,
+  Plus,
+  RefreshCw,
+  Send,
+  Sun,
+  Trash2,
+  Upload,
+  User,
+  Wrench,
+  X,
+} from 'lucide-react';
 
 type Role = 'user' | 'assistant';
 type ThemeMode = 'dark' | 'light';
@@ -34,6 +49,40 @@ interface EngineSession {
   };
 }
 
+interface CalendarResult {
+  title: string;
+  start: string;
+  end: string;
+  description?: string | null;
+  location?: string | null;
+}
+
+interface CalendarCreateResponse {
+  message: string;
+  saved_to_calendar: boolean;
+  file_opened: boolean;
+  delivery_method: string;
+  parsed: CalendarResult | null;
+}
+
+interface OutlookCalendar {
+  id: string;
+  name: string;
+  store_name: string;
+  email_address?: string | null;
+  path: string;
+  is_selected: boolean;
+}
+
+interface OutlookCalendarsResponse {
+  calendars: OutlookCalendar[];
+}
+
+interface OutlookCalendarSelectionResponse {
+  calendar: OutlookCalendar;
+  message: string;
+}
+
 const API_BASE = '/api';
 const THEME_STORAGE_KEY = 'aegis-ui-theme';
 
@@ -47,6 +96,11 @@ function turnsToMessages(turns: EngineTurn[]): Message[] {
     { role: 'user' as const, content: turn.query },
     { role: 'assistant' as const, content: turn.response },
   ]);
+}
+
+function outlookCalendarLabel(calendar: OutlookCalendar) {
+  const accountLabel = calendar.email_address || calendar.store_name;
+  return `${calendar.name} - ${accountLabel}`;
 }
 
 export default function App() {
@@ -66,6 +120,15 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState<string | null>(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [calendarPrompt, setCalendarPrompt] = useState('');
+  const [creatingEvent, setCreatingEvent] = useState(false);
+  const [calendarResult, setCalendarResult] = useState<CalendarResult | null>(null);
+  const [calendarMessage, setCalendarMessage] = useState<string | null>(null);
+  const [outlookCalendars, setOutlookCalendars] = useState<OutlookCalendar[]>([]);
+  const [selectedOutlookCalendarId, setSelectedOutlookCalendarId] = useState('');
+  const [loadingOutlookCalendars, setLoadingOutlookCalendars] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [deletingSessionIds, setDeletingSessionIds] = useState<string[]>([]);
@@ -171,6 +234,102 @@ export default function App() {
       setError(createError instanceof Error ? createError.message : 'Could not create a new session.');
       setStatus('Session creation failed');
     }
+  }
+
+  async function createCalendarEvent() {
+    const text = calendarPrompt.trim();
+    if (!text) return;
+
+    setCreatingEvent(true);
+    setError(null);
+    setCalendarResult(null);
+    setCalendarMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/calendar/create-from-prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: text }),
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Engine returned HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as CalendarCreateResponse;
+      setCalendarResult(data.parsed);
+      setCalendarMessage(data.message);
+      setStatus(data.saved_to_calendar ? 'Calendar event saved' : 'Calendar event file created');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not create calendar event.');
+    } finally {
+      setCreatingEvent(false);
+    }
+  }
+
+  async function loadOutlookCalendars() {
+    setLoadingOutlookCalendars(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/calendar/outlook/calendars`);
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Engine returned HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as OutlookCalendarsResponse;
+      setOutlookCalendars(data.calendars);
+      setSelectedOutlookCalendarId(data.calendars.find((calendar) => calendar.is_selected)?.id ?? '');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load Outlook calendars.');
+    } finally {
+      setLoadingOutlookCalendars(false);
+    }
+  }
+
+  async function selectOutlookCalendar(calendarId: string) {
+    setSelectedOutlookCalendarId(calendarId);
+    setCalendarMessage(null);
+
+    if (!calendarId) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/calendar/outlook/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ calendar_id: calendarId }),
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Engine returned HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as OutlookCalendarSelectionResponse;
+      setCalendarMessage(data.message);
+      setOutlookCalendars((calendars) =>
+        calendars.map((calendar) => ({
+          ...calendar,
+          is_selected: calendar.id === data.calendar.id,
+        })),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not select Outlook calendar.');
+    }
+  }
+
+  function openCalendarTool() {
+    setCalendarOpen(true);
+    setToolsOpen(false);
+    setError(null);
+    setCalendarResult(null);
+    setCalendarMessage(null);
+    setCalendarPrompt('');
+    void loadOutlookCalendars();
   }
 
   async function handleDeleteSession(session: EngineSessionSummary) {
@@ -718,6 +877,41 @@ export default function App() {
                 type="file"
               />
             </label>
+            <div className="relative">
+              <button
+                className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm transition ${
+                  isDark
+                    ? 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                    : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-50'
+                }`}
+                onClick={() => setToolsOpen((open) => !open)}
+                type="button"
+              >
+                <Wrench size={16} />
+                <span>Tools</span>
+                <ChevronDown size={14} />
+              </button>
+              {toolsOpen && (
+                <div
+                  className={`absolute bottom-full right-0 z-30 mb-2 w-48 rounded-lg border p-1 shadow-xl ${
+                    isDark
+                      ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                      : 'border-stone-300 bg-white text-slate-900'
+                  }`}
+                >
+                  <button
+                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition ${
+                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                    }`}
+                    onClick={openCalendarTool}
+                    type="button"
+                  >
+                    <Calendar size={15} />
+                    Calendar
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
               disabled={isStreaming || !input.trim() || isUploading}
@@ -729,6 +923,125 @@ export default function App() {
           </form>
         </footer>
       </main>
+
+      {calendarOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setCalendarOpen(false)}
+        >
+          <div
+            className={`w-full max-w-lg rounded-xl border p-6 shadow-2xl ${
+              isDark
+                ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                : 'border-stone-300 bg-white text-slate-900'
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-lg font-semibold">
+                <Calendar size={18} />
+                Create Calendar Event
+              </div>
+              <button
+                className="rounded-md p-1 hover:bg-zinc-800"
+                onClick={() => setCalendarOpen(false)}
+                type="button"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div
+              className={`mb-4 rounded-lg border p-3 text-sm ${
+                isDark ? 'border-zinc-800 bg-zinc-900/70' : 'border-stone-300 bg-stone-50'
+              }`}
+            >
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-wide opacity-70">
+                Local Outlook calendar
+              </label>
+              <select
+                className={`w-full rounded-md border px-3 py-2 text-sm outline-none ${
+                  isDark
+                    ? 'border-zinc-700 bg-zinc-950 text-zinc-100'
+                    : 'border-stone-300 bg-white text-slate-900'
+                }`}
+                disabled={creatingEvent || loadingOutlookCalendars || outlookCalendars.length === 0}
+                onChange={(e) => void selectOutlookCalendar(e.target.value)}
+                value={selectedOutlookCalendarId}
+              >
+                <option value="">
+                  {loadingOutlookCalendars
+                    ? 'Loading Outlook calendars...'
+                    : outlookCalendars.length === 0
+                      ? 'Default Outlook calendar / ICS fallback'
+                      : 'Choose an Outlook calendar'}
+                </option>
+                {outlookCalendars.map((calendar) => (
+                  <option key={`${calendar.store_name}-${calendar.id}`} value={calendar.id}>
+                    {outlookCalendarLabel(calendar)}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-2 text-xs opacity-70">
+                AEGIS uses local Outlook only. Your selected calendar is remembered locally and no
+                AEGIS login is required.
+              </p>
+            </div>
+
+            {calendarMessage && !calendarResult && (
+              <div
+                className={`mb-4 rounded-lg border p-3 text-xs ${
+                  isDark
+                    ? 'border-emerald-800 bg-emerald-950/30 text-emerald-200'
+                    : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                }`}
+              >
+                {calendarMessage}
+              </div>
+            )}
+
+            <textarea
+              className={`mb-4 w-full rounded-lg border px-4 py-3 text-sm outline-none ${
+                isDark
+                  ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
+                  : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
+              }`}
+              disabled={creatingEvent}
+              onChange={(e) => setCalendarPrompt(e.target.value)}
+              placeholder='e.g. "Meeting with John tomorrow at 3pm for 1 hour"'
+              rows={3}
+              value={calendarPrompt}
+            />
+
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+              disabled={creatingEvent || !calendarPrompt.trim()}
+              onClick={() => void createCalendarEvent()}
+              type="button"
+            >
+              <Calendar size={16} />
+              {creatingEvent ? 'Creating...' : 'Create Event'}
+            </button>
+
+            {calendarResult && (
+              <div
+                className={`mt-4 rounded-lg border p-4 text-sm ${
+                  isDark
+                    ? 'border-emerald-800 bg-emerald-950/40 text-emerald-200'
+                    : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                }`}
+              >
+                {calendarMessage && <div className="mb-2 font-semibold">{calendarMessage}</div>}
+                <div className="mb-1 font-semibold">{calendarResult.title}</div>
+                <div className="opacity-80">Start: {calendarResult.start}</div>
+                <div className="opacity-80">End: {calendarResult.end}</div>
+                {calendarResult.location && <div className="opacity-80">Location: {calendarResult.location}</div>}
+                {calendarResult.description && <div className="mt-1 opacity-80">{calendarResult.description}</div>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

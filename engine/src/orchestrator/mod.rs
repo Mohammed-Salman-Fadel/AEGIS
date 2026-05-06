@@ -1,6 +1,6 @@
 use anyhow::Context;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 
 use crate::classifier::Classifier;
@@ -131,9 +131,25 @@ impl Orchestrator {
         self.provider_registry.current_provider_name()
     }
 
+    pub async fn inference_backend(
+        &self,
+    ) -> tokio::sync::RwLockReadGuard<'_, Box<dyn InferenceBackend + Send + Sync>> {
+        self.inference.read().await
+    }
+
+    pub async fn call_inference(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
+        self.inference.read().await.call(prompt, model).await
+    }
+
     pub async fn list_available_models(&self) -> anyhow::Result<(String, Vec<String>)> {
         let provider = self.current_provider_name();
-        let models = self.inference.read().await.list_models().await.unwrap_or_default();
+        let models = self
+            .inference
+            .read()
+            .await
+            .list_models()
+            .await
+            .unwrap_or_default();
         Ok((provider, models))
     }
 
@@ -194,7 +210,9 @@ impl Orchestrator {
                     .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
                 let api_key = std::env::var("AEGIS_OPENAI_COMPAT_API_KEY").ok();
                 Box::new(
-                    crate::inference::backends::openai_compat::OpenAiCompatBackend::new(url, api_key),
+                    crate::inference::backends::openai_compat::OpenAiCompatBackend::new(
+                        url, api_key,
+                    ),
                 )
             }
         };
@@ -208,7 +226,6 @@ impl Orchestrator {
             changed: true,
         })
     }
-
 
     pub fn set_active_model(&self, name: &str) -> String {
         self.model_registry.set_active_model(name)
@@ -242,7 +259,7 @@ impl Orchestrator {
             });
         }
 
-self.inference
+        self.inference
             .read()
             .await
             .warm_model(next_model)
@@ -250,7 +267,13 @@ self.inference
             .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
 
         let previous_model = self.model_registry.set_active_model(next_model);
-        let unload_warning = match self.inference.read().await.unload_model(&previous_model).await {
+        let unload_warning = match self
+            .inference
+            .read()
+            .await
+            .unload_model(&previous_model)
+            .await
+        {
             Ok(()) => None,
             Err(error) => Some(format!(
                 "Switched successfully, but could not unload `{previous_model}`: {error}"
@@ -362,7 +385,11 @@ self.inference
                         &ctx.original_query,
                         &step.input,
                     );
-                    self.inference.read().await.call(&prompt, &ctx.model.name).await?
+                    self.inference
+                        .read()
+                        .await
+                        .call(&prompt, &ctx.model.name)
+                        .await?
                 }
                 "rag" | "search" | "document" => {
                     let chunks = self
