@@ -60,6 +60,52 @@ fn format_active_documents(attachments: &[String]) -> String {
         .join("\n")
 }
 
+fn is_document_scoped_request(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    let has_document_reference = [
+        "the document",
+        "this document",
+        "that document",
+        "attached document",
+        "uploaded document",
+        "imported document",
+        "the pdf",
+        "this pdf",
+        "that pdf",
+        "attached pdf",
+        "uploaded pdf",
+        "imported pdf",
+        "the file",
+        "this file",
+        "that file",
+        "attached file",
+        "uploaded file",
+        "imported file",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+
+    let asks_for_document_action = [
+        "summarize",
+        "summary",
+        "explain",
+        "analyze",
+        "review",
+        "read",
+        "extract",
+        "find",
+        "from",
+        "based on",
+        "according to",
+        "what does",
+        "what is in",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+
+    has_document_reference && asks_for_document_action
+}
+
 impl Orchestrator {
     /// Initializes the Orchestrator with required backend services.
     pub fn new(
@@ -339,15 +385,44 @@ impl Orchestrator {
 
         ctx.trace_summary("classify", "fallback");
 
-        // 1. RAG (Retrieval-Augmented Generation): Retrieve relevant chunks from uploaded documents
-        let relevant_chunks = match self.rag_client.retrieve(&ctx.original_query, 5).await {
-            Ok(chunks) => chunks,
-            Err(error) if req.attachments.is_empty() => {
-                tracing::warn!(error = %error, "RAG retrieval unavailable; continuing without document context");
-                Vec::new()
+        if req.attachments.is_empty() && is_document_scoped_request(&req.message) {
+            let final_answer = "No document is attached to this conversation. Please import a document into this conversation first, then ask me to summarize it.".to_string();
+            let _ = tx.send(final_answer.clone()).await;
+
+            if let Some(session_id) = persisted_session_id.as_deref() {
+                self.memory_store
+                    .append_turn_with_edit(
+                        session_id,
+                        &req.message,
+                        &final_answer,
+                        &ctx.model.name,
+                        &ctx.trace,
+                        req.edit_from_turn_index,
+                        req.edit_from_turn_index.is_some(),
+                    )
+                    .await?;
             }
-            Err(error) => {
-                anyhow::bail!("Could not retrieve context from the imported document set: {error}");
+
+            return Ok(final_answer);
+        }
+
+        // 1. RAG is strictly session-scoped. If this turn has no current-session
+        // attachments, do not query the global RAG store at all.
+        let relevant_chunks = if req.attachments.is_empty() {
+            ctx.trace_summary("rag", "no current-session document attachments");
+            Vec::new()
+        } else {
+            match self
+                .rag_client
+                .retrieve(&ctx.original_query, 5, &working_session_id)
+                .await
+            {
+                Ok(chunks) => chunks,
+                Err(error) => {
+                    anyhow::bail!(
+                        "Could not retrieve context from the current session's imported documents: {error}"
+                    );
+                }
             }
         };
         let context_from_docs = relevant_chunks.join("\n---\n");
@@ -436,7 +511,7 @@ impl Orchestrator {
                 "rag" | "search" | "document" => {
                     let chunks = self
                         .rag_client
-                        .retrieve(&step.input, 5)
+                        .retrieve(&step.input, 5, &ctx.session_id)
                         .await
                         .unwrap_or_default();
                     if chunks.is_empty() {

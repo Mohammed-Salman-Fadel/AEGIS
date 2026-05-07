@@ -37,7 +37,7 @@ def initialize_service():
 @router.post("/index", response_model=IndexResponse, dependencies=[Depends(check_initialized)])
 def index_documents(request: IndexRequest):
     try:
-        chunks_added = indexing_service.index_path(request.path)
+        chunks_added = indexing_service.index_path(request.path, request.session_id)
         return {"status": "indexed", "chunks_added": chunks_added}
     except FileNotFoundError as e:
         # Avoid stack traces for missing files
@@ -49,7 +49,7 @@ def index_documents(request: IndexRequest):
 def query_documents(request: QueryRequest):
     try:
         top_k = min(request.top_k, MAX_TOP_K)
-        results = retrieval_service.query(request.query, top_k)
+        results = retrieval_service.query(request.query, top_k, request.session_id)
         return {"results": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail={"error": f"Query failed: {str(e)}"})

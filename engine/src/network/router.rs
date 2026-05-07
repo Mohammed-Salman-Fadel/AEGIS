@@ -124,6 +124,11 @@ struct IngestResponse {
     documents: Vec<IngestedDocument>,
 }
 
+struct PendingUpload {
+    file_name: String,
+    data: axum::body::Bytes,
+}
+
 async fn handle_pdf_ingest(
     State(state): State<AppState>,
     mut multipart: Multipart,
@@ -143,6 +148,8 @@ async fn handle_pdf_ingest(
 
     let mut documents = Vec::new();
     let mut total_chunks = 0;
+    let mut session_id = None;
+    let mut uploads = Vec::new();
 
     while let Some(field) = multipart.next_field().await.map_err(|error| {
         (
@@ -150,6 +157,20 @@ async fn handle_pdf_ingest(
             format!("Could not read multipart upload: {error}"),
         )
     })? {
+        if field.name() == Some("session_id") {
+            let value = field.text().await.map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Could not read ingest session id: {error}"),
+                )
+            })?;
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                session_id = Some(value);
+            }
+            continue;
+        }
+
         let Some(file_name) = safe_upload_file_name(field.file_name()) else {
             continue;
         };
@@ -168,19 +189,33 @@ async fn handle_pdf_ingest(
             )
         })?;
 
+        uploads.push(PendingUpload { file_name, data });
+    }
+
+    let session_id = session_id.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "A session id is required before importing documents.".to_string(),
+        )
+    })?;
+
+    for upload in uploads {
+        let file_name = upload.file_name;
         let file_path = ingest_dir.join(&file_name);
-        tokio::fs::write(&file_path, data).await.map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Could not store uploaded file `{file_name}`: {error}"),
-            )
-        })?;
+        tokio::fs::write(&file_path, upload.data)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Could not store uploaded file `{file_name}`: {error}"),
+                )
+            })?;
 
         let stored_path = file_path.to_string_lossy().to_string();
         let outcome = state
             .orchestrator
             .rag_client
-            .ingest(stored_path.clone())
+            .ingest(stored_path.clone(), &session_id)
             .await
             .map_err(|error| {
                 (

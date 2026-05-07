@@ -468,6 +468,15 @@ try {
 } catch {}
 $calendars = New-Object System.Collections.Generic.List[object]
 $storeEmails = @{}
+$seenCalendars = @{}
+
+function Add-EmailMap([string]$Key, [string]$Email) {
+    if ([string]::IsNullOrWhiteSpace($Key) -or [string]::IsNullOrWhiteSpace($Email)) {
+        return
+    }
+
+    $storeEmails[$Key] = $Email
+}
 
 try {
     foreach ($account in $namespace.Accounts) {
@@ -484,47 +493,87 @@ try {
                 }
             } catch {}
 
-            if (-not [string]::IsNullOrWhiteSpace($deliveryStoreId) -and -not [string]::IsNullOrWhiteSpace($smtp)) {
-                $storeEmails[$deliveryStoreId] = $smtp
-            }
+            Add-EmailMap $deliveryStoreId $smtp
+            Add-EmailMap ([string]$account.DisplayName) $smtp
+
+            try {
+                if ($null -ne $account.DeliveryStore) {
+                    Add-EmailMap ([string]$account.DeliveryStore.DisplayName) $smtp
+                    Add-EmailMap ([string]$account.DeliveryStore.FilePath) $smtp
+                }
+            } catch {}
         } catch {}
     }
 } catch {}
 
-function Resolve-StoreEmail([string]$StoreId, [string]$StoreName) {
-    if ($storeEmails.ContainsKey($StoreId)) {
-        return [string]$storeEmails[$StoreId]
+function Resolve-EmailLikeText([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $null
     }
 
-    if ($StoreName -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') {
-        return $StoreName
+    $match = [regex]::Match($Value, '[^@\s<>;:]+@[^@\s<>;:]+\.[^@\s<>;:]+')
+    if ($match.Success) {
+        return [string]$match.Value
     }
 
     return $null
 }
 
-function Add-CalendarFolder($Folder, [string]$StoreName, [string]$StoreId) {
+function Resolve-StoreEmail([string]$StoreId, [string]$StoreName, [string]$StoreFilePath) {
+    if ($storeEmails.ContainsKey($StoreId)) {
+        return [string]$storeEmails[$StoreId]
+    }
+
+    if ($storeEmails.ContainsKey($StoreName)) {
+        return [string]$storeEmails[$StoreName]
+    }
+
+    if ($storeEmails.ContainsKey($StoreFilePath)) {
+        return [string]$storeEmails[$StoreFilePath]
+    }
+
+    $emailFromName = Resolve-EmailLikeText $StoreName
+    if (-not [string]::IsNullOrWhiteSpace($emailFromName)) {
+        return $emailFromName
+    }
+
+    $emailFromPath = Resolve-EmailLikeText $StoreFilePath
+    if (-not [string]::IsNullOrWhiteSpace($emailFromPath)) {
+        return $emailFromPath
+    }
+
+    return $null
+}
+
+function Add-CalendarFolder($Folder, [string]$StoreName, [string]$StoreId, [string]$StoreFilePath) {
     if ($null -eq $Folder) {
         return
     }
 
     try {
         if ($Folder.DefaultItemType -eq 1) {
-            $calendars.Add([PSCustomObject]@{
-                id = [string]$Folder.EntryID
-                store_id = $StoreId
-                name = [string]$Folder.Name
-                store_name = $StoreName
-                email_address = Resolve-StoreEmail $StoreId $StoreName
-                path = [string]$Folder.FolderPath
-                is_selected = $false
-            })
+            $entryId = [string]$Folder.EntryID
+            $key = "${StoreId}::$entryId"
+            if (-not $seenCalendars.ContainsKey($key)) {
+                $seenCalendars[$key] = $true
+                $emailAddress = Resolve-StoreEmail $StoreId $StoreName $StoreFilePath
+
+                $calendars.Add([PSCustomObject]@{
+                    id = $entryId
+                    store_id = $StoreId
+                    name = [string]$Folder.Name
+                    store_name = $StoreName
+                    email_address = $emailAddress
+                    path = [string]$Folder.FolderPath
+                    is_selected = $false
+                })
+            }
         }
     } catch {}
 
     try {
         foreach ($child in $Folder.Folders) {
-            Add-CalendarFolder $child $StoreName $StoreId
+            Add-CalendarFolder $child $StoreName $StoreId $StoreFilePath
         }
     } catch {}
 }
@@ -533,10 +582,32 @@ foreach ($store in $namespace.Stores) {
     try {
         $storeName = [string]$store.DisplayName
         $storeId = [string]$store.StoreID
+        $storeFilePath = ""
+        try {
+            $storeFilePath = [string]$store.FilePath
+        } catch {}
+
+        try {
+            $defaultCalendar = $store.GetDefaultFolder(9)
+            Add-CalendarFolder $defaultCalendar $storeName $storeId $storeFilePath
+        } catch {}
+
         $root = $store.GetRootFolder()
-        Add-CalendarFolder $root $storeName $storeId
+        Add-CalendarFolder $root $storeName $storeId $storeFilePath
     } catch {}
 }
+
+try {
+    $defaultCalendar = $namespace.GetDefaultFolder(9)
+    $store = $defaultCalendar.Store
+    $storeName = [string]$store.DisplayName
+    $storeId = [string]$store.StoreID
+    $storeFilePath = ""
+    try {
+        $storeFilePath = [string]$store.FilePath
+    } catch {}
+    Add-CalendarFolder $defaultCalendar $storeName $storeId $storeFilePath
+} catch {}
 
 $calendars | ConvertTo-Json -Compress
 "#;

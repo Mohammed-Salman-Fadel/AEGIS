@@ -17,11 +17,11 @@ class IndexingService:
         # or we could rely purely on generated ID deterministic hashing.
         pass
         
-    def _generate_chunk_id(self, source: str, chunk_index: int) -> str:
-        unique_string = f"{source}::{chunk_index}"
+    def _generate_chunk_id(self, source: str, chunk_index: int, session_id: str) -> str:
+        unique_string = f"{session_id}::{source}::{chunk_index}"
         return hashlib.md5(unique_string.encode()).hexdigest()
 
-    def process_txt(self, file_path: pathlib.Path) -> List[dict]:
+    def process_txt(self, file_path: pathlib.Path, session_id: str) -> List[dict]:
         chunks = []
         try:
             text = file_path.read_text(encoding='utf-8')
@@ -40,19 +40,20 @@ class IndexingService:
             
             for i, chunk_text in enumerate(text_chunks):
                 chunks.append({
-                    "id": self._generate_chunk_id(source, i),
+                    "id": self._generate_chunk_id(source, i, session_id),
                     "text": chunk_text,
                     "metadata": {
                         "source": source,
                         "page": -1,  # represents null
-                        "type": "document"
+                        "type": "document",
+                        "session_id": session_id
                     }
                 })
         except Exception as e:
             logger.error(f"Error processing text file {file_path}: {e}")
         return chunks
 
-    def process_pdf(self, file_path: pathlib.Path) -> List[dict]:
+    def process_pdf(self, file_path: pathlib.Path, session_id: str) -> List[dict]:
         chunks = []
         try:
             doc = fitz.open(file_path)
@@ -68,12 +69,13 @@ class IndexingService:
                 text_chunks = split_text_by_words(text, CHUNK_SIZE_WORDS, CHUNK_OVERLAP_WORDS)
                 for chunk_text in text_chunks:
                     chunks.append({
-                        "id": self._generate_chunk_id(source, chunk_global_index),
+                        "id": self._generate_chunk_id(source, chunk_global_index, session_id),
                         "text": chunk_text,
                         "metadata": {
                             "source": source,
                             "page": page_num + 1,
-                            "type": "document"
+                            "type": "document",
+                            "session_id": session_id
                         }
                     })
                     chunk_global_index += 1
@@ -81,7 +83,11 @@ class IndexingService:
             logger.error(f"Error processing PDF file {file_path}: {e}")
         return chunks
 
-    def index_path(self, path_str: str) -> int:
+    def index_path(self, path_str: str, session_id: str) -> int:
+        session_id = session_id.strip()
+        if not session_id:
+            raise ValueError("session_id is required for document indexing")
+
         path = pathlib.Path(path_str).resolve()
         
         if not path.exists():
@@ -103,9 +109,9 @@ class IndexingService:
 
         for f in files_to_process:
             if f.suffix.lower() == ".txt":
-                file_chunks = self.process_txt(f)
+                file_chunks = self.process_txt(f, session_id)
             else:
-                file_chunks = self.process_pdf(f)
+                file_chunks = self.process_pdf(f, session_id)
 
             for chunk in file_chunks:
                 documents.append(chunk["text"])

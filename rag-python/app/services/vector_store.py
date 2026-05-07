@@ -28,11 +28,12 @@ class VectorStore:
         self.client = None
         self.collection = None
         self._use_chroma = False
-        backend = os.getenv("AEGIS_RAG_VECTOR_BACKEND", "json").strip().lower()
+        backend = os.getenv("AEGIS_RAG_VECTOR_BACKEND", "chroma").strip().lower()
 
         if backend != "chroma":
             logger.info(
-                "Using local JSON vector store. Set AEGIS_RAG_VECTOR_BACKEND=chroma to opt into ChromaDB."
+                "Using local JSON vector store because AEGIS_RAG_VECTOR_BACKEND=%s.",
+                backend,
             )
             return
 
@@ -108,16 +109,20 @@ class VectorStore:
             ids=[memory_id]
         )
 
-    def query(self, query_text: str, n_results: int) -> List[Dict[str, Any]]:
+    def query(self, query_text: str, n_results: int, session_id: str) -> List[Dict[str, Any]]:
         """
-        Query the vector store.
+        Query only documents owned by the active AEGIS session.
         """
         embedding = self.embedding_service.embed_query(query_text)
+        session_id = session_id.strip()
+        if not session_id:
+            return []
 
         if self._use_chroma:
             results = self.collection.query(
                 query_embeddings=[embedding],
                 n_results=n_results,
+                where={"session_id": session_id},
                 include=["documents", "metadatas"]
             )
             
@@ -133,7 +138,7 @@ class VectorStore:
                 
             return formatted_results
 
-        return self._json_query(embedding, n_results)
+        return self._json_query(embedding, n_results, session_id)
 
     def _json_upsert(
         self,
@@ -155,12 +160,21 @@ class VectorStore:
 
             self._write_json_records(list(records.values()))
 
-    def _json_query(self, query_embedding: List[float], n_results: int) -> List[Dict[str, Any]]:
+    def _json_query(
+        self,
+        query_embedding: List[float],
+        n_results: int,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
         with self._lock:
             records = self._read_json_records()
 
         scored = []
         for record in records:
+            metadata = record.get("metadata", {})
+            if metadata.get("session_id") != session_id:
+                continue
+
             score = _cosine_similarity(query_embedding, record.get("embedding", []))
             scored.append((score, record))
 

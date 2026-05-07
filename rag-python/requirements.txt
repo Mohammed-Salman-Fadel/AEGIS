@@ -1,12 +1,12 @@
-fastapi
-uvicorn
-PyMuPDF
-pydantic
+fastapi==0.136.1
+uvicorn==0.46.0
+pydantic==2.13.3
+pydantic-settings==2.14.0
+chromadb==1.5.8
+PyMuPDF==1.27.2.3
 
-# Optional advanced backends:
-# - ChromaDB can be enabled with AEGIS_RAG_VECTOR_BACKEND=chroma.
-# - SentenceTransformers can be enabled with AEGIS_RAG_EMBEDDING_BACKEND=sentence-transformers.
-# Keep these optional because older Chroma/Pydantic combinations and first-run
-# Hugging Face model downloads can break local-only startup.
-# chromadb
-# sentence-transformers
+# Optional semantic embedding backend.
+# The default remains local hash embeddings so first-run RAG does not need to
+# download a Hugging Face model. Enable this with:
+# AEGIS_RAG_EMBEDDING_BACKEND=sentence-transformers
+sentence-transformers==5.4.1

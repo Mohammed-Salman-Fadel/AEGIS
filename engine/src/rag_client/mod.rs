@@ -9,12 +9,14 @@ pub struct RagClient {
 #[derive(Serialize)]
 struct IndexRequest {
     path: String,
+    session_id: String,
 }
 
 #[derive(Serialize)]
 struct QueryRequest {
     query: String,
     top_k: usize,
+    session_id: String,
 }
 
 #[derive(Deserialize)]
@@ -55,13 +57,20 @@ impl RagClient {
         Ok(())
     }
 
-    pub async fn ingest(&self, file_path: String) -> anyhow::Result<IndexOutcome> {
+    pub async fn ingest(
+        &self,
+        file_path: String,
+        session_id: &str,
+    ) -> anyhow::Result<IndexOutcome> {
         self.init().await?; // Ensure it is initialized before ingesting
 
         let resp = self
             .client
             .post(&format!("{}/index", self.base_url))
-            .json(&IndexRequest { path: file_path })
+            .json(&IndexRequest {
+                path: file_path,
+                session_id: session_id.to_string(),
+            })
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -72,7 +81,12 @@ impl RagClient {
         Ok(resp.json::<IndexOutcome>().await?)
     }
 
-    pub async fn retrieve(&self, query: &str, limit: usize) -> anyhow::Result<Vec<String>> {
+    pub async fn retrieve(
+        &self,
+        query: &str,
+        limit: usize,
+        session_id: &str,
+    ) -> anyhow::Result<Vec<String>> {
         self.init().await?; // Ensure it is initialized before querying
 
         let resp = self
@@ -81,6 +95,7 @@ impl RagClient {
             .json(&QueryRequest {
                 query: query.to_string(),
                 top_k: limit,
+                session_id: session_id.to_string(),
             })
             .send()
             .await?;

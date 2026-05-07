@@ -10,6 +10,8 @@ import {
   HardDrive,
   MessageSquare,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   Send,
@@ -117,7 +119,7 @@ type ImportPhase = 'idle' | 'uploading' | 'indexing' | 'complete' | 'error';
 
 const API_BASE = '/api';
 const THEME_STORAGE_KEY = 'aegis-ui-theme';
-const INDEXED_DOCUMENTS_STORAGE_KEY = 'aegis-indexed-documents';
+const INDEXED_DOCUMENTS_STORAGE_KEY = 'aegis-indexed-documents-by-session';
 
 function sessionDescription(session: EngineSessionSummary) {
   const turnLabel = session.turn_count === 1 ? 'turn' : 'turns';
@@ -135,15 +137,32 @@ function cleanOutlookCalendarName(name: string) {
   return name.replace(/\s*\(this computer only\)\s*/gi, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function isEmailBackedOutlookCalendar(calendar: OutlookCalendar) {
-  return Boolean(calendar.email_address?.trim());
+function isGenericOutlookDataFileCalendar(calendar: OutlookCalendar) {
+  const calendarName = cleanOutlookCalendarName(calendar.name).toLowerCase();
+  const storeName = calendar.store_name.trim().toLowerCase();
+  const hasEmail = Boolean(calendar.email_address?.trim());
+
+  return !hasEmail && calendarName === 'calendar' && storeName.includes('outlook data file');
+}
+
+function isVisibleOutlookCalendar(calendar: OutlookCalendar) {
+  return !isGenericOutlookDataFileCalendar(calendar);
 }
 
 function outlookCalendarLabel(calendar: OutlookCalendar) {
   const calendarName = cleanOutlookCalendarName(calendar.name);
   const emailAddress = calendar.email_address?.trim();
+  const storeName = calendar.store_name.trim();
 
-  return emailAddress ? `${calendarName} (${emailAddress})` : calendarName;
+  if (emailAddress) {
+    return `${calendarName} (${emailAddress})`;
+  }
+
+  if (storeName && !storeName.toLowerCase().includes('outlook data file')) {
+    return `${calendarName} (${storeName})`;
+  }
+
+  return calendarName;
 }
 
 function wrapPdfLine(line: string, maxLength: number) {
@@ -215,21 +234,21 @@ function speakerLabel(role: Role) {
   return role === 'user' ? 'User' : 'AEGIS';
 }
 
-function loadStoredIndexedDocuments() {
+function loadStoredIndexedDocumentsBySession() {
   if (typeof window === 'undefined') {
-    return [];
+    return {};
   }
 
   try {
     const raw = window.localStorage.getItem(INDEXED_DOCUMENTS_STORAGE_KEY);
     if (!raw) {
-      return [];
+      return {};
     }
 
-    const parsed = JSON.parse(raw) as IndexedDocument[];
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = JSON.parse(raw) as Record<string, IndexedDocument[]>;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
-    return [];
+    return {};
   }
 }
 
@@ -479,6 +498,7 @@ function createConversationPdf(options: {
   title: string;
   sessionId?: string | null;
   messages: Message[];
+  indexedDocuments: IndexedDocument[];
 }) {
   const pageWidth = 595;
   const pageHeight = 842;
@@ -505,6 +525,14 @@ function createConversationPdf(options: {
   }
   addLine(`Exported: ${formatExportTimestamp(exportedAt)}`);
   addLine(`Messages: ${options.messages.length}`);
+  if (options.indexedDocuments.length > 0) {
+    addLine('');
+    addLine('Documents Added');
+    options.indexedDocuments.forEach((document) => {
+      const chunkLabel = document.chunks_added === 1 ? 'chunk' : 'chunks';
+      addLine(`- User added document: ${document.file_name} (${document.chunks_added} ${chunkLabel})`);
+    });
+  }
   addLine('Format: speaker label, timestamp, message body');
   addLine('------------------------------------------------------------');
   addLine('');
@@ -581,12 +609,15 @@ export default function App() {
   const [importProgress, setImportProgress] = useState(0);
   const [importPhase, setImportPhase] = useState<ImportPhase>('idle');
   const [importFileLabel, setImportFileLabel] = useState('');
-  const [indexedDocuments, setIndexedDocuments] = useState<IndexedDocument[]>(
-    loadStoredIndexedDocuments,
+  const [indexedDocumentsBySession, setIndexedDocumentsBySession] = useState<
+    Record<string, IndexedDocument[]>
+  >(
+    loadStoredIndexedDocumentsBySession,
   );
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState<string | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [calendarPrompt, setCalendarPrompt] = useState('');
   const [creatingCalendarEvent, setCreatingCalendarEvent] = useState(false);
@@ -601,6 +632,7 @@ export default function App() {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [deletingSessionIds, setDeletingSessionIds] = useState<string[]>([]);
+  const [newSessionPulseId, setNewSessionPulseId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isDark = theme === 'dark';
@@ -618,6 +650,9 @@ export default function App() {
     () => sessions.find((session) => session.session_id === activeSessionId),
     [activeSessionId, sessions],
   );
+  const indexedDocuments = activeSessionId
+    ? indexedDocumentsBySession[activeSessionId] ?? []
+    : [];
   const showImportProgress = importPhase !== 'idle';
   const indexedDocumentLabel =
     indexedDocuments.length === 1
@@ -723,11 +758,12 @@ export default function App() {
       return;
     }
 
+    window.localStorage.removeItem('aegis-indexed-documents');
     window.localStorage.setItem(
       INDEXED_DOCUMENTS_STORAGE_KEY,
-      JSON.stringify(indexedDocuments),
+      JSON.stringify(indexedDocumentsBySession),
     );
-  }, [indexedDocuments]);
+  }, [indexedDocumentsBySession]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -759,9 +795,20 @@ export default function App() {
     setError(null);
 
     try {
-      await createSession();
+      const session = await createSession();
+      setIndexedDocumentsBySession((current) => {
+        const next = { ...current };
+        delete next[session.session_id];
+        return next;
+      });
+      setNewSessionPulseId(session.session_id);
       await loadSessions();
       setStatus('Ready');
+      window.setTimeout(() => {
+        setNewSessionPulseId((current) =>
+          current === session.session_id ? null : current,
+        );
+      }, 1400);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Could not create a new session.');
       setStatus('Session creation failed');
@@ -799,6 +846,11 @@ export default function App() {
         setActiveSessionId(null);
         setMessages([]);
       }
+      setIndexedDocumentsBySession((current) => {
+        const next = { ...current };
+        delete next[session.session_id];
+        return next;
+      });
 
       await new Promise((resolve) => {
         window.setTimeout(resolve, 320);
@@ -900,7 +952,9 @@ export default function App() {
     setError(null);
 
     try {
+      const sessionId = activeSessionId ?? (await createSession()).session_id;
       const formData = new FormData();
+      formData.append('session_id', sessionId);
       for (let i = 0; i < files.length; i++) {
         formData.append('file', files[i]);
       }
@@ -955,9 +1009,13 @@ export default function App() {
         request.send(formData);
       });
 
-      setIndexedDocuments((current) =>
-        mergeIndexedDocuments(current, ingestResponse.documents),
-      );
+      setIndexedDocumentsBySession((current) => ({
+        ...current,
+        [sessionId]: mergeIndexedDocuments(
+          current[sessionId] ?? [],
+          ingestResponse.documents,
+        ),
+      }));
       setImportFileLabel(
         ingestResponse.documents.length === 1
           ? ingestResponse.documents[0].file_name
@@ -993,10 +1051,10 @@ export default function App() {
       }
 
       const data = (await response.json()) as OutlookCalendarsResponse;
-      const emailBackedCalendars = data.calendars.filter(isEmailBackedOutlookCalendar);
-      setOutlookCalendars(emailBackedCalendars);
+      const visibleCalendars = data.calendars.filter(isVisibleOutlookCalendar);
+      setOutlookCalendars(visibleCalendars);
       setSelectedOutlookCalendarId(
-        emailBackedCalendars.find((calendar) => calendar.is_selected)?.id ?? '',
+        visibleCalendars.find((calendar) => calendar.is_selected)?.id ?? '',
       );
     } catch (calendarError) {
       setError(
@@ -1119,6 +1177,7 @@ export default function App() {
       title: activeSession?.title ?? 'AEGIS Chat Export',
       sessionId: activeSession?.session_id,
       messages,
+      indexedDocuments,
     });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -1296,23 +1355,38 @@ export default function App() {
       }`}
     >
       <aside
-        className={`flex w-72 shrink-0 flex-col border-r p-4 ${
-          isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'
-        }`}
+        aria-hidden={!sidebarOpen}
+        className={`flex shrink-0 flex-col overflow-hidden border-r transition-all duration-300 ease-out ${
+          sidebarOpen ? 'w-72 translate-x-0 p-4 opacity-100' : 'w-0 -translate-x-3 p-0 opacity-0'
+        } ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
       >
         <div className="mb-6 flex items-start justify-between gap-4">
           <div>
             <div className="text-xl font-semibold tracking-wide">AEGIS</div>
           </div>
-          <div className="space-y-1 text-right font-mono text-[11px] text-violet-300">
-            <div className="flex items-center justify-end gap-1.5">
-              <Cpu size={12} />
-              <span>{systemStats.cpu}%</span>
+          <div className="flex items-start gap-3">
+            <div className="space-y-1 text-right font-mono text-[11px] text-violet-300">
+              <div className="flex items-center justify-end gap-1.5">
+                <Cpu size={12} />
+                <span>{systemStats.cpu}%</span>
+              </div>
+              <div className="flex items-center justify-end gap-1.5">
+                <HardDrive size={12} />
+                <span>{systemStats.ram}%</span>
+              </div>
             </div>
-            <div className="flex items-center justify-end gap-1.5">
-              <HardDrive size={12} />
-              <span>{systemStats.ram}%</span>
-            </div>
+            <button
+              aria-label="Close sidebar"
+              className={`rounded-md border p-1.5 transition ${
+                isDark
+                  ? 'border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+                  : 'border-stone-300 text-slate-500 hover:bg-stone-200 hover:text-slate-900'
+              }`}
+              onClick={() => setSidebarOpen(false)}
+              type="button"
+            >
+              <PanelLeftClose size={15} />
+            </button>
           </div>
         </div>
 
@@ -1366,6 +1440,7 @@ export default function App() {
           ) : (
             sessions.map((session) => {
               const isDeleting = deletingSessionIds.includes(session.session_id);
+              const isNewSession = newSessionPulseId === session.session_id;
               const cardStateClasses = isDeleting
                 ? isDark
                   ? 'border-red-500 bg-red-950/40 opacity-0 scale-95 -translate-x-2'
@@ -1380,7 +1455,9 @@ export default function App() {
 
               return (
               <div
-                className={`w-full rounded-lg border p-3 text-left transition-all duration-300 ease-out ${cardStateClasses}`}
+                className={`w-full rounded-lg border p-3 text-left transition-all duration-500 ease-out ${
+                  isNewSession ? 'animate-[fadeInSession_520ms_ease-out]' : ''
+                } ${cardStateClasses}`}
                 key={session.session_id}
               >
                 <div className="flex items-start gap-2">
@@ -1470,10 +1547,26 @@ export default function App() {
             isDark ? 'border-zinc-800' : 'border-stone-300'
           }`}
         >
-          <div>
-            <div className="text-sm font-medium">{activeSession?.title ?? 'New chat'}</div>
-            <div className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-              Session: {activeSessionId ?? 'Not started yet'}
+          <div className="flex min-w-0 items-center gap-3">
+            {!sidebarOpen && (
+              <button
+                aria-label="Open sidebar"
+                className={`rounded-lg border p-2 transition ${
+                  isDark
+                    ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                    : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
+                }`}
+                onClick={() => setSidebarOpen(true)}
+                type="button"
+              >
+                <PanelLeftOpen size={16} />
+              </button>
+            )}
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{activeSession?.title ?? 'New chat'}</div>
+              <div className={`truncate text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                Session: {activeSessionId ?? 'Not started yet'}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1527,18 +1620,7 @@ export default function App() {
 
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
           <div className="mx-auto flex max-w-3xl flex-col gap-4">
-            {messages.length === 0 ? (
-              <div
-                className={`rounded-lg border p-6 ${
-                  isDark
-                    ? 'border-zinc-800 bg-zinc-900/40 text-zinc-400'
-                    : 'border-stone-300 bg-white text-slate-500'
-                }`}
-              >
-                Ask a question to start a session. The response streams from the Rust engine through
-                the same `/chat` endpoint used by the CLI.
-              </div>
-            ) : (
+            {messages.length === 0 ? null : (
               messages.map((message, index) => (
                 <div
                   className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
