@@ -50,6 +50,8 @@ struct StoredTurnRecord {
     model_name: String,
     created_at: DateTime<Utc>,
     trace: Vec<TraceEntry>,
+    #[serde(default)]
+    edited: bool,
 }
 
 impl MemoryStore {
@@ -93,18 +95,28 @@ impl MemoryStore {
         }
     }
 
-    pub async fn append_turn(
+    pub async fn append_turn_with_edit(
         &self,
         session_id: &str,
         query: &str,
         response: &str,
         model_name: &str,
         trace: &[TraceEntry],
+        replace_from_turn_index: Option<usize>,
+        edited: bool,
     ) -> anyhow::Result<()> {
         match &self.backend {
             SessionBackend::Files(store) => {
                 store
-                    .append_turn(session_id, query, response, model_name, trace)
+                    .append_turn_with_edit(
+                        session_id,
+                        query,
+                        response,
+                        model_name,
+                        trace,
+                        replace_from_turn_index,
+                        edited,
+                    )
                     .await
             }
             SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
@@ -205,13 +217,15 @@ impl FileSessionStore {
             .map(StoredSessionFile::into_session))
     }
 
-    async fn append_turn(
+    async fn append_turn_with_edit(
         &self,
         session_id: &str,
         query: &str,
         response: &str,
         model_name: &str,
         trace: &[TraceEntry],
+        replace_from_turn_index: Option<usize>,
+        edited: bool,
     ) -> anyhow::Result<()> {
         let mut stored = self
             .read_session_file(session_id)
@@ -219,6 +233,26 @@ impl FileSessionStore {
             .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?;
 
         let now = Utc::now();
+        if let Some(turn_index) = replace_from_turn_index {
+            if turn_index > stored.turns.len() {
+                anyhow::bail!(
+                    "Cannot edit turn {turn_index}; session `{session_id}` only has {} turns.",
+                    stored.turns.len()
+                );
+            }
+
+            let previous_first_query = stored.turns.first().map(|turn| turn.query.clone());
+            stored.turns.truncate(turn_index);
+
+            if turn_index == 0
+                && previous_first_query
+                    .as_deref()
+                    .is_some_and(|previous| stored.title == trimmed_title(previous))
+            {
+                stored.title = trimmed_title(query);
+            }
+        }
+
         if stored.title == "New chat" {
             stored.title = trimmed_title(query);
         }
@@ -229,6 +263,7 @@ impl FileSessionStore {
             model_name: model_name.to_string(),
             created_at: now,
             trace: trace.to_vec(),
+            edited,
         });
 
         self.write_session_file(&stored).await
@@ -321,6 +356,7 @@ impl StoredSessionFile {
                         query: turn.query,
                         response: turn.response,
                         created_at: turn.created_at,
+                        edited: turn.edited,
                     })
                     .collect(),
             },

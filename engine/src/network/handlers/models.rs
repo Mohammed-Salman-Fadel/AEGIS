@@ -42,7 +42,11 @@ pub struct ModelResponse {
 }
 
 pub async fn list_models(State(state): State<AppState>) -> Json<ModelListResponse> {
-    let (provider, model_names) = state.orchestrator.list_available_models().await.unwrap_or_else(|_| (state.orchestrator.current_provider_name(), vec![]));
+    let (provider, model_names) = state
+        .orchestrator
+        .list_available_models()
+        .await
+        .unwrap_or_else(|_| (state.orchestrator.current_provider_name(), vec![]));
     let active_model = state.orchestrator.current_model_name();
 
     Json(ModelListResponse {

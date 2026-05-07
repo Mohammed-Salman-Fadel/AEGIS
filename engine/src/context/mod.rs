@@ -11,6 +11,8 @@ pub struct Turn {
     pub query: String,
     pub response: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub edited: bool,
 }
 
 /// The conversation history for a session.

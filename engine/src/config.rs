@@ -74,7 +74,8 @@ impl AppConfig {
                 api_key: non_empty_env("AEGIS_OPENAI_COMPAT_API_KEY"),
             },
             rag: RagConfig {
-                base_url: env::var("AEGIS_RAG_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
+                base_url: env::var("AEGIS_RAG_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
             },
         })
     }

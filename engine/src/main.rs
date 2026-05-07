@@ -1,3 +1,5 @@
+#[path = "../../tools/calendar/mod.rs"]
+mod calendar_tool;
 mod classifier;
 mod compactor;
 mod config;
@@ -9,8 +11,8 @@ mod network;
 mod orchestrator;
 mod plan_parser;
 mod process_manager;
-mod provider_registry;
 mod prompt_builder;
+mod provider_registry;
 mod rag_client;
 mod tool_registry;
 mod user_profile;
@@ -47,7 +49,10 @@ async fn main() -> anyhow::Result<()> {
 
     let rag_client = std::sync::Arc::new(rag_client::RagClient::new(config.rag.base_url.clone()));
     if let Err(e) = rag_client.init().await {
-        tracing::warn!("Failed to initialize RAG client: {}. Ensure python RAG is running.", e);
+        tracing::warn!(
+            "Failed to initialize RAG client: {}. Ensure python RAG is running.",
+            e
+        );
     }
     let memory_store = memory_store::MemoryStore::new().await;
 

@@ -1,6 +1,12 @@
 fastapi
 uvicorn
-chromadb
-sentence-transformers
 PyMuPDF
 pydantic
+
+# Optional advanced backends:
+# - ChromaDB can be enabled with AEGIS_RAG_VECTOR_BACKEND=chroma.
+# - SentenceTransformers can be enabled with AEGIS_RAG_EMBEDDING_BACKEND=sentence-transformers.
+# Keep these optional because older Chroma/Pydantic combinations and first-run
+# Hugging Face model downloads can break local-only startup.
+# chromadb
+# sentence-transformers

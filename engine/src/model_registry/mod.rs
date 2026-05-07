@@ -1,6 +1,8 @@
 use std::env;
 use std::sync::RwLock;
 
+const DEFAULT_MODEL: &str = "llama3.2:latest";
+
 #[derive(Clone)]
 pub struct ModelProfile {
     pub name: String,
@@ -22,7 +24,7 @@ impl ModelRegistry {
     pub fn new() -> Self {
         Self {
             active_model: RwLock::new(
-                env::var("AEGIS_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string()),
+                env::var("AEGIS_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string()),
             ),
         }
     }
@@ -31,7 +33,7 @@ impl ModelRegistry {
         self.active_model
             .read()
             .map(|model| model.clone())
-            .unwrap_or_else(|_| "qwen3:4b".to_string())
+            .unwrap_or_else(|_| DEFAULT_MODEL.to_string())
     }
 
     pub fn set_active_model(&self, name: impl Into<String>) -> String {
@@ -42,7 +44,7 @@ impl ModelRegistry {
                 *active_model = name;
                 previous
             }
-            Err(_) => "qwen3:4b".to_string(),
+            Err(_) => DEFAULT_MODEL.to_string(),
         }
     }
 

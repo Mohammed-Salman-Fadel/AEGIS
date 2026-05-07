@@ -25,6 +25,13 @@ class IndexingService:
         chunks = []
         try:
             text = file_path.read_text(encoding='utf-8')
+        except UnicodeDecodeError:
+            text = file_path.read_bytes().decode('utf-8', errors='replace')
+        except Exception as e:
+            logger.error(f"Error processing text file {file_path}: {e}")
+            return chunks
+
+        try:
             if not text.strip():
                 return chunks
                 

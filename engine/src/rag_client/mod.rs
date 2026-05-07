@@ -29,6 +29,11 @@ struct QueryResponse {
     results: Vec<SearchResult>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct IndexOutcome {
+    pub chunks_added: usize,
+}
+
 impl RagClient {
     pub fn new(base_url: String) -> Self {
         Self {
@@ -50,8 +55,8 @@ impl RagClient {
         Ok(())
     }
 
-    pub async fn ingest(&self, file_path: String) -> anyhow::Result<()> {
-        let _ = self.init().await; // Ensure it is initialized before ingesting
+    pub async fn ingest(&self, file_path: String) -> anyhow::Result<IndexOutcome> {
+        self.init().await?; // Ensure it is initialized before ingesting
 
         let resp = self
             .client
@@ -63,11 +68,12 @@ impl RagClient {
             let txt = resp.text().await.unwrap_or_default();
             anyhow::bail!("RAG index failed: {}", txt);
         }
-        Ok(())
+
+        Ok(resp.json::<IndexOutcome>().await?)
     }
 
     pub async fn retrieve(&self, query: &str, limit: usize) -> anyhow::Result<Vec<String>> {
-        let _ = self.init().await; // Ensure it is initialized before querying
+        self.init().await?; // Ensure it is initialized before querying
 
         let resp = self
             .client
@@ -81,8 +87,7 @@ impl RagClient {
 
         if !resp.status().is_success() {
             let txt = resp.text().await.unwrap_or_default();
-            tracing::error!("RAG query failed: {}", txt);
-            return Ok(Vec::new());
+            anyhow::bail!("RAG query failed: {}", txt);
         }
 
         let result: QueryResponse = resp.json().await?;

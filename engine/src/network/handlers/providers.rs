@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::network::state::AppState;
@@ -70,7 +70,10 @@ pub async fn select_provider(
             outcome.previous_provider, outcome.current_provider
         )
     } else {
-        format!("`{}` is already the active provider.", outcome.current_provider)
+        format!(
+            "`{}` is already the active provider.",
+            outcome.current_provider
+        )
     };
 
     Ok(Json(ProviderSelectResponse {

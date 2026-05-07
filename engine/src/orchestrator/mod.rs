@@ -1,6 +1,6 @@
 use anyhow::Context;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 
 use crate::classifier::Classifier;
@@ -46,6 +46,18 @@ pub struct ProviderSwitchOutcome {
     pub previous_provider: String,
     pub current_provider: String,
     pub changed: bool,
+}
+
+fn format_active_documents(attachments: &[String]) -> String {
+    if attachments.is_empty() {
+        return "No explicit document attachments were provided for this turn.".to_string();
+    }
+
+    attachments
+        .iter()
+        .map(|attachment| format!("- {attachment}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl Orchestrator {
@@ -133,8 +145,18 @@ impl Orchestrator {
 
     pub async fn list_available_models(&self) -> anyhow::Result<(String, Vec<String>)> {
         let provider = self.current_provider_name();
-        let models = self.inference.read().await.list_models().await.unwrap_or_default();
+        let models = self
+            .inference
+            .read()
+            .await
+            .list_models()
+            .await
+            .unwrap_or_default();
         Ok((provider, models))
+    }
+
+    pub async fn call_inference(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
+        self.inference.read().await.call(prompt, model).await
     }
 
     pub fn list_providers(&self) -> Vec<(String, String, bool)> {
@@ -194,7 +216,9 @@ impl Orchestrator {
                     .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
                 let api_key = std::env::var("AEGIS_OPENAI_COMPAT_API_KEY").ok();
                 Box::new(
-                    crate::inference::backends::openai_compat::OpenAiCompatBackend::new(url, api_key),
+                    crate::inference::backends::openai_compat::OpenAiCompatBackend::new(
+                        url, api_key,
+                    ),
                 )
             }
         };
@@ -208,7 +232,6 @@ impl Orchestrator {
             changed: true,
         })
     }
-
 
     pub fn set_active_model(&self, name: &str) -> String {
         self.model_registry.set_active_model(name)
@@ -242,7 +265,7 @@ impl Orchestrator {
             });
         }
 
-self.inference
+        self.inference
             .read()
             .await
             .warm_model(next_model)
@@ -250,7 +273,13 @@ self.inference
             .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
 
         let previous_model = self.model_registry.set_active_model(next_model);
-        let unload_warning = match self.inference.read().await.unload_model(&previous_model).await {
+        let unload_warning = match self
+            .inference
+            .read()
+            .await
+            .unload_model(&previous_model)
+            .await
+        {
             Ok(()) => None,
             Err(error) => Some(format!(
                 "Switched successfully, but could not unload `{previous_model}`: {error}"
@@ -273,7 +302,7 @@ self.inference
         persisted_session_id: Option<String>,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
-        let session = if let Some(session_id) = persisted_session_id.as_deref() {
+        let mut session = if let Some(session_id) = persisted_session_id.as_deref() {
             self.memory_store
                 .get_session(session_id)
                 .await?
@@ -288,6 +317,18 @@ self.inference
             }
         };
 
+        if let Some(turn_index) = req.edit_from_turn_index {
+            if turn_index > session.history.turns.len() {
+                anyhow::bail!(
+                    "Cannot edit turn {turn_index}; session `{}` only has {} turns.",
+                    session.session_id,
+                    session.history.turns.len()
+                );
+            }
+
+            session.history.turns.truncate(turn_index);
+        }
+
         let model = self.model_registry.get_active();
         let mut ctx = RequestContext::new(
             working_session_id.clone(),
@@ -299,27 +340,49 @@ self.inference
         ctx.trace_summary("classify", "fallback");
 
         // 1. RAG (Retrieval-Augmented Generation): Retrieve relevant chunks from uploaded documents
-        let relevant_chunks = self
-            .rag_client
-            .retrieve(&ctx.original_query, 5)
-            .await
-            .unwrap_or_default();
+        let relevant_chunks = match self.rag_client.retrieve(&ctx.original_query, 5).await {
+            Ok(chunks) => chunks,
+            Err(error) if req.attachments.is_empty() => {
+                tracing::warn!(error = %error, "RAG retrieval unavailable; continuing without document context");
+                Vec::new()
+            }
+            Err(error) => {
+                anyhow::bail!("Could not retrieve context from the imported document set: {error}");
+            }
+        };
         let context_from_docs = relevant_chunks.join("\n---\n");
 
         // 2. Prompt Synthesis: Perform "Context Injection" if document data is available
         let synthesis_prompt = if !context_from_docs.is_empty() {
             ctx.trace_summary("rag", "context found and injected into prompt");
+            let active_documents = format_active_documents(&req.attachments);
             format!(
                 "You are the AEGIS AI Assistant. Below are excerpts from a document provided by the user. \
                 Please use this information to answer the question as accurately as possible. \
                 If the document does not contain the answer, use your general knowledge to assist.\n\n\
-                DOCUMENT CONTENT:\n{}\n\nUSER QUERY: {}",
-                context_from_docs, ctx.original_query
+                ACTIVE IMPORTED DOCUMENTS:\n{}\n\nDOCUMENT CONTENT:\n{}\n\nUSER QUERY: {}",
+                active_documents, context_from_docs, ctx.original_query
             )
         } else {
-            ctx.trace_summary("rag", "no relevant document context found");
-            self.prompt_builder
-                .build_synthesis_prompt(&ctx.history, &ctx.original_query, &[])
+            if req.attachments.is_empty() {
+                ctx.trace_summary("rag", "no relevant document context found");
+                self.prompt_builder
+                    .build_synthesis_prompt(&ctx.history, &ctx.original_query, &[])
+            } else {
+                ctx.trace_summary(
+                    "rag",
+                    "active documents present but no matching chunks found",
+                );
+                format!(
+                    "{}\n\nActive imported documents:\n{}\n\nNote: retrieval found no matching chunks for this turn, so answer carefully and say when the imported documents do not contain enough context.",
+                    self.prompt_builder.build_synthesis_prompt(
+                        &ctx.history,
+                        &ctx.original_query,
+                        &[]
+                    ),
+                    format_active_documents(&req.attachments)
+                )
+            }
         };
         let synthesis_prompt = user_profile::personalize_prompt(&synthesis_prompt);
 
@@ -333,12 +396,14 @@ self.inference
 
         if let Some(session_id) = persisted_session_id.as_deref() {
             self.memory_store
-                .append_turn(
+                .append_turn_with_edit(
                     session_id,
                     &req.message,
                     &final_answer,
                     &ctx.model.name,
                     &ctx.trace,
+                    req.edit_from_turn_index,
+                    req.edit_from_turn_index.is_some(),
                 )
                 .await?;
         }
@@ -362,7 +427,11 @@ self.inference
                         &ctx.original_query,
                         &step.input,
                     );
-                    self.inference.read().await.call(&prompt, &ctx.model.name).await?
+                    self.inference
+                        .read()
+                        .await
+                        .call(&prompt, &ctx.model.name)
+                        .await?
                 }
                 "rag" | "search" | "document" => {
                     let chunks = self
