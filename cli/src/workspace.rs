@@ -51,8 +51,15 @@ impl Workspace {
 
         let cli_dir = Self::resolve_existing(&root, &["src/cli", "cli"])
             .unwrap_or_else(|| root.join("src").join("cli"));
-        let engine_dir = Self::resolve_existing(&root, &["engine-rust"])
-            .unwrap_or_else(|| root.join("engine-rust"));
+        let engine_dir =
+            Self::resolve_existing(&root, &["engine", "engine-rust"]).unwrap_or_else(|| {
+                let engine = root.join("engine");
+                if engine.exists() {
+                    engine
+                } else {
+                    root.join("engine-rust")
+                }
+            });
         let frontend_dir = Self::resolve_existing(&root, &["frontend", "web-ui"])
             .unwrap_or_else(|| root.join("frontend"));
         let installer_dir =
@@ -72,7 +79,8 @@ impl Workspace {
 
     fn locate_root(start: &Path) -> Option<PathBuf> {
         for candidate in start.ancestors() {
-            let has_engine = candidate.join("engine-rust").exists();
+            let has_engine =
+                candidate.join("engine").exists() || candidate.join("engine-rust").exists();
             let has_cli =
                 candidate.join("src").join("cli").exists() || candidate.join("cli").exists();
 
@@ -131,13 +139,8 @@ impl Workspace {
             || self.rag_dir.join("poetry.lock").exists()
     }
 
-    pub fn engine_target_dir(&self, release: bool) -> PathBuf {
-        let profile = if release { "release" } else { "debug" };
-        self.cli_dir
-            .join("target")
-            .join("runtime")
-            .join("engine")
-            .join(profile)
+    pub fn engine_target_dir(&self, _release: bool) -> PathBuf {
+        self.root.join(".cargo-target-engine")
     }
 
     pub fn cli_build_target_dir(&self, release: bool) -> PathBuf {
@@ -192,8 +195,7 @@ impl Workspace {
             path: self.engine_dir.clone(),
             state: ComponentState::Missing,
             launchable: false,
-            note: "The engine-rust folder could not be found from the current workspace."
-                .to_string(),
+            note: "The engine folder could not be found from the current workspace.".to_string(),
         }
     }
 

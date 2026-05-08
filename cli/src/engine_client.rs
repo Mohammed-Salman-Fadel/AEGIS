@@ -7,6 +7,7 @@
 
 use std::env;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::AppResult;
@@ -60,6 +61,39 @@ pub struct SessionDetail {
     pub title: String,
     pub note: String,
     pub recent_turns: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IngestedDocument {
+    pub file_name: String,
+    pub stored_path: String,
+    pub chunks_added: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentIngestOutcome {
+    pub status: String,
+    pub total_chunks: usize,
+    pub documents: Vec<IngestedDocument>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CalendarPromptOutcome {
+    pub event: String,
+    pub message: String,
+    pub saved_to_calendar: bool,
+    pub file_opened: bool,
+    pub delivery_method: String,
+    pub parsed: Option<ParsedCalendarEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedCalendarEvent {
+    pub title: String,
+    pub start: String,
+    pub end: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -393,6 +427,116 @@ impl EngineClient {
         })
     }
 
+    pub fn ingest_document(
+        &self,
+        session_id: &str,
+        file_path: &Path,
+    ) -> AppResult<DocumentIngestOutcome> {
+        if !file_path.is_file() {
+            return Err(format!("`{}` is not a readable file.", file_path.display()));
+        }
+
+        let file_name = file_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "Could not determine the import file name.".to_string())?
+            .to_string();
+
+        let bytes = std::fs::read(file_path)
+            .map_err(|error| format!("Could not read `{}`: {error}", file_path.display()))?;
+        let file_size = bytes.len();
+        let part = reqwest::blocking::multipart::Part::bytes(bytes).file_name(file_name);
+        let form = reqwest::blocking::multipart::Form::new()
+            .text("session_id", session_id.to_string())
+            .part("file", part);
+        let request_path = format!("{}/ingest", self.base_url);
+        let response = reqwest::blocking::Client::new()
+            .post(&request_path)
+            .multipart(form)
+            .send()
+            .map_err(|error| {
+                if error.is_body() || error.is_request() {
+                    format!(
+                        "Could not upload document to engine: {error}. File size: {} bytes. If this is a large PDF, restart the engine with the updated upload limit and make sure the RAG service is running.",
+                        file_size
+                    )
+                } else {
+                    format!("Could not upload document to engine: {error}")
+                }
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine document import failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response
+            .json::<EngineIngestResponse>()
+            .map_err(|error| format!("Could not parse engine import response: {error}"))?;
+
+        Ok(DocumentIngestOutcome {
+            status: response.status,
+            total_chunks: response.total_chunks,
+            documents: response
+                .documents
+                .into_iter()
+                .map(|document| IngestedDocument {
+                    file_name: document.file_name,
+                    stored_path: document.stored_path,
+                    chunks_added: document.chunks_added,
+                })
+                .collect(),
+        })
+    }
+
+    pub fn create_calendar_event_from_prompt(
+        &self,
+        prompt: &str,
+    ) -> AppResult<CalendarPromptOutcome> {
+        let request_path = format!("{}/calendar/create-from-prompt", self.base_url);
+        let response = reqwest::blocking::Client::new()
+            .post(&request_path)
+            .json(&CalendarPromptRequest {
+                prompt: prompt.to_string(),
+            })
+            .send()
+            .map_err(|error| format!("Could not send calendar request to engine: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine calendar request failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response
+            .json::<EngineCalendarPromptResponse>()
+            .map_err(|error| format!("Could not parse engine calendar response: {error}"))?;
+
+        Ok(CalendarPromptOutcome {
+            event: response.event,
+            message: response.message,
+            saved_to_calendar: response.saved_to_calendar,
+            file_opened: response.file_opened,
+            delivery_method: response.delivery_method,
+            parsed: response.parsed.map(|parsed| ParsedCalendarEvent {
+                title: parsed.title,
+                start: parsed.start,
+                end: parsed.end,
+                description: parsed.description,
+                location: parsed.location,
+            }),
+        })
+    }
+
     pub fn list_models(&self) -> AppResult<Vec<ModelSummary>> {
         let current_model = self.current_model().ok();
         let request_path = format!("{}/models", self.base_url);
@@ -454,7 +598,11 @@ impl EngineClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
-            return Err(format!("LM Studio models request failed with HTTP {}. {}", status, body.trim()));
+            return Err(format!(
+                "LM Studio models request failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
         }
 
         let response = response
@@ -491,7 +639,11 @@ impl EngineClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
-            return Err(format!("Ollama model list request failed with HTTP {}. {}", status, body.trim()));
+            return Err(format!(
+                "Ollama model list request failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
         }
 
         let response = response
@@ -634,8 +786,46 @@ struct ChatRequestBody {
 }
 
 #[derive(Serialize)]
+struct CalendarPromptRequest {
+    prompt: String,
+}
+
+#[derive(Serialize)]
 struct SwitchModelRequest {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct EngineIngestResponse {
+    status: String,
+    total_chunks: usize,
+    documents: Vec<EngineIngestedDocument>,
+}
+
+#[derive(Deserialize)]
+struct EngineIngestedDocument {
+    file_name: String,
+    stored_path: String,
+    chunks_added: usize,
+}
+
+#[derive(Deserialize)]
+struct EngineCalendarPromptResponse {
+    event: String,
+    message: String,
+    saved_to_calendar: bool,
+    file_opened: bool,
+    delivery_method: String,
+    parsed: Option<EngineParsedCalendarEvent>,
+}
+
+#[derive(Deserialize)]
+struct EngineParsedCalendarEvent {
+    title: String,
+    start: String,
+    end: String,
+    description: Option<String>,
+    location: Option<String>,
 }
 
 #[derive(Deserialize)]
