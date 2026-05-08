@@ -1,9 +1,10 @@
 use super::{handlers, state::AppState};
+use crate::memory_store::Session;
 use crate::network::handlers::chat::ChatRequest;
 use axum::{
     Json, Router,
     extract::{
-        Multipart, State,
+        DefaultBodyLimit, Multipart, State,
         ws::{Message, WebSocketUpgrade},
     },
     http::{HeaderValue, Method, StatusCode},
@@ -19,8 +20,10 @@ use std::{
 use sysinfo::System;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
+use tracing::warn;
 
 static SYSTEM_STATS: OnceLock<Mutex<System>> = OnceLock::new();
+const MAX_INGEST_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
 
 // SYSTEM RESOURCE MONITORING
 async fn get_system_stats() -> Json<Value> {
@@ -122,6 +125,7 @@ struct IngestResponse {
     status: &'static str,
     total_chunks: usize,
     documents: Vec<IngestedDocument>,
+    session: Option<Session>,
 }
 
 struct PendingUpload {
@@ -250,10 +254,35 @@ async fn handle_pdf_ingest(
         ));
     }
 
+    let document_names = documents
+        .iter()
+        .map(|document| document.file_name.clone())
+        .collect::<Vec<_>>();
+    let session = match state
+        .orchestrator
+        .title_session_from_import(&session_id, &document_names)
+        .await
+    {
+        Ok(session) => Some(session),
+        Err(error) => {
+            warn!(
+                session_id,
+                "Document import succeeded, but session title generation failed: {error}"
+            );
+            state
+                .orchestrator
+                .get_session(&session_id)
+                .await
+                .ok()
+                .flatten()
+        }
+    };
+
     Ok(Json(IngestResponse {
         status: "indexed",
         total_chunks,
         documents,
+        session,
     }))
 }
 
@@ -309,7 +338,10 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::calendar::select_outlook_calendar),
         )
         .route("/system/stats", get(get_system_stats))
-        .route("/ingest", post(handle_pdf_ingest)) // State desteği eklendi
+        .route(
+            "/ingest",
+            post(handle_pdf_ingest).layer(DefaultBodyLimit::max(MAX_INGEST_UPLOAD_BYTES)),
+        )
         .route("/index/progress", get(handle_progress_ws))
         .route("/chat/stream", get(handle_chat_ws))
         .route(

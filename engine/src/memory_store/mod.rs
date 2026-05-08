@@ -241,21 +241,9 @@ impl FileSessionStore {
                 );
             }
 
-            let previous_first_query = stored.turns.first().map(|turn| turn.query.clone());
             stored.turns.truncate(turn_index);
-
-            if turn_index == 0
-                && previous_first_query
-                    .as_deref()
-                    .is_some_and(|previous| stored.title == trimmed_title(previous))
-            {
-                stored.title = trimmed_title(query);
-            }
         }
 
-        if stored.title == "New chat" {
-            stored.title = trimmed_title(query);
-        }
         stored.updated_at = now;
         stored.turns.push(StoredTurnRecord {
             query: query.to_string(),
@@ -377,15 +365,6 @@ impl StoredSessionFile {
 
 fn unavailable_error(reason: &str) -> anyhow::Error {
     anyhow::anyhow!("Session persistence is unavailable: {reason}")
-}
-
-fn trimmed_title(query: &str) -> String {
-    let title: String = query.trim().chars().take(60).collect();
-    if title.is_empty() {
-        "New chat".to_string()
-    } else {
-        title
-    }
 }
 
 fn normalized_user_title(title: &str) -> anyhow::Result<String> {

@@ -5,10 +5,20 @@
 //! Does not own: engine orchestration, session history, provider/model state, or dependency installation internals.
 //! Next TODOs: replace placeholder prints with real HTTP calls and move repeated text into richer UI helpers.
 
+use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::mem;
+use std::path::PathBuf;
 
 use clap::Parser;
+use crossterm::cursor::{MoveDown, MoveToColumn, MoveUp};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
+use crossterm::style::{Attribute, Print, SetAttribute};
+use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
+use crossterm::{execute, queue};
 
 use crate::banner;
 use crate::cli::Cli;
@@ -28,6 +38,12 @@ use crate::{AppContext, AppResult};
 enum InvocationMode {
     Direct,
     Shell,
+}
+
+enum SessionPromptInput {
+    Submit(String),
+    Tool(String),
+    Eof,
 }
 
 pub fn dispatch(ctx: &AppContext, command: Option<CommandKind>) -> AppResult<()> {
@@ -281,6 +297,7 @@ where
 {
     let mut loading = Some(ctx.ui.start_loading_animation("Calling LLM"));
     let mut saw_token = false;
+    let mut renderer = ctx.ui.streamed_markdown_renderer();
     let mut on_token = |token: &str| -> AppResult<()> {
         if !saw_token {
             if let Some(active) = loading.take() {
@@ -290,14 +307,14 @@ where
             saw_token = true;
         }
 
-        print!("{token}");
-        io::stdout()
-            .flush()
+        renderer
+            .push(token)
             .map_err(|error| format!("Could not flush streamed response: {error}"))?;
         Ok(())
     };
 
     let result = operation(&mut on_token);
+    drop(on_token);
 
     if let Some(active) = loading.take() {
         active.finish();
@@ -306,6 +323,9 @@ where
     match result {
         Ok(reply) => {
             if saw_token {
+                renderer
+                    .finish()
+                    .map_err(|error| format!("Could not finish streamed response: {error}"))?;
                 println!();
                 println!();
             } else {
@@ -315,6 +335,7 @@ where
         }
         Err(error) => {
             if saw_token {
+                let _ = renderer.finish();
                 println!();
                 println!();
             }
@@ -439,6 +460,10 @@ fn print_shell_help(ctx: &AppContext) {
     println!("- model list");
     println!("- model switch qwen3:4b");
     println!("- model download qwen3:4b");
+    println!("");
+    println!("Inside a session:");
+    println!("- /");
+    println!("  Open session tools: import document, calendar, export chat");
     println!("");
     println!("Built-ins:");
     println!("- help");
@@ -868,7 +893,11 @@ fn print_sessions(ctx: &AppContext, sessions: &[SessionSummary]) {
     }
 }
 
-fn print_providers(ctx: &AppContext, providers: &[ProviderSummary], current_provider: Option<&str>) {
+fn print_providers(
+    ctx: &AppContext,
+    providers: &[ProviderSummary],
+    current_provider: Option<&str>,
+) {
     if providers.is_empty() {
         println!("{}", ctx.ui.warning("No providers are available yet."));
         return;
@@ -878,7 +907,11 @@ fn print_providers(ctx: &AppContext, providers: &[ProviderSummary], current_prov
         let active = current_provider
             .map(|current| current.eq_ignore_ascii_case(&provider.name))
             .unwrap_or(false);
-        println!("- {}{}", provider.name, if active { " (active)" } else { "" });
+        println!(
+            "- {}{}",
+            provider.name,
+            if active { " (active)" } else { "" }
+        );
         println!("  {}", provider.description);
     }
 }
@@ -980,7 +1013,711 @@ fn print_session_mode_hint(ctx: &AppContext) {
         ctx.ui
             .muted("Type `quit` or `exit` to leave this session and return to the CLI home page.")
     );
+    println!(
+        "{}",
+        ctx.ui.muted(
+            "Type `/` to open the live tools palette; Backspace closes it, arrows or mouse select."
+        )
+    );
     println!();
+}
+
+fn session_tool_choices() -> Vec<MenuChoice> {
+    vec![
+        MenuChoice::new(
+            "Import document",
+            "import",
+            "Upload a PDF or TXT into this session's RAG context.",
+        ),
+        MenuChoice::new(
+            "Calendar",
+            "calendar",
+            "Create a local Outlook calendar event from a natural-language prompt.",
+        ),
+        MenuChoice::new(
+            "Export chat",
+            "export",
+            "Save this session transcript as a local Markdown file.",
+        ),
+    ]
+}
+
+fn dispatch_session_tool(ctx: &AppContext, session_id: &str, tool: &str) -> AppResult<()> {
+    match tool {
+        "import" => handle_session_tool_import(ctx, session_id),
+        "calendar" => handle_session_tool_calendar(ctx),
+        "export" => handle_session_tool_export(ctx, session_id),
+        _ => Ok(()),
+    }
+}
+
+fn prompt_for_session_tool_input(
+    ctx: &AppContext,
+    prompt: &str,
+    empty_message: &str,
+) -> AppResult<Option<String>> {
+    print!("{prompt}");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Could not flush session tool prompt: {error}"))?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).map_err(|error| {
+        if signals::was_ctrl_c(&error) {
+            signals::ctrl_c_exit_error()
+        } else {
+            format!("Could not read session tool input: {error}")
+        }
+    })?;
+
+    let value = input.trim();
+    if value.is_empty() {
+        println!("{}", ctx.ui.muted(empty_message));
+        Ok(None)
+    } else {
+        Ok(Some(value.trim_matches('"').to_string()))
+    }
+}
+
+fn handle_session_tool_import(ctx: &AppContext, session_id: &str) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Import Document"));
+    println!(
+        "{}",
+        ctx.ui
+            .muted("Supported files: PDF and TXT. The document will attach only to this session.")
+    );
+
+    let Some(path) = prompt_for_session_tool_input(
+        ctx,
+        "File path: ",
+        "Import cancelled; no file path entered.",
+    )?
+    else {
+        return Ok(());
+    };
+
+    let path = PathBuf::from(path);
+    let outcome = run_with_loading_message(ctx, "Indexing document", || {
+        ctx.engine.ingest_document(session_id, &path)
+    })?;
+
+    println!(
+        "{}",
+        ctx.ui.success(&format!(
+            "Imported {} document(s), indexed {} chunk(s).",
+            outcome.documents.len(),
+            outcome.total_chunks
+        ))
+    );
+    println!("{}", ctx.ui.muted(&format!("Status: {}", outcome.status)));
+    for document in outcome.documents {
+        println!(
+            "- {} ({} chunk(s))",
+            document.file_name, document.chunks_added
+        );
+        if ctx.ui.verbose {
+            println!("  {}", ctx.ui.muted(&document.stored_path));
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_session_tool_calendar(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Calendar"));
+    println!(
+        "{}",
+        ctx.ui.muted(
+            "Describe the event naturally, for example: `meeting with Jasser tomorrow at 3pm for one hour`."
+        )
+    );
+
+    let Some(prompt) = prompt_for_session_tool_input(
+        ctx,
+        "Event prompt: ",
+        "Calendar cancelled; no event prompt entered.",
+    )?
+    else {
+        return Ok(());
+    };
+
+    let outcome = run_with_loading_message(ctx, "Creating calendar event", || {
+        ctx.engine.create_calendar_event_from_prompt(&prompt)
+    })?;
+
+    println!("{}", ctx.ui.success(&outcome.message));
+    println!("Event   : {}", outcome.event);
+    println!("Delivery: {}", outcome.delivery_method);
+    println!(
+        "Saved   : {}",
+        if outcome.saved_to_calendar {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "Opened  : {}",
+        if outcome.file_opened { "yes" } else { "no" }
+    );
+
+    if let Some(parsed) = outcome.parsed {
+        println!("Title   : {}", parsed.title);
+        println!("Start   : {}", parsed.start);
+        println!("End     : {}", parsed.end);
+        if let Some(location) = parsed.location {
+            println!("Location: {location}");
+        }
+        if let Some(description) = parsed.description {
+            println!("Notes   : {description}");
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_session_tool_export(ctx: &AppContext, session_id: &str) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Export Chat"));
+    let detail = ctx.engine.show_session(session_id)?;
+    let default_path = format!("{}.md", safe_export_file_name(&detail.title, session_id));
+
+    println!(
+        "{}",
+        ctx.ui.muted(&format!(
+            "Press Enter to save as `{default_path}`, or enter a custom `.md` path."
+        ))
+    );
+    print!("Export path: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Could not flush export prompt: {error}"))?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).map_err(|error| {
+        if signals::was_ctrl_c(&error) {
+            signals::ctrl_c_exit_error()
+        } else {
+            format!("Could not read export path: {error}")
+        }
+    })?;
+
+    let export_path = input.trim().trim_matches('"');
+    let export_path = if export_path.is_empty() {
+        PathBuf::from(default_path)
+    } else {
+        PathBuf::from(export_path)
+    };
+
+    let mut transcript = String::new();
+    transcript.push_str("# AEGIS Chat Export\n\n");
+    transcript.push_str(&format!("Session: {}\n\n", detail.title));
+    transcript.push_str(&format!("Session ID: `{}`\n\n", detail.id));
+    transcript.push_str(&format!("{}\n\n", detail.note));
+
+    if detail.recent_turns.is_empty() {
+        transcript.push_str("_No saved turns in this session yet._\n");
+    } else {
+        for turn in detail.recent_turns {
+            if let Some(message) = turn.strip_prefix("user> ") {
+                transcript.push_str("## User\n\n");
+                transcript.push_str(message);
+                transcript.push_str("\n\n");
+            } else if let Some(message) = turn.strip_prefix("assistant> ") {
+                transcript.push_str("## AEGIS\n\n");
+                transcript.push_str(message);
+                transcript.push_str("\n\n");
+            } else {
+                transcript.push_str(&turn);
+                transcript.push_str("\n\n");
+            }
+        }
+    }
+
+    fs::write(&export_path, transcript)
+        .map_err(|error| format!("Could not write `{}`: {error}", export_path.display()))?;
+    println!(
+        "{}",
+        ctx.ui
+            .success(&format!("Chat exported to `{}`.", export_path.display()))
+    );
+
+    Ok(())
+}
+
+fn safe_export_file_name(title: &str, session_id: &str) -> String {
+    let mut safe = title
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+
+    while safe.contains("--") {
+        safe = safe.replace("--", "-");
+    }
+
+    safe = safe.trim_matches('-').chars().take(48).collect();
+    if safe.is_empty() || safe == "new-chat" {
+        format!("aegis-session-{session_id}")
+    } else {
+        safe
+    }
+}
+
+fn print_session_tool_error(ctx: &AppContext, tool: &str, error: &str) {
+    println!();
+    println!(
+        "{}",
+        ctx.ui
+            .error(&format!("The `{tool}` tool could not complete."))
+    );
+    println!("{}", ctx.ui.muted(&format!("Details: {error}")));
+
+    let lower = error.to_lowercase();
+    let guidance = if lower.contains("/ingest")
+        || lower.contains("rag")
+        || lower.contains("upload")
+        || lower.contains("document")
+    {
+        Some(
+            "Possible causes: the Rust engine is not running, the Python RAG service is not running on 127.0.0.1:8000, the file path is invalid, the file is too large, or the file type is not PDF/TXT.",
+        )
+    } else if lower.contains("calendar") || lower.contains("outlook") {
+        Some(
+            "Possible causes: the Rust engine is not running, classic Outlook is not available, no local calendar is selected, or the event prompt could not be parsed.",
+        )
+    } else if lower.contains("export") || lower.contains("write") || lower.contains("session") {
+        Some(
+            "Possible causes: the session could not be loaded, the export path is not writable, or the file is already locked by another program.",
+        )
+    } else if lower.contains("connection")
+        || lower.contains("could not reach")
+        || lower.contains("127.0.0.1")
+        || lower.contains("localhost")
+    {
+        Some(
+            "Possible causes: the local engine service is not running or the configured localhost URL is different from the active engine.",
+        )
+    } else {
+        None
+    };
+
+    if let Some(guidance) = guidance {
+        println!("{}", ctx.ui.warning(guidance));
+    }
+
+    println!(
+        "{}",
+        ctx.ui
+            .muted("The session is still active. Returning to `prompt>`.")
+    );
+    println!();
+}
+
+struct SessionPromptTerminalGuard;
+
+impl SessionPromptTerminalGuard {
+    fn enter() -> AppResult<Self> {
+        enable_raw_mode()
+            .map_err(|error| format!("Could not enable terminal raw mode: {error}"))?;
+        execute!(io::stdout(), EnableMouseCapture)
+            .map_err(|error| format!("Could not enable mouse capture: {error}"))?;
+        Ok(Self)
+    }
+}
+
+impl Drop for SessionPromptTerminalGuard {
+    fn drop(&mut self) {
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            SetAttribute(Attribute::Reset)
+        );
+        let _ = disable_raw_mode();
+    }
+}
+
+fn filtered_session_tool_indexes(buffer: &str, choices: &[MenuChoice]) -> Vec<usize> {
+    let Some(query) = buffer.strip_prefix('/') else {
+        return Vec::new();
+    };
+    let query = query.trim().to_lowercase();
+
+    choices
+        .iter()
+        .enumerate()
+        .filter_map(|(index, choice)| {
+            if query.is_empty()
+                || choice.label.to_lowercase().contains(&query)
+                || choice.value.to_lowercase().contains(&query)
+                || choice.description.to_lowercase().contains(&query)
+            {
+                Some(index)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn clear_session_prompt_render(previous_popup_lines: usize) -> AppResult<()> {
+    let mut stdout = io::stdout();
+
+    queue!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
+        .map_err(|error| format!("Could not clear session prompt: {error}"))?;
+
+    for _ in 0..previous_popup_lines {
+        queue!(stdout, MoveDown(1), Clear(ClearType::CurrentLine))
+            .map_err(|error| format!("Could not clear session tools menu: {error}"))?;
+    }
+
+    if previous_popup_lines > 0 {
+        queue!(stdout, MoveUp(previous_popup_lines as u16))
+            .map_err(|error| format!("Could not restore session prompt cursor: {error}"))?;
+    }
+
+    stdout
+        .flush()
+        .map_err(|error| format!("Could not flush session prompt: {error}"))
+}
+
+fn render_session_prompt_palette(
+    ctx: &AppContext,
+    prompt_label: &str,
+    buffer: &str,
+    choices: &[MenuChoice],
+    filtered_indexes: &[usize],
+    selected_index: usize,
+    previous_popup_lines: usize,
+) -> AppResult<usize> {
+    let mut stdout = io::stdout();
+    let palette_visible = buffer.starts_with('/');
+    let popup_lines = if palette_visible {
+        filtered_indexes.len().max(1)
+    } else {
+        0
+    };
+
+    clear_session_prompt_render(previous_popup_lines)?;
+    queue!(stdout, Print(prompt_label), Print(buffer))
+        .map_err(|error| format!("Could not render session prompt: {error}"))?;
+
+    if palette_visible {
+        if filtered_indexes.is_empty() {
+            queue!(
+                stdout,
+                Print("\r\n  No matching session tools. Backspace to close.")
+            )
+            .map_err(|error| format!("Could not render session tools menu: {error}"))?;
+        } else {
+            for (row_index, choice_index) in filtered_indexes.iter().enumerate() {
+                let choice = &choices[*choice_index];
+                let selected = row_index == selected_index;
+                queue!(stdout, Print("\r\n"))
+                    .map_err(|error| format!("Could not render session tools menu: {error}"))?;
+
+                if selected {
+                    queue!(stdout, SetAttribute(Attribute::Reverse))
+                        .map_err(|error| format!("Could not highlight session tool: {error}"))?;
+                }
+
+                queue!(
+                    stdout,
+                    Print(format!(
+                        "  {:<18} {}",
+                        choice.label,
+                        ctx.ui.muted(&choice.description)
+                    ))
+                )
+                .map_err(|error| format!("Could not render session tool: {error}"))?;
+
+                if selected {
+                    queue!(stdout, SetAttribute(Attribute::Reset)).map_err(|error| {
+                        format!("Could not reset session tool highlight: {error}")
+                    })?;
+                }
+            }
+        }
+
+        queue!(
+            stdout,
+            MoveUp(popup_lines as u16),
+            MoveToColumn((prompt_label.chars().count() + buffer.chars().count()) as u16)
+        )
+        .map_err(|error| format!("Could not restore session prompt cursor: {error}"))?;
+    }
+
+    stdout
+        .flush()
+        .map_err(|error| format!("Could not flush session prompt: {error}"))?;
+
+    Ok(popup_lines)
+}
+
+fn read_session_prompt_input(ctx: &AppContext) -> AppResult<SessionPromptInput> {
+    let prompt_label = "prompt> ";
+
+    if !io::stdin().is_terminal() {
+        print!("{prompt_label}");
+        io::stdout()
+            .flush()
+            .map_err(|error| format!("Could not flush session prompt: {error}"))?;
+
+        let mut input = String::new();
+        let bytes = io::stdin().read_line(&mut input).map_err(|error| {
+            if signals::was_ctrl_c(&error) {
+                signals::ctrl_c_exit_error()
+            } else {
+                format!("Could not read session input: {error}")
+            }
+        })?;
+
+        if bytes == 0 {
+            return Ok(SessionPromptInput::Eof);
+        }
+
+        return Ok(SessionPromptInput::Submit(input.trim().to_string()));
+    }
+
+    let _guard = SessionPromptTerminalGuard::enter()?;
+    let choices = session_tool_choices();
+    let mut buffer = String::new();
+    let mut selected_index = 0usize;
+    let mut previous_popup_lines = 0usize;
+
+    print!("{prompt_label}");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Could not flush session prompt: {error}"))?;
+    let mut prompt_row = crossterm::cursor::position()
+        .map(|(_, row)| row)
+        .unwrap_or(0);
+
+    loop {
+        match event::read().map_err(|error| format!("Could not read terminal event: {error}"))? {
+            Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        clear_session_prompt_render(previous_popup_lines)?;
+                        println!();
+                        return Err(signals::ctrl_c_exit_error());
+                    }
+                    KeyCode::Char('d')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && buffer.is_empty() =>
+                    {
+                        clear_session_prompt_render(previous_popup_lines)?;
+                        println!();
+                        return Ok(SessionPromptInput::Eof);
+                    }
+                    KeyCode::Char(character) => {
+                        let was_palette_visible = buffer.starts_with('/');
+                        buffer.push(character);
+
+                        if was_palette_visible
+                            || buffer.starts_with('/')
+                            || previous_popup_lines > 0
+                        {
+                            let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
+                            if selected_index >= filtered_indexes.len() {
+                                selected_index = filtered_indexes.len().saturating_sub(1);
+                            }
+                            previous_popup_lines = render_session_prompt_palette(
+                                ctx,
+                                prompt_label,
+                                &buffer,
+                                &choices,
+                                &filtered_indexes,
+                                selected_index,
+                                previous_popup_lines,
+                            )?;
+                            prompt_row = crossterm::cursor::position()
+                                .map(|(_, row)| row)
+                                .unwrap_or(prompt_row);
+                        } else {
+                            print!("{character}");
+                            io::stdout().flush().map_err(|error| {
+                                format!("Could not flush session prompt: {error}")
+                            })?;
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        if buffer.is_empty() {
+                            print!("\x07");
+                            io::stdout().flush().ok();
+                            continue;
+                        }
+
+                        let was_palette_visible = buffer.starts_with('/');
+                        buffer.pop();
+
+                        if was_palette_visible
+                            || buffer.starts_with('/')
+                            || previous_popup_lines > 0
+                        {
+                            let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
+                            if selected_index >= filtered_indexes.len() {
+                                selected_index = filtered_indexes.len().saturating_sub(1);
+                            }
+                            previous_popup_lines = render_session_prompt_palette(
+                                ctx,
+                                prompt_label,
+                                &buffer,
+                                &choices,
+                                &filtered_indexes,
+                                selected_index,
+                                previous_popup_lines,
+                            )?;
+                            prompt_row = crossterm::cursor::position()
+                                .map(|(_, row)| row)
+                                .unwrap_or(prompt_row);
+                        } else {
+                            print!("\x08 \x08");
+                            io::stdout().flush().map_err(|error| {
+                                format!("Could not flush session prompt: {error}")
+                            })?;
+                        }
+                    }
+                    KeyCode::Esc => {
+                        let had_visible_palette =
+                            buffer.starts_with('/') || previous_popup_lines > 0;
+                        buffer.clear();
+                        selected_index = 0;
+                        if had_visible_palette {
+                            previous_popup_lines = render_session_prompt_palette(
+                                ctx,
+                                prompt_label,
+                                &buffer,
+                                &choices,
+                                &[],
+                                selected_index,
+                                previous_popup_lines,
+                            )?;
+                            prompt_row = crossterm::cursor::position()
+                                .map(|(_, row)| row)
+                                .unwrap_or(prompt_row);
+                        }
+                    }
+                    KeyCode::Up if buffer.starts_with('/') => {
+                        let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
+                        if filtered_indexes.is_empty() {
+                            continue;
+                        }
+                        selected_index = selected_index.saturating_sub(1);
+                        previous_popup_lines = render_session_prompt_palette(
+                            ctx,
+                            prompt_label,
+                            &buffer,
+                            &choices,
+                            &filtered_indexes,
+                            selected_index,
+                            previous_popup_lines,
+                        )?;
+                        prompt_row = crossterm::cursor::position()
+                            .map(|(_, row)| row)
+                            .unwrap_or(prompt_row);
+                    }
+                    KeyCode::Down if buffer.starts_with('/') => {
+                        let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
+                        if filtered_indexes.is_empty() {
+                            continue;
+                        }
+                        selected_index = (selected_index + 1).min(filtered_indexes.len() - 1);
+                        previous_popup_lines = render_session_prompt_palette(
+                            ctx,
+                            prompt_label,
+                            &buffer,
+                            &choices,
+                            &filtered_indexes,
+                            selected_index,
+                            previous_popup_lines,
+                        )?;
+                        prompt_row = crossterm::cursor::position()
+                            .map(|(_, row)| row)
+                            .unwrap_or(prompt_row);
+                    }
+                    KeyCode::Enter if buffer.starts_with('/') => {
+                        let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
+                        if selected_index >= filtered_indexes.len() {
+                            selected_index = filtered_indexes.len().saturating_sub(1);
+                        }
+                        if filtered_indexes.is_empty() {
+                            print!("\x07");
+                            io::stdout().flush().ok();
+                            continue;
+                        }
+
+                        let choice = &choices[filtered_indexes[selected_index]];
+                        clear_session_prompt_render(previous_popup_lines)?;
+                        println!("{prompt_label}/{}", choice.value);
+                        return Ok(SessionPromptInput::Tool(choice.value.clone()));
+                    }
+                    KeyCode::Enter => {
+                        let submitted = buffer.trim().to_string();
+                        clear_session_prompt_render(previous_popup_lines)?;
+                        println!("{prompt_label}{submitted}");
+                        return Ok(SessionPromptInput::Submit(submitted));
+                    }
+                    _ => {}
+                }
+            }
+            Event::Mouse(mouse) if buffer.starts_with('/') => {
+                let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
+                if filtered_indexes.is_empty() {
+                    continue;
+                }
+                match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let clicked_row = mouse.row;
+                        if clicked_row > prompt_row {
+                            let row_index = usize::from(clicked_row - prompt_row - 1);
+                            if row_index < filtered_indexes.len() {
+                                let choice = &choices[filtered_indexes[row_index]];
+                                clear_session_prompt_render(previous_popup_lines)?;
+                                println!("{prompt_label}/{}", choice.value);
+                                return Ok(SessionPromptInput::Tool(choice.value.clone()));
+                            }
+                        }
+                    }
+                    MouseEventKind::ScrollUp => {
+                        selected_index = selected_index.saturating_sub(1);
+                        previous_popup_lines = render_session_prompt_palette(
+                            ctx,
+                            prompt_label,
+                            &buffer,
+                            &choices,
+                            &filtered_indexes,
+                            selected_index,
+                            previous_popup_lines,
+                        )?;
+                        prompt_row = crossterm::cursor::position()
+                            .map(|(_, row)| row)
+                            .unwrap_or(prompt_row);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        selected_index = (selected_index + 1).min(filtered_indexes.len() - 1);
+                        previous_popup_lines = render_session_prompt_palette(
+                            ctx,
+                            prompt_label,
+                            &buffer,
+                            &choices,
+                            &filtered_indexes,
+                            selected_index,
+                            previous_popup_lines,
+                        )?;
+                        prompt_row = crossterm::cursor::position()
+                            .map(|(_, row)| row)
+                            .unwrap_or(prompt_row);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn run_session_prompt_loop(
@@ -989,36 +1726,33 @@ fn run_session_prompt_loop(
     invocation_mode: InvocationMode,
 ) -> AppResult<()> {
     loop {
-        print!("prompt> ");
-        io::stdout()
-            .flush()
-            .map_err(|error| format!("Could not flush session prompt: {error}"))?;
-
-        let mut input = String::new();
-        let bytes = match io::stdin().read_line(&mut input) {
-            Ok(bytes) => bytes,
-            Err(error) if signals::was_ctrl_c(&error) => {
-                return Err(signals::ctrl_c_exit_error());
+        let prompt_input = read_session_prompt_input(ctx)?;
+        let prompt = match prompt_input {
+            SessionPromptInput::Eof => {
+                println!();
+                break;
             }
-            Err(error) => return Err(format!("Could not read session input: {error}")),
+            SessionPromptInput::Tool(tool) => {
+                match dispatch_session_tool(ctx, session_id, &tool) {
+                    Ok(()) => {}
+                    Err(error) if signals::is_ctrl_c_error(&error) => return Err(error),
+                    Err(error) => print_session_tool_error(ctx, &tool, &error),
+                }
+                continue;
+            }
+            SessionPromptInput::Submit(prompt) => prompt,
         };
 
-        if bytes == 0 {
-            println!();
-            break;
-        }
-
-        let prompt = input.trim();
         if prompt.is_empty() {
             continue;
         }
 
-        if matches!(prompt, "quit" | "exit") {
+        if matches!(prompt.as_str(), "quit" | "exit") {
             break;
         }
 
         let _reply = stream_llm_response(ctx, |on_token| {
-            ctx.engine.chat(prompt, Some(session_id), on_token)
+            ctx.engine.chat(&prompt, Some(session_id), on_token)
         })?;
     }
 
