@@ -10,12 +10,12 @@ import {
   Download,
   Edit3,
   HardDrive,
+  MessageSquare,
   MoreHorizontal,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Pin,
-  Plus,
   Send,
   Sun,
   Trash2,
@@ -105,6 +105,14 @@ interface SystemStats {
   ram: number;
 }
 
+interface ContextUsage {
+  provider: string;
+  model: string;
+  used_tokens: number;
+  context_window: number;
+  usage_source: string;
+}
+
 interface IndexedDocument {
   file_name: string;
   stored_path: string;
@@ -124,6 +132,46 @@ const API_BASE = '/api';
 const THEME_STORAGE_KEY = 'aegis-ui-theme';
 const INDEXED_DOCUMENTS_STORAGE_KEY = 'aegis-indexed-documents-by-session';
 const PINNED_SESSIONS_STORAGE_KEY = 'aegis-pinned-session-ids';
+
+const EMPTY_CONTEXT_USAGE: ContextUsage = {
+  provider: '',
+  model: '',
+  used_tokens: 0,
+  context_window: 0,
+  usage_source: 'not-loaded',
+};
+
+function normalizeContextUsage(data: Partial<ContextUsage>): ContextUsage {
+  return {
+    provider: String(data.provider ?? ''),
+    model: String(data.model ?? ''),
+    used_tokens: Math.max(0, Math.round(Number(data.used_tokens ?? 0))),
+    context_window: Math.max(0, Math.round(Number(data.context_window ?? 0))),
+    usage_source: String(data.usage_source ?? ''),
+  };
+}
+
+async function fetchContextUsage(sessionId: string | null): Promise<ContextUsage> {
+  const params = new URLSearchParams();
+
+  if (sessionId) {
+    params.set('session_id', sessionId);
+  }
+
+  const response = await fetch(`${API_BASE}/context/usage?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(`Engine returned HTTP ${response.status} while loading context usage.`);
+  }
+
+  return normalizeContextUsage((await response.json()) as Partial<ContextUsage>);
+}
+
+function formatTokenMeter(usage: ContextUsage) {
+  const used = usage.used_tokens.toLocaleString();
+  const limit = usage.context_window > 0 ? usage.context_window.toLocaleString() : '...';
+
+  return `${used} / ${limit}`;
+}
 
 function turnsToMessages(turns: EngineTurn[]): Message[] {
   return turns.flatMap((turn) => [
@@ -842,6 +890,29 @@ function safeExportFileName(title: string) {
     .toLowerCase();
 }
 
+function sessionUpdatedAtMs(session: EngineSessionSummary) {
+  const timestamp = Date.parse(session.updated_at);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function formatSessionLastAccessed(updatedAt: string) {
+  const timestamp = Date.parse(updatedAt);
+
+  if (Number.isNaN(timestamp)) {
+    return 'Unavailable';
+  }
+
+  const formattedDate = new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
+
+  return formattedDate;
+}
+
 function downloadConversationPdf(options: {
   title: string;
   sessionId?: string | null;
@@ -851,10 +922,11 @@ function downloadConversationPdf(options: {
   const blob = createConversationPdf(options);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
+  const sessionFileName = options.sessionId?.trim();
   const safeTitle = safeExportFileName(options.title);
 
   anchor.href = url;
-  anchor.download = `${safeTitle || 'aegis-chat'}.pdf`;
+  anchor.download = `${sessionFileName || safeTitle || 'aegis-chat'}.pdf`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -899,6 +971,7 @@ export default function App() {
   const [selectedOutlookCalendarId, setSelectedOutlookCalendarId] = useState('');
   const [loadingOutlookCalendars, setLoadingOutlookCalendars] = useState(false);
   const [systemStats, setSystemStats] = useState<SystemStats>({ cpu: 0, ram: 0 });
+  const [contextUsage, setContextUsage] = useState<ContextUsage>(EMPTY_CONTEXT_USAGE);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
   const [editingMessageText, setEditingMessageText] = useState('');
   const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
@@ -909,6 +982,7 @@ export default function App() {
   const [sessionMenuOpenId, setSessionMenuOpenId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const isDark = theme === 'dark';
   const resourceWarning =
     systemStats.cpu > 80 || systemStats.ram > 80
@@ -922,6 +996,7 @@ export default function App() {
   const visibleResourceWarning =
     resourceWarning && resourceWarning !== dismissedResourceWarning ? resourceWarning : null;
   const errorDismissible = error ? !isFatalUiError(error) : false;
+  const tokenMeterLabel = formatTokenMeter(contextUsage);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.session_id === activeSessionId),
@@ -943,6 +1018,12 @@ export default function App() {
 
       if (pinnedDifference !== 0) {
         return pinnedDifference;
+      }
+
+      const recentDifference = sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left);
+
+      if (recentDifference !== 0) {
+        return recentDifference;
       }
 
       return (
@@ -1047,6 +1128,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadContextUsage() {
+      try {
+        const usage = await fetchContextUsage(activeSessionId);
+        if (!cancelled) {
+          setContextUsage(usage);
+        }
+      } catch {
+        // Keep the last known token meter if the engine is briefly unavailable.
+      }
+    }
+
+    void loadContextUsage();
+    const interval = window.setInterval(() => {
+      void loadContextUsage();
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeSessionId]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
@@ -1096,6 +1202,12 @@ export default function App() {
       behavior: 'smooth',
     });
   }, [messages, isStreaming]);
+
+  useEffect(() => {
+    if (composerTextareaRef.current) {
+      fitTextareaToContent(composerTextareaRef.current);
+    }
+  }, [input]);
 
   async function handleSessionSelect(sessionId: string) {
     if (isStreaming) {
@@ -1674,6 +1786,11 @@ export default function App() {
 
       setStatus('Complete');
       await loadSessions();
+      try {
+        setContextUsage(await fetchContextUsage(sessionId));
+      } catch {
+        // The periodic token-meter refresh will retry without failing the chat.
+      }
       if (createdSessionId) {
         window.setTimeout(() => {
           setNewSessionPulseId((current) =>
@@ -1828,13 +1945,13 @@ export default function App() {
         </div>
 
         <button
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+          className="relative mb-4 flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold tracking-[0.14em] text-white hover:bg-emerald-500 disabled:opacity-60"
           disabled={isStreaming}
           onClick={handleNewSession}
           type="button"
         >
-          <Plus size={16} />
-          New Chat
+          <MessageSquare className="absolute left-3" size={15} />
+          <span>NEW CONVERSATION</span>
         </button>
 
         <div
@@ -1861,6 +1978,7 @@ export default function App() {
               const isActive = session.session_id === activeSessionId;
               const isPinned = pinnedSessionIdSet.has(session.session_id);
               const shouldOpenMenuUp = sessionIndex > sortedSessions.length - 4;
+              const lastAccessedLabel = formatSessionLastAccessed(session.updated_at);
               const cardStateClasses = isDeleting
                 ? isDark
                   ? 'border-transparent bg-red-950/40 text-red-100 opacity-0 scale-95 -translate-x-2'
@@ -1892,7 +2010,7 @@ export default function App() {
                     {editingSessionId === session.session_id ? (
                       <input
                         autoFocus
-                        className={`session-title-text min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-sm outline-none ${
+                        className={`session-title-text min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-[13px] outline-none ${
                           isDark
                             ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
                             : 'border-emerald-500 bg-white text-slate-900'
@@ -1922,15 +2040,22 @@ export default function App() {
                         }}
                         type="button"
                       >
-                        <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="flex min-w-0 flex-col gap-0.5">
                           <span
-                            className="session-title-text truncate text-sm leading-5"
+                            className="session-title-text truncate text-[13px] leading-5"
                             onDoubleClick={(event) => {
                               event.stopPropagation();
                               beginRenamingSession(session);
                             }}
                           >
                             {session.title}
+                          </span>
+                          <span
+                            className={`truncate text-[11px] leading-4 ${
+                              isDark ? 'text-zinc-500' : 'text-slate-500'
+                            }`}
+                          >
+                            {lastAccessedLabel}
                           </span>
                         </span>
                       </button>
@@ -2331,18 +2456,7 @@ export default function App() {
               </span>
             </div>
           )}
-          <form className="mx-auto flex max-w-3xl gap-3" onSubmit={handleSubmit}>
-            <input
-              className={`min-w-0 flex-1 rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${
-                isDark
-                  ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
-                  : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
-              }`}
-              disabled={isStreaming}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="Message AEGIS"
-              value={input}
-            />
+          <form className="mx-auto max-w-3xl" onSubmit={handleSubmit}>
             <input
               accept=".pdf,.txt"
               className="hidden"
@@ -2353,82 +2467,127 @@ export default function App() {
               title="Supported files: PDF, TXT"
               type="file"
             />
-            <div className="relative">
-              <button
-                aria-expanded={toolsOpen}
-                className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm transition-all duration-200 ${
-                  isStreaming ? 'cursor-not-allowed opacity-60' : ''
-                } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${
-                  toolsOpen
-                    ? isDark
-                      ? 'border-emerald-500/40 bg-zinc-800 text-emerald-200 shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
-                      : 'border-emerald-400/70 bg-emerald-50 text-emerald-800 shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
-                    : isDark
-                      ? 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
-                      : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-50'
+            <div
+              className={`rounded-xl border px-3 pb-2.5 pt-3 shadow-sm transition-colors ${
+                isDark
+                  ? 'border-zinc-800 bg-zinc-950/92 text-zinc-100 shadow-black/30'
+                  : 'border-stone-300 bg-white text-slate-900 shadow-stone-300/30'
+              }`}
+            >
+              <textarea
+                className={`max-h-44 min-h-[38px] w-full resize-none bg-transparent text-sm leading-6 outline-none ${
+                  isDark
+                    ? 'placeholder:text-zinc-500'
+                    : 'placeholder:text-slate-400'
                 }`}
                 disabled={isStreaming}
-                onClick={() => setToolsOpen((current) => !current)}
-                type="button"
-              >
-                <Wrench className={toolsOpen ? 'rotate-12 transition-transform' : 'transition-transform'} size={16} />
-                <span>Tools</span>
-                <ChevronDown
-                  className={`transition-transform duration-200 ${toolsOpen ? 'rotate-180' : 'rotate-0'}`}
-                  size={14}
-                />
-              </button>
-              {toolsOpen && (
-                <div
-                  className={`absolute bottom-full right-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${
-                    isDark
-                      ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
-                      : 'border-stone-300 bg-white text-slate-900'
-                  }`}
-                >
+                onChange={(event) => setInput(event.target.value)}
+                onInput={(event) => fitTextareaToContent(event.currentTarget)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                placeholder="Message your model..."
+                ref={composerTextareaRef}
+                rows={1}
+                value={input}
+              />
+
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <div className="relative">
                   <button
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${
-                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                    aria-expanded={toolsOpen}
+                    className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition-all duration-200 ${
+                      isStreaming ? 'cursor-not-allowed opacity-60' : ''
+                    } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${
+                      toolsOpen
+                        ? isDark
+                          ? 'border border-emerald-500/40 bg-zinc-800 text-emerald-200 shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
+                          : 'border border-emerald-400/70 bg-emerald-50 text-emerald-800 shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
+                        : isDark
+                          ? 'border border-transparent text-zinc-500 hover:border-emerald-500/30 hover:bg-zinc-800 hover:text-emerald-200 hover:shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
+                          : 'border border-transparent text-slate-500 hover:border-emerald-400/60 hover:bg-emerald-50 hover:text-emerald-800 hover:shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
                     }`}
-                    disabled={isStreaming || isUploading}
-                    onClick={handleImportToolClick}
+                    disabled={isStreaming}
+                    onClick={() => setToolsOpen((current) => !current)}
                     type="button"
                   >
-                    <Upload size={15} />
-                    Import
+                    <Wrench
+                      className={toolsOpen ? 'rotate-12 transition-transform' : 'transition-transform'}
+                      size={15}
+                    />
+                    <span>Tools</span>
+                    <ChevronDown
+                      className={`transition-transform duration-200 ${toolsOpen ? 'rotate-180' : 'rotate-0'}`}
+                      size={13}
+                    />
                   </button>
-                  <button
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
-                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                  {toolsOpen && (
+                    <div
+                      className={`absolute bottom-full left-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${
+                        isDark
+                          ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                          : 'border-stone-300 bg-white text-slate-900'
+                      }`}
+                    >
+                      <button
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${
+                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                        }`}
+                        disabled={isStreaming || isUploading}
+                        onClick={handleImportToolClick}
+                        type="button"
+                      >
+                        <Upload size={15} />
+                        Import
+                      </button>
+                      <button
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
+                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                        }`}
+                        onClick={openCalendarTool}
+                        type="button"
+                      >
+                        <Calendar size={15} />
+                        Calendar
+                      </button>
+                      <button
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
+                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                        }`}
+                        disabled={messages.length === 0}
+                        onClick={exportChatAsPdf}
+                        type="button"
+                      >
+                        <Download size={15} />
+                        Export Chat
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`font-mono text-[11px] ${
+                      isDark ? 'text-zinc-600' : 'text-slate-400'
                     }`}
-                    onClick={openCalendarTool}
-                    type="button"
+                    title={`${contextUsage.model || 'Active model'} context usage from the last completed inference`}
                   >
-                    <Calendar size={15} />
-                    Calendar
-                  </button>
+                    {tokenMeterLabel}
+                  </span>
                   <button
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
-                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                    }`}
-                    disabled={messages.length === 0}
-                    onClick={exportChatAsPdf}
-                    type="button"
+                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-emerald-500 disabled:opacity-60"
+                    disabled={isStreaming || !input.trim() || isUploading}
+                    type="submit"
                   >
-                    <Download size={15} />
-                    Export Chat
+                    <span>Send</span>
+                    <Send size={15} />
                   </button>
                 </div>
-              )}
+              </div>
             </div>
-            <button
-              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
-              disabled={isStreaming || !input.trim() || isUploading}
-              type="submit"
-            >
-              <Send size={16} />
-              Send
-            </button>
           </form>
         </footer>
       </main>
