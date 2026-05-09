@@ -51,6 +51,10 @@ struct StoredTurnRecord {
     created_at: DateTime<Utc>,
     trace: Vec<TraceEntry>,
     #[serde(default)]
+    prompt_tokens: Option<usize>,
+    #[serde(default)]
+    completion_tokens: Option<usize>,
+    #[serde(default)]
     edited: bool,
 }
 
@@ -104,6 +108,8 @@ impl MemoryStore {
         trace: &[TraceEntry],
         replace_from_turn_index: Option<usize>,
         edited: bool,
+        prompt_tokens: Option<usize>,
+        completion_tokens: Option<usize>,
     ) -> anyhow::Result<()> {
         match &self.backend {
             SessionBackend::Files(store) => {
@@ -116,9 +122,21 @@ impl MemoryStore {
                         trace,
                         replace_from_turn_index,
                         edited,
+                        prompt_tokens,
+                        completion_tokens,
                     )
                     .await
             }
+            SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
+        }
+    }
+
+    pub async fn latest_prompt_token_usage(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Option<usize>> {
+        match &self.backend {
+            SessionBackend::Files(store) => store.latest_prompt_token_usage(session_id).await,
             SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
         }
     }
@@ -226,6 +244,8 @@ impl FileSessionStore {
         trace: &[TraceEntry],
         replace_from_turn_index: Option<usize>,
         edited: bool,
+        prompt_tokens: Option<usize>,
+        completion_tokens: Option<usize>,
     ) -> anyhow::Result<()> {
         let mut stored = self
             .read_session_file(session_id)
@@ -251,10 +271,25 @@ impl FileSessionStore {
             model_name: model_name.to_string(),
             created_at: now,
             trace: trace.to_vec(),
+            prompt_tokens,
+            completion_tokens,
             edited,
         });
 
         self.write_session_file(&stored).await
+    }
+
+    async fn latest_prompt_token_usage(&self, session_id: &str) -> anyhow::Result<Option<usize>> {
+        Ok(self
+            .read_session_file(session_id)
+            .await?
+            .and_then(|session| {
+                session
+                    .turns
+                    .iter()
+                    .rev()
+                    .find_map(|turn| turn.prompt_tokens)
+            }))
     }
 
     async fn rename_session(&self, session_id: &str, title: &str) -> anyhow::Result<Session> {
@@ -345,6 +380,8 @@ impl StoredSessionFile {
                         response: turn.response,
                         created_at: turn.created_at,
                         edited: turn.edited,
+                        prompt_tokens: turn.prompt_tokens,
+                        completion_tokens: turn.completion_tokens,
                     })
                     .collect(),
             },

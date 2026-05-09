@@ -13,6 +13,10 @@ pub struct Turn {
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub edited: bool,
+    #[serde(default)]
+    pub prompt_tokens: Option<usize>,
+    #[serde(default)]
+    pub completion_tokens: Option<usize>,
 }
 
 /// The conversation history for a session.

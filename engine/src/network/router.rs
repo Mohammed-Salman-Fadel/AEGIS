@@ -324,6 +324,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/models", get(handlers::models::list_models))
         .route("/models/current", get(handlers::models::current_model))
         .route("/models/select", post(handlers::models::select_model))
+        .route("/context/usage", get(handlers::context::usage))
         .route("/calendar/event", post(handlers::calendar::create_event))
         .route(
             "/calendar/create-from-prompt",

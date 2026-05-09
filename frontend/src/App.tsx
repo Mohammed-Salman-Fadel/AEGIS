@@ -158,19 +158,57 @@ async function fetchContextUsage(sessionId: string | null): Promise<ContextUsage
     params.set('session_id', sessionId);
   }
 
-  const response = await fetch(`${API_BASE}/context/usage?${params.toString()}`);
-  if (!response.ok) {
-    throw new Error(`Engine returned HTTP ${response.status} while loading context usage.`);
+  const query = params.toString();
+  const suffix = query ? `?${query}` : '';
+  const urls = [`${API_BASE}/context/usage${suffix}`, `/context/usage${suffix}`];
+  let lastError: Error | null = null;
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Engine returned HTTP ${response.status} while loading context usage.`);
+      }
+
+      return normalizeContextUsage((await response.json()) as Partial<ContextUsage>);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Could not load context usage.');
+    }
   }
 
-  return normalizeContextUsage((await response.json()) as Partial<ContextUsage>);
+  throw lastError ?? new Error('Could not load context usage.');
 }
 
 function formatTokenMeter(usage: ContextUsage) {
+  if (usage.usage_source === 'unavailable') {
+    return 'Tokens unavailable';
+  }
+
+  if (usage.context_window <= 0) {
+    return 'Loading tokens...';
+  }
+
   const used = usage.used_tokens.toLocaleString();
-  const limit = usage.context_window > 0 ? usage.context_window.toLocaleString() : '...';
+  const limit = usage.context_window.toLocaleString();
 
   return `${used} / ${limit}`;
+}
+
+function ThinkingIndicator({ isDark }: { isDark: boolean }) {
+  return (
+    <div
+      className={`flex items-center gap-2 text-xs font-medium ${
+        isDark ? 'text-zinc-400' : 'text-slate-500'
+      }`}
+    >
+      <span>Thinking</span>
+      <span className="flex items-center gap-1" aria-hidden="true">
+        <span className="thinking-dot" />
+        <span className="thinking-dot thinking-dot-delay-1" />
+        <span className="thinking-dot thinking-dot-delay-2" />
+      </span>
+    </div>
+  );
 }
 
 function turnsToMessages(turns: EngineTurn[]): Message[] {
@@ -972,6 +1010,10 @@ export default function App() {
   const [loadingOutlookCalendars, setLoadingOutlookCalendars] = useState(false);
   const [systemStats, setSystemStats] = useState<SystemStats>({ cpu: 0, ram: 0 });
   const [contextUsage, setContextUsage] = useState<ContextUsage>(EMPTY_CONTEXT_USAGE);
+  const [streamingSessionId, setStreamingSessionId] = useState<string | null>(null);
+  const [streamingMessagesBySession, setStreamingMessagesBySession] = useState<
+    Record<string, Message[]>
+  >({});
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
   const [editingMessageText, setEditingMessageText] = useState('');
   const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
@@ -983,6 +1025,8 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const activeSessionIdRef = useRef<string | null>(activeSessionId);
+  const streamingMessagesBySessionRef = useRef<Record<string, Message[]>>({});
   const isDark = theme === 'dark';
   const resourceWarning =
     systemStats.cpu > 80 || systemStats.ram > 80
@@ -1068,6 +1112,7 @@ export default function App() {
     }
 
     const session = (await response.json()) as EngineSession;
+    activeSessionIdRef.current = session.session_id;
     setActiveSessionId(session.session_id);
     return session;
   }, []);
@@ -1082,6 +1127,7 @@ export default function App() {
     }
 
     const session = (await response.json()) as EngineSession;
+    activeSessionIdRef.current = session.session_id;
     setActiveSessionId(session.session_id);
     setMessages(turnsToMessages(session.history.turns));
     setStatus('Ready');
@@ -1093,6 +1139,10 @@ export default function App() {
       setStatus('Engine unavailable');
     });
   }, [loadSessions]);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1137,7 +1187,12 @@ export default function App() {
           setContextUsage(usage);
         }
       } catch {
-        // Keep the last known token meter if the engine is briefly unavailable.
+        if (!cancelled && contextUsage.context_window <= 0) {
+          setContextUsage({
+            ...EMPTY_CONTEXT_USAGE,
+            usage_source: 'unavailable',
+          });
+        }
       }
     }
 
@@ -1150,7 +1205,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activeSessionId]);
+  }, [activeSessionId, contextUsage.context_window]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1210,11 +1265,22 @@ export default function App() {
   }, [input]);
 
   async function handleSessionSelect(sessionId: string) {
-    if (isStreaming) {
+    if (deletingSessionIds.includes(sessionId)) {
       return;
     }
 
     setSessionMenuOpenId(null);
+
+    if (streamingSessionId === sessionId) {
+      const streamingMessages = streamingMessagesBySession[sessionId];
+      if (streamingMessages) {
+        activeSessionIdRef.current = sessionId;
+        setActiveSessionId(sessionId);
+        setMessages(streamingMessages);
+        setStatus('Inference');
+        return;
+      }
+    }
 
     try {
       await loadSession(sessionId);
@@ -1230,6 +1296,7 @@ export default function App() {
     }
 
     setSessionMenuOpenId(null);
+    activeSessionIdRef.current = null;
     setActiveSessionId(null);
     setMessages([]);
     setInput('');
@@ -1683,7 +1750,29 @@ export default function App() {
     setError(null);
     setStatus('Inference');
     setIsStreaming(true);
-    setMessages(nextMessages);
+
+    let targetSessionId: string | null = null;
+    let seedMessages = nextMessages;
+    const updateTargetMessages = (updater: (current: Message[]) => Message[]) => {
+      if (!targetSessionId) {
+        return;
+      }
+
+      const sessionId = targetSessionId;
+      const updatedMessages = updater(
+        streamingMessagesBySessionRef.current[sessionId] ?? seedMessages,
+      );
+
+      streamingMessagesBySessionRef.current = {
+        ...streamingMessagesBySessionRef.current,
+        [sessionId]: updatedMessages,
+      };
+      setStreamingMessagesBySession(streamingMessagesBySessionRef.current);
+
+      if (activeSessionIdRef.current === sessionId) {
+        setMessages(updatedMessages);
+      }
+    };
 
     try {
       let sessionId = activeSessionId;
@@ -1695,6 +1784,19 @@ export default function App() {
         createdSessionId = session.session_id;
         setNewSessionPulseId(session.session_id);
         await loadSessions();
+      }
+
+      targetSessionId = sessionId;
+      seedMessages = nextMessages;
+      setStreamingSessionId(sessionId);
+      streamingMessagesBySessionRef.current = {
+        ...streamingMessagesBySessionRef.current,
+        [sessionId]: seedMessages,
+      };
+      setStreamingMessagesBySession(streamingMessagesBySessionRef.current);
+
+      if (activeSessionIdRef.current === sessionId) {
+        setMessages(seedMessages);
       }
 
       const response = await fetch(`${API_BASE}/chat`, {
@@ -1745,7 +1847,7 @@ export default function App() {
             throw new Error(data);
           }
 
-          setMessages((current) => {
+          updateTargetMessages((current) => {
             const next = [...current];
             const last = next[next.length - 1];
 
@@ -1768,7 +1870,7 @@ export default function App() {
           throw new Error(finalData);
         }
 
-        setMessages((current) => {
+        updateTargetMessages((current) => {
           const next = [...current];
           const last = next[next.length - 1];
 
@@ -1801,9 +1903,17 @@ export default function App() {
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Could not send chat request.');
       setStatus('Chat failed');
-      setMessages((current) => current.filter((message) => message.content.length > 0));
+      updateTargetMessages((current) => current.filter((message) => message.content.length > 0));
     } finally {
       setIsStreaming(false);
+      setStreamingSessionId(null);
+      if (targetSessionId) {
+        const finishedSessionId = targetSessionId;
+        const next = { ...streamingMessagesBySessionRef.current };
+        delete next[finishedSessionId];
+        streamingMessagesBySessionRef.current = next;
+        setStreamingMessagesBySession(next);
+      }
     }
   }
 
@@ -2034,7 +2144,7 @@ export default function App() {
                     ) : (
                       <button
                         className="min-w-0 flex-1 py-1 text-left"
-                        disabled={isStreaming || isDeleting}
+                        disabled={isDeleting}
                         onClick={() => {
                           void handleSessionSelect(session.session_id);
                         }}
@@ -2331,7 +2441,11 @@ export default function App() {
                         }`}
                       >
                         {message.role === 'assistant' ? (
-                          <AssistantMarkdown content={message.content} />
+                          message.content ? (
+                            <AssistantMarkdown content={message.content} />
+                          ) : (
+                            <ThinkingIndicator isDark={isDark} />
+                          )
                         ) : (
                           <span className="whitespace-pre-wrap">{message.content || '...'}</span>
                         )}

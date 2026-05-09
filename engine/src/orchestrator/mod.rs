@@ -49,6 +49,14 @@ pub struct ProviderSwitchOutcome {
     pub changed: bool,
 }
 
+pub struct ContextUsageSnapshot {
+    pub provider: String,
+    pub model: String,
+    pub used_tokens: usize,
+    pub context_window: usize,
+    pub usage_source: String,
+}
+
 fn format_active_documents(attachments: &[String]) -> String {
     if attachments.is_empty() {
         return "No explicit document attachments were provided for this turn.".to_string();
@@ -324,6 +332,44 @@ impl Orchestrator {
 
     pub fn current_provider_name(&self) -> String {
         self.provider_registry.current_provider_name()
+    }
+
+    pub async fn context_usage(
+        &self,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<ContextUsageSnapshot> {
+        let model = self.model_registry.current_model_name();
+        let provider = self.current_provider_name();
+        let context_window = self
+            .inference
+            .read()
+            .await
+            .context_window(&model)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.model_registry.get_active().context_window);
+
+        let used_tokens = match session_id {
+            Some(session_id) if !session_id.trim().is_empty() => self
+                .memory_store
+                .latest_prompt_token_usage(session_id)
+                .await?
+                .unwrap_or(0),
+            _ => 0,
+        };
+
+        Ok(ContextUsageSnapshot {
+            provider,
+            model,
+            used_tokens,
+            context_window,
+            usage_source: if used_tokens > 0 {
+                "ollama-prompt-eval-count".to_string()
+            } else {
+                "no-session-usage-yet".to_string()
+            },
+        })
     }
 
     pub async fn list_available_models(&self) -> anyhow::Result<(String, Vec<String>)> {
@@ -633,6 +679,8 @@ impl Orchestrator {
                         &ctx.trace,
                         req.edit_from_turn_index,
                         req.edit_from_turn_index.is_some(),
+                        None,
+                        None,
                     )
                     .await?;
 
@@ -674,8 +722,12 @@ impl Orchestrator {
                 "You are the AEGIS AI Assistant. Below are excerpts from a document provided by the user. \
                 Please use this information to answer the question as accurately as possible. \
                 If the document does not contain the answer, use your general knowledge to assist.\n\n\
+                LOCAL RUNTIME CONTEXT:\n{}\n\n\
                 ACTIVE IMPORTED DOCUMENTS:\n{}\n\nDOCUMENT CONTENT:\n{}\n\nUSER QUERY: {}",
-                active_documents, context_from_docs, ctx.original_query
+                self.prompt_builder.runtime_context(),
+                active_documents,
+                context_from_docs,
+                ctx.original_query
             )
         } else {
             if req.attachments.is_empty() {
@@ -705,7 +757,7 @@ impl Orchestrator {
             .inference
             .read()
             .await
-            .stream(&synthesis_prompt, &ctx.model.name, tx)
+            .stream_with_usage(&synthesis_prompt, &ctx.model.name, tx)
             .await?;
 
         if let Some(session_id) = persisted_session_id.as_deref() {
@@ -713,11 +765,13 @@ impl Orchestrator {
                 .append_turn_with_edit(
                     session_id,
                     &req.message,
-                    &final_answer,
+                    &final_answer.text,
                     &ctx.model.name,
                     &ctx.trace,
                     req.edit_from_turn_index,
                     req.edit_from_turn_index.is_some(),
+                    final_answer.usage.prompt_tokens,
+                    final_answer.usage.completion_tokens,
                 )
                 .await?;
 
@@ -727,7 +781,7 @@ impl Orchestrator {
             }
         }
 
-        Ok(final_answer)
+        Ok(final_answer.text)
     }
 
     /// Executes specific atomic steps planned by the reasoning engine.
