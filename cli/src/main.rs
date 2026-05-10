@@ -60,6 +60,7 @@ fn main() {
     // - Vite Web UI on the configured localhost UI port
     // This is intentionally best-effort so commands can still explain what is missing.
     runner::ensure_local_runtime(&ctx.ui, &ctx.workspace);
+    ctx.engine.warm_active_model_in_background();
 
     // The banner stays a presentation concern. Main decides whether it appears,
     // then hands off all command behavior to `commands.rs`.

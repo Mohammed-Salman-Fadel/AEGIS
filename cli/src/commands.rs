@@ -29,9 +29,9 @@ use crate::engine_client::{
 };
 use crate::install;
 use crate::menu::{self, MenuChoice};
-use crate::runner;
 use crate::signals;
 use crate::user_profile;
+use crate::workspace::ComponentState;
 use crate::{AppContext, AppResult};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -297,7 +297,7 @@ where
 {
     let mut loading = Some(ctx.ui.start_loading_animation("Calling LLM"));
     let mut saw_token = false;
-    let mut renderer = ctx.ui.streamed_markdown_renderer();
+    let mut renderer = ctx.ui.live_token_renderer();
     let mut on_token = |token: &str| -> AppResult<()> {
         if !saw_token {
             if let Some(active) = loading.take() {
@@ -309,7 +309,7 @@ where
 
         renderer
             .push(token)
-            .map_err(|error| format!("Could not flush streamed response: {error}"))?;
+            .map_err(|error| format!("Could not stream response token: {error}"))?;
         Ok(())
     };
 
@@ -325,7 +325,7 @@ where
             if saw_token {
                 renderer
                     .finish()
-                    .map_err(|error| format!("Could not finish streamed response: {error}"))?;
+                    .map_err(|error| format!("Could not finish response stream: {error}"))?;
                 println!();
                 println!();
             } else {
@@ -665,8 +665,8 @@ fn handle_model(ctx: &AppContext, command: Option<ModelCommand>) -> AppResult<()
 
 //? HANDLES "STATUS" COMMAND
 fn show_status(ctx: &AppContext) -> AppResult<()> {
-    let report = DoctorReport::collect(&ctx.workspace);
     let health = ctx.engine.health();
+    let rag_health = ctx.engine.rag_health();
     let web_ui_url = ctx.workspace.web_ui_url();
 
     println!("{}", ctx.ui.header("Status"));
@@ -679,6 +679,7 @@ fn show_status(ctx: &AppContext) -> AppResult<()> {
         if health.reachable { "yes" } else { "no" }
     );
     println!("Health note    : {}", health.note);
+    print_live_engine_state(ctx, health.reachable);
     println!(
         "CLI target dir : {}",
         ctx.workspace.cli_build_target_dir(false).display()
@@ -686,11 +687,32 @@ fn show_status(ctx: &AppContext) -> AppResult<()> {
     println!();
     println!("{}", ctx.ui.header("Components"));
     for component in ctx.workspace.components() {
+        let (state, note) = if component.name == "RAG" {
+            if rag_health.reachable {
+                (
+                    ComponentState::Ready,
+                    format!("RAG service is running at {}.", rag_health.request_path),
+                )
+            } else if component.launchable {
+                (
+                    ComponentState::Missing,
+                    format!(
+                        "RAG runtime files are ready, but the service is not reachable yet: {}",
+                        rag_health.note
+                    ),
+                )
+            } else {
+                (component.state, component.note.clone())
+            }
+        } else {
+            (component.state, component.note.clone())
+        };
+
         println!(
             "{} {:<10} {}",
-            ctx.ui.component_badge(component.state),
+            ctx.ui.component_badge(state),
             component.name,
-            component.note
+            note
         );
         if ctx.ui.verbose {
             println!(
@@ -700,19 +722,43 @@ fn show_status(ctx: &AppContext) -> AppResult<()> {
             );
         }
     }
-    println!();
-    println!("{}", ctx.ui.header("Doctor Snapshot"));
-    println!(
-        "{} blocking issue(s), {} warning(s), {} missing item(s)",
-        report.blocking_issues(),
-        report.warnings(),
-        report.missing()
-    );
-    if let Some(plan) = runner::engine_launch_plan(&ctx.workspace) {
-        println!("Engine start preview: {}", plan.command_preview());
-    }
-    println!("{}", ctx.ui.todo("TODO: query the engine `/health` endpoint and report live provider/model/session state."));
     Ok(())
+}
+
+fn print_live_engine_state(ctx: &AppContext, engine_reachable: bool) {
+    println!();
+    println!("{}", ctx.ui.header("Engine State"));
+
+    if !engine_reachable {
+        println!(
+            "{}",
+            ctx.ui.warning(
+                "Live provider, model, and session state is unavailable until the engine responds."
+            )
+        );
+        return;
+    }
+
+    match ctx.engine.current_provider() {
+        Ok(provider) => println!("Provider       : {provider}"),
+        Err(error) => println!("Provider       : {}", ctx.ui.warning(&error)),
+    }
+
+    match ctx.engine.current_model() {
+        Ok(model) => println!("Model          : {model}"),
+        Err(error) => println!("Model          : {}", ctx.ui.warning(&error)),
+    }
+
+    match ctx.engine.list_sessions() {
+        Ok(sessions) => {
+            println!("Saved sessions : {}", sessions.len());
+            if let Some(latest) = sessions.first() {
+                println!("Latest session : {} [{}]", latest.title, latest.id);
+                println!("Latest details : {}", latest.description);
+            }
+        }
+        Err(error) => println!("Saved sessions : {}", ctx.ui.warning(&error)),
+    }
 }
 
 fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
@@ -1760,10 +1806,6 @@ fn run_session_prompt_loop(
 }
 
 fn leave_session_prompt(ctx: &AppContext, invocation_mode: InvocationMode) -> AppResult<()> {
-    println!("{}", ctx.ui.success("Session saved. Returning to home."));
-    println!();
-    show_home(ctx)?;
-
     if matches!(invocation_mode, InvocationMode::Direct) && io::stdin().is_terminal() {
         run_interactive_shell(ctx)?;
     }
