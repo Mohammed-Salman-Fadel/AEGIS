@@ -16,18 +16,9 @@ pub struct InstallArgs {
 
     #[arg(
         long,
-        help = "Future flag: run the Windows-first installer flow once TODOs are implemented"
+        help = "Approve unattended installer prompts such as installing Ollama when it is missing"
     )]
     pub yes: bool,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SaveArgs {
-    #[arg(
-        value_name = "note",
-        help = "A personalization note to store locally for future responses"
-    )]
-    pub note: String,
 }
 
 #[derive(Debug, Clone, Args)]

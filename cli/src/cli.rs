@@ -9,26 +9,24 @@ use clap::{Parser, Subcommand};
 
 use crate::args::{
     AskArgs, ChatArgs, InstallArgs, OptionalNameArg, OptionalSessionIdArg, ReplArgs,
-    RequiredSessionIdArg, SaveArgs,
+    RequiredSessionIdArg,
 };
 
 pub const HELP_EXAMPLES: &str = "\
 Examples:
   aegis
   aegis install
+  aegis start
+  aegis stop
+  aegis open
   aegis chat \"What can you do?\"
-  aegis load 1189578c-9c96-4b4c-8015-4d0673544a6a
   aegis repl
   aegis ask --stdin
   aegis session new
-  aegis save \"my name is Sam\"
-    aegis provider list
-    aegis model
-    aegis model list
-    aegis model switch qwen3:4b
-    aegis model download qwen3:4b
-    aegis status
-    aegis doctor";
+  aegis provider list
+  aegis model select llama3.2:3b
+  aegis status
+  aegis doctor";
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -57,9 +55,10 @@ pub struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum CommandKind {
     Install(InstallArgs),
-    Save(SaveArgs),
+    Start,
+    Stop,
+    Open,
     Chat(ChatArgs),
-    Load(RequiredSessionIdArg),
     Ask(AskArgs),
     Repl(ReplArgs),
     Session {
@@ -72,7 +71,7 @@ pub enum CommandKind {
     },
     Model {
         #[command(subcommand)]
-        command: Option<ModelCommand>,
+        command: ModelCommand,
     },
     Status,
     Doctor {
@@ -87,8 +86,7 @@ pub enum SessionCommand {
     List,
     Show(RequiredSessionIdArg),
     Use(OptionalSessionIdArg),
-    #[command(alias = "reset")]
-    Delete(RequiredSessionIdArg),
+    Reset(RequiredSessionIdArg),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -100,7 +98,5 @@ pub enum ProviderCommand {
 #[derive(Debug, Clone, Subcommand)]
 pub enum ModelCommand {
     List,
-    #[command(alias = "select")]
-    Switch(OptionalNameArg),
-    Download(OptionalNameArg),
+    Select(OptionalNameArg),
 }

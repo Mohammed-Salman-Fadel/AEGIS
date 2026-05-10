@@ -5,46 +5,21 @@
 //! Does not own: engine orchestration, session history, provider/model state, or dependency installation internals.
 //! Next TODOs: replace placeholder prints with real HTTP calls and move repeated text into richer UI helpers.
 
-use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::mem;
-use std::path::PathBuf;
 
 use clap::Parser;
-use crossterm::cursor::{MoveDown, MoveToColumn, MoveUp};
-use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    MouseButton, MouseEventKind,
-};
-use crossterm::style::{Attribute, Print, SetAttribute};
-use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
-use crossterm::{execute, queue};
 
 use crate::banner;
 use crate::cli::Cli;
 use crate::cli::{CommandKind, ModelCommand, ProviderCommand, SessionCommand};
 use crate::doctor::{CheckItem, DoctorReport, Health};
-use crate::engine_client::{
-    ActionStatus, CreatedSession, ModelSummary, ProviderSummary, SessionSummary,
-};
-use crate::install;
+use crate::engine_client::{ActionStatus, ModelSummary, ProviderSummary, SessionSummary};
+use crate::install::{self, StartOutcome};
 use crate::menu::{self, MenuChoice};
+use crate::runner;
 use crate::signals;
-use crate::user_profile;
-use crate::workspace::ComponentState;
 use crate::{AppContext, AppResult};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum InvocationMode {
-    Direct,
-    Shell,
-}
-
-enum SessionPromptInput {
-    Submit(String),
-    Tool(String),
-    Eof,
-}
 
 pub fn dispatch(ctx: &AppContext, command: Option<CommandKind>) -> AppResult<()> {
     match command {
@@ -55,23 +30,20 @@ pub fn dispatch(ctx: &AppContext, command: Option<CommandKind>) -> AppResult<()>
             }
             Ok(())
         }
-        Some(command) => dispatch_command(ctx, command, InvocationMode::Direct),
+        Some(command) => dispatch_command(ctx, command),
     }
 }
 
-fn dispatch_command(
-    ctx: &AppContext,
-    command: CommandKind,
-    invocation_mode: InvocationMode,
-) -> AppResult<()> {
+fn dispatch_command(ctx: &AppContext, command: CommandKind) -> AppResult<()> {
     match command {
         CommandKind::Install(args) => handle_install(ctx, args),
-        CommandKind::Save(args) => handle_save(ctx, &args.note),
+        CommandKind::Start => handle_start(ctx),
+        CommandKind::Stop => handle_stop(ctx),
+        CommandKind::Open => handle_open(ctx),
         CommandKind::Chat(args) => handle_chat(ctx, &args.prompt, args.session_id.as_deref()),
-        CommandKind::Load(args) => handle_load(ctx, &args.id, invocation_mode),
         CommandKind::Ask(args) => handle_ask(ctx, args.stdin, args.session_id.as_deref()),
         CommandKind::Repl(args) => handle_repl(ctx, args.session_id.as_deref()),
-        CommandKind::Session { command } => handle_session(ctx, command, invocation_mode),
+        CommandKind::Session { command } => handle_session(ctx, command),
         CommandKind::Provider { command } => handle_provider(ctx, command),
         CommandKind::Model { command } => handle_model(ctx, command),
         CommandKind::Status => show_status(ctx),
@@ -81,27 +53,18 @@ fn dispatch_command(
 
 //? PRIMARY HOME INTERFACE
 fn show_home(ctx: &AppContext) -> AppResult<()> {
-    let report = DoctorReport::collect(&ctx.workspace);
-    let web_ui_url = ctx.workspace.web_ui_url();
-    // ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+    let report = if ctx.runtime.is_installed() {
+        DoctorReport::collect_installed(&ctx.runtime, &ctx.engine)
+    } else {
+        DoctorReport::collect(&ctx.workspace)
+    };
+    let runtime_status = install::runtime_status(&ctx.runtime);
 
     println!("{}", ctx.ui.header("AEGIS CLI"));
-    println!("Private, local-first assistant scaffold built to stay inside the Rust CLI boundary.");
-    // println!("{}", ctx.ui.muted("This pass is intentionally TODO-heavy: commands explain how the CLI should connect to the engine without pretending the backend wiring is finished."));
+    println!("Private, local-first assistant with a Windows bootstrap installer and localhost runtime.");
     println!();
-    println!("Workspace : {}", ctx.workspace.root.display());
-    println!("Web UI URL: {web_ui_url}");
-    // println!();
-    // println!("{}", ctx.ui.header("Command Families"));
-    // println!("- install");
-    // println!("- chat");
-    // println!("- ask --stdin");
-    // println!("- repl");
-    // println!("- session");
-    // println!("- provider");
-    // println!("- model");
-    // println!("- status");
-    // println!("- doctor");
+    println!("Install root : {}", ctx.runtime.root.display());
+    println!("Localhost URL: {}", runtime_status.engine_url);
     println!();
     println!("{}", ctx.ui.header("Readiness Snapshot"));
     println!(
@@ -110,14 +73,47 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
         report.warnings(),
         report.missing()
     );
-    // println!("{}", ctx.ui.todo("TODO: once the engine endpoints are real, this home screen should show active session, provider, and model summaries from the backend."));
+    if runtime_status.installed {
+        println!(
+            "Runtime      : {}",
+            runtime_status
+                .version
+                .clone()
+                .unwrap_or_else(|| "installed".to_string())
+        );
+        println!(
+            "Engine       : {}",
+            if runtime_status.engine_running {
+                "running"
+            } else {
+                "stopped"
+            }
+        );
+        println!(
+            "RAG          : {}",
+            if runtime_status.rag_running {
+                "running"
+            } else {
+                "stopped"
+            }
+        );
+        println!(
+            "Model        : {} ({})",
+            runtime_status.model_name,
+            if runtime_status.model_present {
+                "present"
+            } else {
+                "missing"
+            }
+        );
+    }
     if io::stdin().is_terminal() {
         println!();
         println!("{}", ctx.ui.header("Live Shell"));
         println!(
             "{}",
             ctx.ui
-                .muted("Enter commands like `status`, `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
+                .muted("Enter commands like `install`, `start`, `status`, or `chat \"hello\"`, then type `help` for the full command list.")
         );
         println!(
             "{}",
@@ -129,20 +125,18 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn handle_clear(ctx: &AppContext) -> AppResult<()> {
-    let web_ui_url = ctx.workspace.web_ui_url();
     ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+    let runtime_status = install::runtime_status(&ctx.runtime);
 
     println!("{}", ctx.ui.header("AEGIS CLI"));
-    // println!();
-    println!("Workspace : {}", ctx.workspace.root.display());
-    println!("Web UI URL: {web_ui_url}");
+    println!("Install root : {}", ctx.runtime.root.display());
+    println!("Localhost URL: {}", runtime_status.engine_url);
 
     if io::stdin().is_terminal() {
         println!();
-        // println!("{}", ctx.ui.header("Live Shell"));
         println!(
             "{}",
-            ctx.ui.muted("Enter commands `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
+            ctx.ui.muted("Enter commands like `install`, `start`, `status`, or `chat \"hello\"`, then type `help` for the full command list.")
         );
         println!();
     }
@@ -150,45 +144,78 @@ fn handle_clear(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult<()> {
-    let plan = install::build_install_plan(&ctx.workspace);
-    install::print_install_plan(&ctx.ui, &plan);
-    println!();
+    let status = install::run_install(ctx, &args)?;
 
-    if args.yes && !args.plan_only {
-        println!("{}", ctx.ui.warning("TODO: map each install step to runner.rs subprocess plans before `--yes` performs system changes."));
-    } else {
+    if !args.plan_only {
+        println!();
+        println!("{}", ctx.ui.header("Install Result"));
         println!(
-            "{}",
-            ctx.ui
-                .muted("Scaffold mode: no dependency installation is executed yet.")
+            "Version      : {}",
+            status.version.unwrap_or_else(|| "unknown".to_string())
         );
+        println!("Install root : {}", status.install_root.display());
+        println!("Engine URL   : {}", status.engine_url);
+        println!("RAG URL      : {}", status.rag_url);
+        println!("UI URL       : {}", status.ui_url);
+        println!("Model        : {}", status.model_name);
     }
 
     Ok(())
 }
 
-fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {
-    let path = user_profile::append_note(note)?;
-    println!("{}", ctx.ui.header("Personalization Saved"));
-    println!(
-        "{}",
-        ctx.ui.success("Saved your note for future responses.")
-    );
-    println!(
-        "{}",
-        ctx.ui
-            .muted("AEGIS will feed this information to the model when it is relevant.")
-    );
-    if ctx.ui.verbose {
-        println!("File: {}", path.display());
+fn handle_start(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Start"));
+    let started = install::start_runtime_stack(&ctx.runtime)?;
+    if started.ollama_ready {
+        println!("{}", ctx.ui.success("Ollama is reachable."));
     }
+    match started.rag {
+        StartOutcome::Started => println!("{}", ctx.ui.success("AEGIS RAG sidecar started.")),
+        StartOutcome::AlreadyRunning => {
+            println!("{}", ctx.ui.muted("AEGIS RAG sidecar is already running."))
+        }
+    }
+    match started.engine {
+        StartOutcome::Started => println!("{}", ctx.ui.success("AEGIS engine started.")),
+        StartOutcome::AlreadyRunning => {
+            println!("{}", ctx.ui.muted("AEGIS engine is already running."))
+        }
+    }
+    Ok(())
+}
+
+fn handle_stop(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Stop"));
+    let (engine_stopped, rag_stopped) = install::stop_runtime_stack(&ctx.runtime)?;
+    if engine_stopped {
+        println!("{}", ctx.ui.success("AEGIS engine stopped."));
+    } else {
+        println!(
+            "{}",
+            ctx.ui.muted("No managed AEGIS engine process was running.")
+        );
+    }
+    if rag_stopped {
+        println!("{}", ctx.ui.success("AEGIS RAG sidecar stopped."));
+    } else {
+        println!(
+            "{}",
+            ctx.ui.muted("No managed AEGIS RAG sidecar process was running.")
+        );
+    }
+    Ok(())
+}
+
+fn handle_open(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Open"));
+    install::open_ui(&ctx.runtime)?;
+    println!("{}", ctx.ui.success("Opened the AEGIS localhost UI."));
     Ok(())
 }
 
 fn handle_chat(ctx: &AppContext, prompt: &str, session_id: Option<&str>) -> AppResult<()> {
-    let reply = stream_llm_response(ctx, |on_token| {
-        ctx.engine.chat(prompt, session_id, on_token)
-    })?;
+    println!("{}", ctx.ui.header("Chat"));
+    let reply = ctx.engine.chat(prompt, session_id)?;
     if ctx.ui.verbose {
         println!();
         println!("Endpoint: {}", reply.request_path);
@@ -229,12 +256,9 @@ fn handle_ask(ctx: &AppContext, read_from_stdin: bool, session_id: Option<&str>)
         return Ok(());
     }
 
-    let reply = stream_llm_response(ctx, |on_token| {
-        ctx.engine.chat_from_stdin(prompt, session_id, on_token)
-    })?;
-    if ctx.ui.verbose {
-        println!("Endpoint: {}", reply.request_path);
-    }
+    let reply = ctx.engine.chat_from_stdin(prompt, session_id)?;
+    println!("{}", reply.message);
+    println!("Endpoint: {}", reply.request_path);
     Ok(())
 }
 
@@ -280,68 +304,11 @@ fn handle_repl(ctx: &AppContext, session_id: Option<&str>) -> AppResult<()> {
             break;
         }
 
-        let _reply = stream_llm_response(ctx, |on_token| {
-            ctx.engine.repl_turn(prompt, session_id, on_token)
-        })?;
+        let reply = ctx.engine.repl_turn(prompt, session_id)?;
+        println!("{}", reply.message);
     }
 
     Ok(())
-}
-
-fn stream_llm_response<F>(
-    ctx: &AppContext,
-    operation: F,
-) -> AppResult<crate::engine_client::ChatReply>
-where
-    F: FnOnce(&mut dyn FnMut(&str) -> AppResult<()>) -> AppResult<crate::engine_client::ChatReply>,
-{
-    let mut loading = Some(ctx.ui.start_loading_animation("Calling LLM"));
-    let mut saw_token = false;
-    let mut renderer = ctx.ui.live_token_renderer();
-    let mut on_token = |token: &str| -> AppResult<()> {
-        if !saw_token {
-            if let Some(active) = loading.take() {
-                active.finish();
-            }
-            println!();
-            saw_token = true;
-        }
-
-        renderer
-            .push(token)
-            .map_err(|error| format!("Could not stream response token: {error}"))?;
-        Ok(())
-    };
-
-    let result = operation(&mut on_token);
-    drop(on_token);
-
-    if let Some(active) = loading.take() {
-        active.finish();
-    }
-
-    match result {
-        Ok(reply) => {
-            if saw_token {
-                renderer
-                    .finish()
-                    .map_err(|error| format!("Could not finish response stream: {error}"))?;
-                println!();
-                println!();
-            } else {
-                ctx.ui.print_markdownish_response(&reply.message);
-            }
-            Ok(reply)
-        }
-        Err(error) => {
-            if saw_token {
-                let _ = renderer.finish();
-                println!();
-                println!();
-            }
-            Err(error)
-        }
-    }
 }
 
 // Interactive shell logic
@@ -350,7 +317,7 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
 
     // Shell command loop
     loop {
-        print!("{} ", ctx.ui.info("aegis-shell>"));
+        print!("aegis-shell> ");
         io::stdout()
             .flush()
             .map_err(|error| format!("Could not flush shell prompt: {error}"))?;
@@ -429,7 +396,7 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
                 ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
             }
 
-            if let Err(error) = dispatch_command(ctx, command, InvocationMode::Shell) {
+            if let Err(error) = dispatch_command(ctx, command) {
                 if signals::is_ctrl_c_error(&error) {
                     return Err(error);
                 }
@@ -447,23 +414,16 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
 fn print_shell_help(ctx: &AppContext) {
     println!("{}", ctx.ui.header("Aegis Help"));
     println!("You can run the following commands without the `aegis` prefix:");
-    // println!("Examples:");
+    println!("- install");
+    println!("- start");
+    println!("- stop");
+    println!("- open");
     println!("- status");
     println!("- chat \"hello\"");
-    println!("- load 1189578c-9c96-4b4c-8015-4d0673544a6a");
-    println!("- save \"my name is Sam\"");
     println!("- repl");
     println!("- session list");
     println!("- provider select ollama");
-    println!("- provider select lmstudio");
-    println!("- model");
     println!("- model list");
-    println!("- model switch qwen3:4b");
-    println!("- model download qwen3:4b");
-    println!("");
-    println!("Inside a session:");
-    println!("- /");
-    println!("  Open session tools: import document, calendar, export chat");
     println!("");
     println!("Built-ins:");
     println!("- help");
@@ -476,15 +436,6 @@ fn print_shell_help(ctx: &AppContext) {
         ctx.ui
             .muted("Type `quit` or `exit` at any time to stop the CLI immediately.")
     );
-}
-
-fn handle_load(
-    ctx: &AppContext,
-    session_id: &str,
-    invocation_mode: InvocationMode,
-) -> AppResult<()> {
-    println!("{}", ctx.ui.header("Session Load"));
-    enter_session(ctx, session_id, invocation_mode)
 }
 
 fn parse_shell_cli(line: &str) -> AppResult<Option<Cli>> {
@@ -550,22 +501,13 @@ fn tokenize_command_line(line: &str) -> AppResult<Vec<String>> {
     Ok(tokens)
 }
 
-fn handle_session(
-    ctx: &AppContext,
-    command: SessionCommand,
-    invocation_mode: InvocationMode,
-) -> AppResult<()> {
+fn handle_session(ctx: &AppContext, command: SessionCommand) -> AppResult<()> {
     // Sessions are engine-owned. The CLI should only request operations and maybe
     // remember a lightweight "active session" pointer later for convenience.
     match command {
         SessionCommand::New => {
             println!("{}", ctx.ui.header("Session New"));
-            let session = ctx.engine.create_session()?;
-            let session_id = session.id.clone();
-            print_created_session(ctx, session);
-            if io::stdin().is_terminal() {
-                run_session_prompt_loop(ctx, &session_id, invocation_mode)?;
-            }
+            print_action_status(ctx, ctx.engine.create_session()?);
         }
         SessionCommand::List => {
             println!("{}", ctx.ui.header("Session List"));
@@ -585,14 +527,14 @@ fn handle_session(
         SessionCommand::Use(args) => {
             println!("{}", ctx.ui.header("Session Use"));
             if let Some(session_id) = args.id {
-                enter_session(ctx, &session_id, invocation_mode)?;
+                print_action_status(ctx, ctx.engine.use_session(&session_id)?);
             } else {
-                handle_interactive_session_use(ctx, invocation_mode)?;
+                handle_interactive_session_use(ctx)?;
             }
         }
-        SessionCommand::Delete(args) => {
-            println!("{}", ctx.ui.header("Session Delete"));
-            print_action_status(ctx, ctx.engine.delete_session(&args.id)?);
+        SessionCommand::Reset(args) => {
+            println!("{}", ctx.ui.header("Session Reset"));
+            print_action_status(ctx, ctx.engine.reset_session(&args.id)?);
         }
     }
 
@@ -606,8 +548,7 @@ fn handle_provider(ctx: &AppContext, command: ProviderCommand) -> AppResult<()> 
         ProviderCommand::List => {
             println!("{}", ctx.ui.header("Provider List"));
             let providers = ctx.engine.list_providers()?;
-            let active_provider = ctx.engine.current_provider().ok();
-            print_providers(ctx, &providers, active_provider.as_deref());
+            print_providers(ctx, &providers);
         }
         ProviderCommand::Select(args) => {
             println!("{}", ctx.ui.header("Provider Select"));
@@ -622,40 +563,21 @@ fn handle_provider(ctx: &AppContext, command: ProviderCommand) -> AppResult<()> 
     Ok(())
 }
 
-fn handle_provider_select(ctx: &AppContext, name: &str) -> AppResult<()> {
-    let result = ctx.engine.select_provider(name)?;
-    print_action_status(ctx, result);
-    Ok(())
-}
-
-fn handle_model(ctx: &AppContext, command: Option<ModelCommand>) -> AppResult<()> {
+fn handle_model(ctx: &AppContext, command: ModelCommand) -> AppResult<()> {
     // Model selection follows the same rule as provider selection:
     // ask the engine to own it instead of persisting model state only in the CLI.
     match command {
-        None => {
-            println!("{}", ctx.ui.header("Current Model"));
-            println!("Using : {}", ctx.engine.current_model()?);
-        }
-        Some(ModelCommand::List) => {
+        ModelCommand::List => {
             println!("{}", ctx.ui.header("Model List"));
             let models = ctx.engine.list_models()?;
-            let current_model = ctx.engine.current_model().ok();
-            print_models(ctx, &models, current_model.as_deref());
+            print_models(ctx, &models);
         }
-        Some(ModelCommand::Switch(args)) => {
-            println!("{}", ctx.ui.header("Model Switch"));
+        ModelCommand::Select(args) => {
+            println!("{}", ctx.ui.header("Model Select"));
             if let Some(name) = args.name {
-                handle_model_switch(ctx, &name)?;
+                print_action_status(ctx, ctx.engine.select_model(&name)?);
             } else {
                 handle_interactive_model_select(ctx)?;
-            }
-        }
-        Some(ModelCommand::Download(args)) => {
-            println!("{}", ctx.ui.header("Model Download"));
-            if let Some(name) = args.name {
-                handle_model_download(ctx, &name)?;
-            } else {
-                println!("{}", ctx.ui.warning("No model name was provided."));
             }
         }
     }
@@ -665,21 +587,72 @@ fn handle_model(ctx: &AppContext, command: Option<ModelCommand>) -> AppResult<()
 
 //? HANDLES "STATUS" COMMAND
 fn show_status(ctx: &AppContext) -> AppResult<()> {
+    if ctx.runtime.is_installed() {
+        let status = install::runtime_status(&ctx.runtime);
+
+        println!("{}", ctx.ui.header("Status"));
+        println!("Install root : {}", status.install_root.display());
+        println!(
+            "Version      : {}",
+            status.version.unwrap_or_else(|| "unknown".to_string())
+        );
+        println!("Engine URL   : {}", status.engine_url);
+        println!("RAG URL      : {}", status.rag_url);
+        println!("UI URL       : {}", status.ui_url);
+        println!(
+            "Engine       : {}",
+            if status.engine_running { "running" } else { "stopped" }
+        );
+        println!(
+            "PID          : {}",
+            status
+                .engine_pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "n/a".to_string())
+        );
+        println!(
+            "RAG          : {}",
+            if status.rag_running { "running" } else { "stopped" }
+        );
+        println!(
+            "RAG PID      : {}",
+            status
+                .rag_pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "n/a".to_string())
+        );
+        println!(
+            "Ollama       : {}",
+            if status.ollama_reachable {
+                "reachable"
+            } else {
+                "unreachable"
+            }
+        );
+        println!(
+            "Model        : {} ({})",
+            status.model_name,
+            if status.model_present {
+                "present"
+            } else {
+                "missing"
+            }
+        );
+        return Ok(());
+    }
+
+    let report = DoctorReport::collect(&ctx.workspace);
     let health = ctx.engine.health();
-    let rag_health = ctx.engine.rag_health();
-    let web_ui_url = ctx.workspace.web_ui_url();
 
     println!("{}", ctx.ui.header("Status"));
     println!("Workspace root : {}", ctx.workspace.root.display());
-    println!("Web UI URL     : {}", web_ui_url);
-    println!("Engine URL     : {}", health.base_url);
+    println!("Localhost URL  : {}", health.base_url);
     println!("Health path    : {}", health.request_path);
     println!(
         "Engine ready   : {}",
         if health.reachable { "yes" } else { "no" }
     );
     println!("Health note    : {}", health.note);
-    print_live_engine_state(ctx, health.reachable);
     println!(
         "CLI target dir : {}",
         ctx.workspace.cli_build_target_dir(false).display()
@@ -687,32 +660,11 @@ fn show_status(ctx: &AppContext) -> AppResult<()> {
     println!();
     println!("{}", ctx.ui.header("Components"));
     for component in ctx.workspace.components() {
-        let (state, note) = if component.name == "RAG" {
-            if rag_health.reachable {
-                (
-                    ComponentState::Ready,
-                    format!("RAG service is running at {}.", rag_health.request_path),
-                )
-            } else if component.launchable {
-                (
-                    ComponentState::Missing,
-                    format!(
-                        "RAG runtime files are ready, but the service is not reachable yet: {}",
-                        rag_health.note
-                    ),
-                )
-            } else {
-                (component.state, component.note.clone())
-            }
-        } else {
-            (component.state, component.note.clone())
-        };
-
         println!(
             "{} {:<10} {}",
-            ctx.ui.component_badge(state),
+            ctx.ui.component_badge(component.state),
             component.name,
-            note
+            component.note
         );
         if ctx.ui.verbose {
             println!(
@@ -722,61 +674,37 @@ fn show_status(ctx: &AppContext) -> AppResult<()> {
             );
         }
     }
+    println!();
+    println!("{}", ctx.ui.header("Doctor Snapshot"));
+    println!(
+        "{} blocking issue(s), {} warning(s), {} missing item(s)",
+        report.blocking_issues(),
+        report.warnings(),
+        report.missing()
+    );
+    if let Some(plan) = runner::engine_launch_plan(&ctx.workspace) {
+        println!("Engine start preview: {}", plan.command_preview());
+    }
     Ok(())
 }
 
-fn print_live_engine_state(ctx: &AppContext, engine_reachable: bool) {
-    println!();
-    println!("{}", ctx.ui.header("Engine State"));
-
-    if !engine_reachable {
-        println!(
-            "{}",
-            ctx.ui.warning(
-                "Live provider, model, and session state is unavailable until the engine responds."
-            )
-        );
-        return;
-    }
-
-    match ctx.engine.current_provider() {
-        Ok(provider) => println!("Provider       : {provider}"),
-        Err(error) => println!("Provider       : {}", ctx.ui.warning(&error)),
-    }
-
-    match ctx.engine.current_model() {
-        Ok(model) => println!("Model          : {model}"),
-        Err(error) => println!("Model          : {}", ctx.ui.warning(&error)),
-    }
-
-    match ctx.engine.list_sessions() {
-        Ok(sessions) => {
-            println!("Saved sessions : {}", sessions.len());
-            if let Some(latest) = sessions.first() {
-                println!("Latest session : {} [{}]", latest.title, latest.id);
-                println!("Latest details : {}", latest.description);
-            }
-        }
-        Err(error) => println!("Saved sessions : {}", ctx.ui.warning(&error)),
-    }
-}
-
 fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
-    let report = DoctorReport::collect_live(&ctx.workspace, &ctx.engine);
+    let report = if ctx.runtime.is_installed() {
+        DoctorReport::collect_installed(&ctx.runtime, &ctx.engine)
+    } else {
+        DoctorReport::collect(&ctx.workspace)
+    };
 
     println!("{}", ctx.ui.header("Doctor"));
-    println!("Workspace: {}", ctx.workspace.root.display());
+    if ctx.runtime.is_installed() {
+        println!("Install root: {}", ctx.runtime.root.display());
+    } else {
+        println!("Workspace: {}", ctx.workspace.root.display());
+    }
     println!();
     println!("{}", ctx.ui.header("Dependencies"));
     for item in &report.dependencies {
         print_check(ctx, item);
-    }
-    if !report.runtime.is_empty() {
-        println!();
-        println!("{}", ctx.ui.header("Runtime"));
-        for item in &report.runtime {
-            print_check(ctx, item);
-        }
     }
     println!();
     println!("{}", ctx.ui.header("Components"));
@@ -807,10 +735,7 @@ fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
     Ok(())
 }
 
-fn handle_interactive_session_use(
-    ctx: &AppContext,
-    invocation_mode: InvocationMode,
-) -> AppResult<()> {
+fn handle_interactive_session_use(ctx: &AppContext) -> AppResult<()> {
     if !io::stdin().is_terminal() {
         println!("{}", ctx.ui.warning("No session id was provided."));
         println!(
@@ -840,7 +765,7 @@ fn handle_interactive_session_use(
         "Select a session number: ",
         &choices,
     )? {
-        Some(choice) => enter_session(ctx, &choice.value, invocation_mode)?,
+        Some(choice) => print_action_status(ctx, ctx.engine.use_session(&choice.value)?),
         None => println!("{}", ctx.ui.warning("No session was selected.")),
     }
 
@@ -885,7 +810,7 @@ fn handle_interactive_model_select(ctx: &AppContext) -> AppResult<()> {
         println!(
             "{}",
             ctx.ui
-                .muted("Use `aegis model switch <name>` in non-interactive environments.")
+                .muted("Use `aegis model select <name>` in non-interactive environments.")
         );
         return Ok(());
     }
@@ -909,21 +834,10 @@ fn handle_interactive_model_select(ctx: &AppContext) -> AppResult<()> {
         "Select a model number: ",
         &choices,
     )? {
-        Some(choice) => handle_model_switch(ctx, &choice.value)?,
+        Some(choice) => print_action_status(ctx, ctx.engine.select_model(&choice.value)?),
         None => println!("{}", ctx.ui.warning("No model was selected.")),
     }
 
-    Ok(())
-}
-
-fn handle_model_download(ctx: &AppContext, model_name: &str) -> AppResult<()> {
-    if ctx.engine.current_provider()? != "lmstudio" {
-        println!("{}", ctx.ui.warning("Model downloads are intended for LM Studio in this build. Switch to `provider select lmstudio` first."));
-        return Ok(());
-    }
-
-    println!("{}", ctx.ui.muted("LM Studio exposes model download through its OpenAI-compatible server; the engine currently switches providers but does not yet proxy the LM Studio download API."));
-    println!("Requested model: {model_name}");
     Ok(())
 }
 
@@ -939,895 +853,36 @@ fn print_sessions(ctx: &AppContext, sessions: &[SessionSummary]) {
     }
 }
 
-fn print_providers(
-    ctx: &AppContext,
-    providers: &[ProviderSummary],
-    current_provider: Option<&str>,
-) {
+fn print_providers(ctx: &AppContext, providers: &[ProviderSummary]) {
     if providers.is_empty() {
         println!("{}", ctx.ui.warning("No providers are available yet."));
         return;
     }
 
     for provider in providers {
-        let active = current_provider
-            .map(|current| current.eq_ignore_ascii_case(&provider.name))
-            .unwrap_or(false);
-        println!(
-            "- {}{}",
-            provider.name,
-            if active { " (active)" } else { "" }
-        );
+        println!("- {}", provider.name);
         println!("  {}", provider.description);
     }
 }
 
-fn print_models(ctx: &AppContext, models: &[ModelSummary], current_model: Option<&str>) {
+fn print_models(ctx: &AppContext, models: &[ModelSummary]) {
     if models.is_empty() {
         println!("{}", ctx.ui.warning("No models are available yet."));
         return;
     }
 
     for model in models {
-        let active = current_model
-            .map(|current| current.eq_ignore_ascii_case(&model.name))
-            .unwrap_or(false);
-        println!(
-            "- {} [{}]{}",
-            model.name,
-            model.provider,
-            if active { " (active)" } else { "" }
-        );
+        println!("- {} [{}]", model.name, model.provider);
+        println!("  {}", model.description);
     }
 }
 
-fn handle_model_switch(ctx: &AppContext, new_model: &str) -> AppResult<()> {
-    let available_models = ctx.engine.list_models()?;
-    let model_exists = available_models
-        .iter()
-        .any(|model| model.name.eq_ignore_ascii_case(new_model));
-
-    if !model_exists {
-        return Err(format!(
-            "Model `{new_model}` is not installed locally in Ollama. Run `model list` to see available models."
-        ));
-    }
-
-    let current_model = ctx.engine.current_model()?;
-    if current_model.eq_ignore_ascii_case(new_model) {
-        println!(
-            "{}",
-            ctx.ui
-                .muted(&format!("`{new_model}` is already the active model."))
-        );
-        return Ok(());
-    }
-
-    let switch_result =
-        run_with_loading_message(ctx, &format!("Now switching to {new_model}"), || {
-            ctx.engine.select_model(new_model)
-        })?;
-
-    println!("{}", ctx.ui.success(&switch_result.message));
-    Ok(())
-}
-
-fn enter_session(
-    ctx: &AppContext,
-    session_id: &str,
-    invocation_mode: InvocationMode,
-) -> AppResult<()> {
-    let detail = ctx.engine.show_session(session_id)?;
-
-    if !io::stdin().is_terminal() {
-        println!(
-            "{}",
-            ctx.ui.success(&format!("Session `{session_id}` is ready."))
-        );
-        println!(
-            "{}",
-            ctx.ui.muted(&format!(
-                "Run `aegis chat --session-id {session_id} \"your message\"` to continue it from a non-interactive terminal."
-            ))
-        );
-        return Ok(());
-    }
-
-    println!(
-        "{}",
-        ctx.ui.success(&format!(
-            "Entering session: {} ({session_id})",
-            detail.title
-        ))
-    );
-    print_session_mode_hint(ctx);
-    run_session_prompt_loop(ctx, session_id, invocation_mode)
-}
-
-fn print_created_session(ctx: &AppContext, session: CreatedSession) {
-    println!("{}", ctx.ui.success("New session started"));
-    println!("Session ID: {}", session.id);
-    print_session_mode_hint(ctx);
-    if ctx.ui.verbose {
-        println!("Created at: {}", session.created_at);
-    }
-}
-
-fn print_session_mode_hint(ctx: &AppContext) {
-    println!(
-        "{}",
-        ctx.ui
-            .muted("Type `quit` or `exit` to leave this session and return to the CLI home page.")
-    );
-    println!(
-        "{}",
-        ctx.ui.muted(
-            "Type `/` to open the live tools palette; Backspace closes it, arrows or mouse select."
-        )
-    );
-    println!();
-}
-
-fn session_tool_choices() -> Vec<MenuChoice> {
-    vec![
-        MenuChoice::new(
-            "Import document",
-            "import",
-            "Upload a PDF or TXT into this session's RAG context.",
-        ),
-        MenuChoice::new(
-            "Calendar",
-            "calendar",
-            "Create a local Outlook calendar event from a natural-language prompt.",
-        ),
-        MenuChoice::new(
-            "Export chat",
-            "export",
-            "Save this session transcript as a local Markdown file.",
-        ),
-    ]
-}
-
-fn dispatch_session_tool(ctx: &AppContext, session_id: &str, tool: &str) -> AppResult<()> {
-    match tool {
-        "import" => handle_session_tool_import(ctx, session_id),
-        "calendar" => handle_session_tool_calendar(ctx),
-        "export" => handle_session_tool_export(ctx, session_id),
-        _ => Ok(()),
-    }
-}
-
-fn prompt_for_session_tool_input(
-    ctx: &AppContext,
-    prompt: &str,
-    empty_message: &str,
-) -> AppResult<Option<String>> {
-    print!("{prompt}");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("Could not flush session tool prompt: {error}"))?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).map_err(|error| {
-        if signals::was_ctrl_c(&error) {
-            signals::ctrl_c_exit_error()
-        } else {
-            format!("Could not read session tool input: {error}")
-        }
-    })?;
-
-    let value = input.trim();
-    if value.is_empty() {
-        println!("{}", ctx.ui.muted(empty_message));
-        Ok(None)
-    } else {
-        Ok(Some(value.trim_matches('"').to_string()))
-    }
-}
-
-fn handle_session_tool_import(ctx: &AppContext, session_id: &str) -> AppResult<()> {
-    println!("{}", ctx.ui.header("Import Document"));
-    println!(
-        "{}",
-        ctx.ui
-            .muted("Supported files: PDF and TXT. The document will attach only to this session.")
-    );
-
-    let Some(path) = prompt_for_session_tool_input(
-        ctx,
-        "File path: ",
-        "Import cancelled; no file path entered.",
-    )?
-    else {
-        return Ok(());
-    };
-
-    let path = PathBuf::from(path);
-    let outcome = run_with_loading_message(ctx, "Indexing document", || {
-        ctx.engine.ingest_document(session_id, &path)
-    })?;
-
-    println!(
-        "{}",
-        ctx.ui.success(&format!(
-            "Imported {} document(s), indexed {} chunk(s).",
-            outcome.documents.len(),
-            outcome.total_chunks
-        ))
-    );
-    println!("{}", ctx.ui.muted(&format!("Status: {}", outcome.status)));
-    for document in outcome.documents {
-        println!(
-            "- {} ({} chunk(s))",
-            document.file_name, document.chunks_added
-        );
-        if ctx.ui.verbose {
-            println!("  {}", ctx.ui.muted(&document.stored_path));
-        }
-    }
-
-    Ok(())
-}
-
-fn handle_session_tool_calendar(ctx: &AppContext) -> AppResult<()> {
-    println!("{}", ctx.ui.header("Calendar"));
-    println!(
-        "{}",
-        ctx.ui.muted(
-            "Describe the event naturally, for example: `meeting with Jasser tomorrow at 3pm for one hour`."
-        )
-    );
-
-    let Some(prompt) = prompt_for_session_tool_input(
-        ctx,
-        "Event prompt: ",
-        "Calendar cancelled; no event prompt entered.",
-    )?
-    else {
-        return Ok(());
-    };
-
-    let outcome = run_with_loading_message(ctx, "Creating calendar event", || {
-        ctx.engine.create_calendar_event_from_prompt(&prompt)
-    })?;
-
-    println!("{}", ctx.ui.success(&outcome.message));
-    println!("Event   : {}", outcome.event);
-    println!("Delivery: {}", outcome.delivery_method);
-    println!(
-        "Saved   : {}",
-        if outcome.saved_to_calendar {
-            "yes"
-        } else {
-            "no"
-        }
-    );
-    println!(
-        "Opened  : {}",
-        if outcome.file_opened { "yes" } else { "no" }
-    );
-
-    if let Some(parsed) = outcome.parsed {
-        println!("Title   : {}", parsed.title);
-        println!("Start   : {}", parsed.start);
-        println!("End     : {}", parsed.end);
-        if let Some(location) = parsed.location {
-            println!("Location: {location}");
-        }
-        if let Some(description) = parsed.description {
-            println!("Notes   : {description}");
-        }
-    }
-
-    Ok(())
-}
-
-fn handle_session_tool_export(ctx: &AppContext, session_id: &str) -> AppResult<()> {
-    println!("{}", ctx.ui.header("Export Chat"));
-    let detail = ctx.engine.show_session(session_id)?;
-    let default_path = format!("{}.md", safe_export_file_name(&detail.title, session_id));
-
-    println!(
-        "{}",
-        ctx.ui.muted(&format!(
-            "Press Enter to save as `{default_path}`, or enter a custom `.md` path."
-        ))
-    );
-    print!("Export path: ");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("Could not flush export prompt: {error}"))?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).map_err(|error| {
-        if signals::was_ctrl_c(&error) {
-            signals::ctrl_c_exit_error()
-        } else {
-            format!("Could not read export path: {error}")
-        }
-    })?;
-
-    let export_path = input.trim().trim_matches('"');
-    let export_path = if export_path.is_empty() {
-        PathBuf::from(default_path)
-    } else {
-        PathBuf::from(export_path)
-    };
-
-    let mut transcript = String::new();
-    transcript.push_str("# AEGIS Chat Export\n\n");
-    transcript.push_str(&format!("Session: {}\n\n", detail.title));
-    transcript.push_str(&format!("Session ID: `{}`\n\n", detail.id));
-    transcript.push_str(&format!("{}\n\n", detail.note));
-
-    if detail.recent_turns.is_empty() {
-        transcript.push_str("_No saved turns in this session yet._\n");
-    } else {
-        for turn in detail.recent_turns {
-            if let Some(message) = turn.strip_prefix("user> ") {
-                transcript.push_str("## User\n\n");
-                transcript.push_str(message);
-                transcript.push_str("\n\n");
-            } else if let Some(message) = turn.strip_prefix("assistant> ") {
-                transcript.push_str("## AEGIS\n\n");
-                transcript.push_str(message);
-                transcript.push_str("\n\n");
-            } else {
-                transcript.push_str(&turn);
-                transcript.push_str("\n\n");
-            }
-        }
-    }
-
-    fs::write(&export_path, transcript)
-        .map_err(|error| format!("Could not write `{}`: {error}", export_path.display()))?;
-    println!(
-        "{}",
-        ctx.ui
-            .success(&format!("Chat exported to `{}`.", export_path.display()))
-    );
-
-    Ok(())
-}
-
-fn safe_export_file_name(title: &str, session_id: &str) -> String {
-    let mut safe = title
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-
-    while safe.contains("--") {
-        safe = safe.replace("--", "-");
-    }
-
-    safe = safe.trim_matches('-').chars().take(48).collect();
-    if safe.is_empty() || safe == "new-chat" {
-        format!("aegis-session-{session_id}")
-    } else {
-        safe
-    }
-}
-
-fn print_session_tool_error(ctx: &AppContext, tool: &str, error: &str) {
-    println!();
-    println!(
-        "{}",
-        ctx.ui
-            .error(&format!("The `{tool}` tool could not complete."))
-    );
-    println!("{}", ctx.ui.muted(&format!("Details: {error}")));
-
-    let lower = error.to_lowercase();
-    let guidance = if lower.contains("/ingest")
-        || lower.contains("rag")
-        || lower.contains("upload")
-        || lower.contains("document")
-    {
-        Some(
-            "Possible causes: the Rust engine is not running, the Python RAG service is not running on 127.0.0.1:8000, the file path is invalid, the file is too large, or the file type is not PDF/TXT.",
-        )
-    } else if lower.contains("calendar") || lower.contains("outlook") {
-        Some(
-            "Possible causes: the Rust engine is not running, classic Outlook is not available, no local calendar is selected, or the event prompt could not be parsed.",
-        )
-    } else if lower.contains("export") || lower.contains("write") || lower.contains("session") {
-        Some(
-            "Possible causes: the session could not be loaded, the export path is not writable, or the file is already locked by another program.",
-        )
-    } else if lower.contains("connection")
-        || lower.contains("could not reach")
-        || lower.contains("127.0.0.1")
-        || lower.contains("localhost")
-    {
-        Some(
-            "Possible causes: the local engine service is not running or the configured localhost URL is different from the active engine.",
-        )
-    } else {
-        None
-    };
-
-    if let Some(guidance) = guidance {
-        println!("{}", ctx.ui.warning(guidance));
-    }
-
-    println!(
-        "{}",
-        ctx.ui
-            .muted("The session is still active. Returning to `prompt>`.")
-    );
-    println!();
-}
-
-struct SessionPromptTerminalGuard;
-
-impl SessionPromptTerminalGuard {
-    fn enter() -> AppResult<Self> {
-        enable_raw_mode()
-            .map_err(|error| format!("Could not enable terminal raw mode: {error}"))?;
-        execute!(io::stdout(), EnableMouseCapture)
-            .map_err(|error| format!("Could not enable mouse capture: {error}"))?;
-        Ok(Self)
-    }
-}
-
-impl Drop for SessionPromptTerminalGuard {
-    fn drop(&mut self) {
-        let _ = execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            SetAttribute(Attribute::Reset)
-        );
-        let _ = disable_raw_mode();
-    }
-}
-
-fn filtered_session_tool_indexes(buffer: &str, choices: &[MenuChoice]) -> Vec<usize> {
-    let Some(query) = buffer.strip_prefix('/') else {
-        return Vec::new();
-    };
-    let query = query.trim().to_lowercase();
-
-    choices
-        .iter()
-        .enumerate()
-        .filter_map(|(index, choice)| {
-            if query.is_empty()
-                || choice.label.to_lowercase().contains(&query)
-                || choice.value.to_lowercase().contains(&query)
-                || choice.description.to_lowercase().contains(&query)
-            {
-                Some(index)
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn clear_session_prompt_render(previous_popup_lines: usize) -> AppResult<()> {
-    let mut stdout = io::stdout();
-
-    queue!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
-        .map_err(|error| format!("Could not clear session prompt: {error}"))?;
-
-    for _ in 0..previous_popup_lines {
-        queue!(stdout, MoveDown(1), Clear(ClearType::CurrentLine))
-            .map_err(|error| format!("Could not clear session tools menu: {error}"))?;
-    }
-
-    if previous_popup_lines > 0 {
-        queue!(stdout, MoveUp(previous_popup_lines as u16))
-            .map_err(|error| format!("Could not restore session prompt cursor: {error}"))?;
-    }
-
-    stdout
-        .flush()
-        .map_err(|error| format!("Could not flush session prompt: {error}"))
-}
-
-fn render_session_prompt_palette(
-    ctx: &AppContext,
-    prompt_label: &str,
-    buffer: &str,
-    choices: &[MenuChoice],
-    filtered_indexes: &[usize],
-    selected_index: usize,
-    previous_popup_lines: usize,
-) -> AppResult<usize> {
-    let mut stdout = io::stdout();
-    let palette_visible = buffer.starts_with('/');
-    let popup_lines = if palette_visible {
-        filtered_indexes.len().max(1)
-    } else {
-        0
-    };
-
-    clear_session_prompt_render(previous_popup_lines)?;
-    queue!(stdout, Print(prompt_label), Print(buffer))
-        .map_err(|error| format!("Could not render session prompt: {error}"))?;
-
-    if palette_visible {
-        if filtered_indexes.is_empty() {
-            queue!(
-                stdout,
-                Print("\r\n  No matching session tools. Backspace to close.")
-            )
-            .map_err(|error| format!("Could not render session tools menu: {error}"))?;
-        } else {
-            for (row_index, choice_index) in filtered_indexes.iter().enumerate() {
-                let choice = &choices[*choice_index];
-                let selected = row_index == selected_index;
-                queue!(stdout, Print("\r\n"))
-                    .map_err(|error| format!("Could not render session tools menu: {error}"))?;
-
-                if selected {
-                    queue!(stdout, SetAttribute(Attribute::Reverse))
-                        .map_err(|error| format!("Could not highlight session tool: {error}"))?;
-                }
-
-                queue!(
-                    stdout,
-                    Print(format!(
-                        "  {:<18} {}",
-                        choice.label,
-                        ctx.ui.muted(&choice.description)
-                    ))
-                )
-                .map_err(|error| format!("Could not render session tool: {error}"))?;
-
-                if selected {
-                    queue!(stdout, SetAttribute(Attribute::Reset)).map_err(|error| {
-                        format!("Could not reset session tool highlight: {error}")
-                    })?;
-                }
-            }
-        }
-
-        queue!(
-            stdout,
-            MoveUp(popup_lines as u16),
-            MoveToColumn((prompt_label.chars().count() + buffer.chars().count()) as u16)
-        )
-        .map_err(|error| format!("Could not restore session prompt cursor: {error}"))?;
-    }
-
-    stdout
-        .flush()
-        .map_err(|error| format!("Could not flush session prompt: {error}"))?;
-
-    Ok(popup_lines)
-}
-
-fn read_session_prompt_input(ctx: &AppContext) -> AppResult<SessionPromptInput> {
-    let prompt_label = "prompt> ";
-
-    if !io::stdin().is_terminal() {
-        print!("{prompt_label}");
-        io::stdout()
-            .flush()
-            .map_err(|error| format!("Could not flush session prompt: {error}"))?;
-
-        let mut input = String::new();
-        let bytes = io::stdin().read_line(&mut input).map_err(|error| {
-            if signals::was_ctrl_c(&error) {
-                signals::ctrl_c_exit_error()
-            } else {
-                format!("Could not read session input: {error}")
-            }
-        })?;
-
-        if bytes == 0 {
-            return Ok(SessionPromptInput::Eof);
-        }
-
-        return Ok(SessionPromptInput::Submit(input.trim().to_string()));
-    }
-
-    let _guard = SessionPromptTerminalGuard::enter()?;
-    let choices = session_tool_choices();
-    let mut buffer = String::new();
-    let mut selected_index = 0usize;
-    let mut previous_popup_lines = 0usize;
-
-    print!("{prompt_label}");
-    io::stdout()
-        .flush()
-        .map_err(|error| format!("Could not flush session prompt: {error}"))?;
-    let mut prompt_row = crossterm::cursor::position()
-        .map(|(_, row)| row)
-        .unwrap_or(0);
-
-    loop {
-        match event::read().map_err(|error| format!("Could not read terminal event: {error}"))? {
-            Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                match key.code {
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        clear_session_prompt_render(previous_popup_lines)?;
-                        println!();
-                        return Err(signals::ctrl_c_exit_error());
-                    }
-                    KeyCode::Char('d')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) && buffer.is_empty() =>
-                    {
-                        clear_session_prompt_render(previous_popup_lines)?;
-                        println!();
-                        return Ok(SessionPromptInput::Eof);
-                    }
-                    KeyCode::Char(character) => {
-                        let was_palette_visible = buffer.starts_with('/');
-                        buffer.push(character);
-
-                        if was_palette_visible
-                            || buffer.starts_with('/')
-                            || previous_popup_lines > 0
-                        {
-                            let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
-                            if selected_index >= filtered_indexes.len() {
-                                selected_index = filtered_indexes.len().saturating_sub(1);
-                            }
-                            previous_popup_lines = render_session_prompt_palette(
-                                ctx,
-                                prompt_label,
-                                &buffer,
-                                &choices,
-                                &filtered_indexes,
-                                selected_index,
-                                previous_popup_lines,
-                            )?;
-                            prompt_row = crossterm::cursor::position()
-                                .map(|(_, row)| row)
-                                .unwrap_or(prompt_row);
-                        } else {
-                            print!("{character}");
-                            io::stdout().flush().map_err(|error| {
-                                format!("Could not flush session prompt: {error}")
-                            })?;
-                        }
-                    }
-                    KeyCode::Backspace => {
-                        if buffer.is_empty() {
-                            print!("\x07");
-                            io::stdout().flush().ok();
-                            continue;
-                        }
-
-                        let was_palette_visible = buffer.starts_with('/');
-                        buffer.pop();
-
-                        if was_palette_visible
-                            || buffer.starts_with('/')
-                            || previous_popup_lines > 0
-                        {
-                            let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
-                            if selected_index >= filtered_indexes.len() {
-                                selected_index = filtered_indexes.len().saturating_sub(1);
-                            }
-                            previous_popup_lines = render_session_prompt_palette(
-                                ctx,
-                                prompt_label,
-                                &buffer,
-                                &choices,
-                                &filtered_indexes,
-                                selected_index,
-                                previous_popup_lines,
-                            )?;
-                            prompt_row = crossterm::cursor::position()
-                                .map(|(_, row)| row)
-                                .unwrap_or(prompt_row);
-                        } else {
-                            print!("\x08 \x08");
-                            io::stdout().flush().map_err(|error| {
-                                format!("Could not flush session prompt: {error}")
-                            })?;
-                        }
-                    }
-                    KeyCode::Esc => {
-                        let had_visible_palette =
-                            buffer.starts_with('/') || previous_popup_lines > 0;
-                        buffer.clear();
-                        selected_index = 0;
-                        if had_visible_palette {
-                            previous_popup_lines = render_session_prompt_palette(
-                                ctx,
-                                prompt_label,
-                                &buffer,
-                                &choices,
-                                &[],
-                                selected_index,
-                                previous_popup_lines,
-                            )?;
-                            prompt_row = crossterm::cursor::position()
-                                .map(|(_, row)| row)
-                                .unwrap_or(prompt_row);
-                        }
-                    }
-                    KeyCode::Up if buffer.starts_with('/') => {
-                        let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
-                        if filtered_indexes.is_empty() {
-                            continue;
-                        }
-                        selected_index = selected_index.saturating_sub(1);
-                        previous_popup_lines = render_session_prompt_palette(
-                            ctx,
-                            prompt_label,
-                            &buffer,
-                            &choices,
-                            &filtered_indexes,
-                            selected_index,
-                            previous_popup_lines,
-                        )?;
-                        prompt_row = crossterm::cursor::position()
-                            .map(|(_, row)| row)
-                            .unwrap_or(prompt_row);
-                    }
-                    KeyCode::Down if buffer.starts_with('/') => {
-                        let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
-                        if filtered_indexes.is_empty() {
-                            continue;
-                        }
-                        selected_index = (selected_index + 1).min(filtered_indexes.len() - 1);
-                        previous_popup_lines = render_session_prompt_palette(
-                            ctx,
-                            prompt_label,
-                            &buffer,
-                            &choices,
-                            &filtered_indexes,
-                            selected_index,
-                            previous_popup_lines,
-                        )?;
-                        prompt_row = crossterm::cursor::position()
-                            .map(|(_, row)| row)
-                            .unwrap_or(prompt_row);
-                    }
-                    KeyCode::Enter if buffer.starts_with('/') => {
-                        let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
-                        if selected_index >= filtered_indexes.len() {
-                            selected_index = filtered_indexes.len().saturating_sub(1);
-                        }
-                        if filtered_indexes.is_empty() {
-                            print!("\x07");
-                            io::stdout().flush().ok();
-                            continue;
-                        }
-
-                        let choice = &choices[filtered_indexes[selected_index]];
-                        clear_session_prompt_render(previous_popup_lines)?;
-                        println!("{prompt_label}/{}", choice.value);
-                        return Ok(SessionPromptInput::Tool(choice.value.clone()));
-                    }
-                    KeyCode::Enter => {
-                        let submitted = buffer.trim().to_string();
-                        clear_session_prompt_render(previous_popup_lines)?;
-                        println!("{prompt_label}{submitted}");
-                        return Ok(SessionPromptInput::Submit(submitted));
-                    }
-                    _ => {}
-                }
-            }
-            Event::Mouse(mouse) if buffer.starts_with('/') => {
-                let filtered_indexes = filtered_session_tool_indexes(&buffer, &choices);
-                if filtered_indexes.is_empty() {
-                    continue;
-                }
-                match mouse.kind {
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        let clicked_row = mouse.row;
-                        if clicked_row > prompt_row {
-                            let row_index = usize::from(clicked_row - prompt_row - 1);
-                            if row_index < filtered_indexes.len() {
-                                let choice = &choices[filtered_indexes[row_index]];
-                                clear_session_prompt_render(previous_popup_lines)?;
-                                println!("{prompt_label}/{}", choice.value);
-                                return Ok(SessionPromptInput::Tool(choice.value.clone()));
-                            }
-                        }
-                    }
-                    MouseEventKind::ScrollUp => {
-                        selected_index = selected_index.saturating_sub(1);
-                        previous_popup_lines = render_session_prompt_palette(
-                            ctx,
-                            prompt_label,
-                            &buffer,
-                            &choices,
-                            &filtered_indexes,
-                            selected_index,
-                            previous_popup_lines,
-                        )?;
-                        prompt_row = crossterm::cursor::position()
-                            .map(|(_, row)| row)
-                            .unwrap_or(prompt_row);
-                    }
-                    MouseEventKind::ScrollDown => {
-                        selected_index = (selected_index + 1).min(filtered_indexes.len() - 1);
-                        previous_popup_lines = render_session_prompt_palette(
-                            ctx,
-                            prompt_label,
-                            &buffer,
-                            &choices,
-                            &filtered_indexes,
-                            selected_index,
-                            previous_popup_lines,
-                        )?;
-                        prompt_row = crossterm::cursor::position()
-                            .map(|(_, row)| row)
-                            .unwrap_or(prompt_row);
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn run_session_prompt_loop(
-    ctx: &AppContext,
-    session_id: &str,
-    invocation_mode: InvocationMode,
-) -> AppResult<()> {
-    loop {
-        let prompt_input = read_session_prompt_input(ctx)?;
-        let prompt = match prompt_input {
-            SessionPromptInput::Eof => {
-                println!();
-                break;
-            }
-            SessionPromptInput::Tool(tool) => {
-                match dispatch_session_tool(ctx, session_id, &tool) {
-                    Ok(()) => {}
-                    Err(error) if signals::is_ctrl_c_error(&error) => return Err(error),
-                    Err(error) => print_session_tool_error(ctx, &tool, &error),
-                }
-                continue;
-            }
-            SessionPromptInput::Submit(prompt) => prompt,
-        };
-
-        if prompt.is_empty() {
-            continue;
-        }
-
-        if matches!(prompt.as_str(), "quit" | "exit") {
-            break;
-        }
-
-        let _reply = stream_llm_response(ctx, |on_token| {
-            ctx.engine.chat(&prompt, Some(session_id), on_token)
-        })?;
-    }
-
-    leave_session_prompt(ctx, invocation_mode)
-}
-
-fn leave_session_prompt(ctx: &AppContext, invocation_mode: InvocationMode) -> AppResult<()> {
-    if matches!(invocation_mode, InvocationMode::Direct) && io::stdin().is_terminal() {
-        run_interactive_shell(ctx)?;
-    }
-
-    Ok(())
-}
-
-fn print_action_status(_ctx: &AppContext, status: ActionStatus) {
+fn print_action_status(ctx: &AppContext, status: ActionStatus) {
     println!("Target   : {}", status.target);
     println!("Endpoint : {}", status.request_path);
     println!("Persisted: {}", if status.persisted { "yes" } else { "no" });
     println!("{}", status.message);
-}
-
-fn run_with_loading_message<T, F>(ctx: &AppContext, message: &str, operation: F) -> AppResult<T>
-where
-    F: FnOnce() -> AppResult<T>,
-{
-    let loading = ctx.ui.start_loading_animation(message);
-    let result = operation();
-    loading.finish();
-    result
+    println!("{}", ctx.ui.todo("TODO: confirm these actions with real engine endpoints instead of placeholder acceptance messages."));
 }
 
 fn print_check(ctx: &AppContext, item: &CheckItem) {
@@ -1866,21 +921,6 @@ mod tests {
                 command: SessionCommand::Use(args),
             }) => assert_eq!(args.id.as_deref(), Some("todo-session-001")),
             _ => panic!("expected session use command"),
-        }
-    }
-
-    #[test]
-    fn tokenizes_load_command() {
-        let parsed = parse_shell_cli("load 1189578c-9c96-4b4c-8015-4d0673544a6a").unwrap();
-        let Some(cli) = parsed else {
-            panic!("shell parser should produce a CLI command");
-        };
-
-        match cli.command {
-            Some(CommandKind::Load(args)) => {
-                assert_eq!(args.id, "1189578c-9c96-4b4c-8015-4d0673544a6a")
-            }
-            _ => panic!("expected load command"),
         }
     }
 }

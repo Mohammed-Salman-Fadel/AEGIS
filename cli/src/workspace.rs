@@ -39,7 +39,11 @@ impl Workspace {
     pub fn discover() -> Self {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let current_dir = env::current_dir().unwrap_or_else(|_| manifest_dir.clone());
+        let current_exe_dir = env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf));
         let root = Self::locate_root(&current_dir)
+            .or_else(|| current_exe_dir.as_deref().and_then(Self::locate_root))
             .or_else(|| Self::locate_root(&manifest_dir))
             .unwrap_or_else(|| {
                 manifest_dir
@@ -51,15 +55,8 @@ impl Workspace {
 
         let cli_dir = Self::resolve_existing(&root, &["src/cli", "cli"])
             .unwrap_or_else(|| root.join("src").join("cli"));
-        let engine_dir =
-            Self::resolve_existing(&root, &["engine", "engine-rust"]).unwrap_or_else(|| {
-                let engine = root.join("engine");
-                if engine.exists() {
-                    engine
-                } else {
-                    root.join("engine-rust")
-                }
-            });
+        let engine_dir = Self::resolve_existing(&root, &["engine-rust"])
+            .unwrap_or_else(|| root.join("engine-rust"));
         let frontend_dir = Self::resolve_existing(&root, &["frontend", "web-ui"])
             .unwrap_or_else(|| root.join("frontend"));
         let installer_dir =
@@ -79,8 +76,7 @@ impl Workspace {
 
     fn locate_root(start: &Path) -> Option<PathBuf> {
         for candidate in start.ancestors() {
-            let has_engine =
-                candidate.join("engine").exists() || candidate.join("engine-rust").exists();
+            let has_engine = candidate.join("engine-rust").exists();
             let has_cli =
                 candidate.join("src").join("cli").exists() || candidate.join("cli").exists();
 
@@ -111,25 +107,14 @@ impl Workspace {
         self.frontend_dir.join("package.json")
     }
 
-    pub fn frontend_vite_config(&self) -> PathBuf {
-        self.frontend_dir.join("vite.config.ts")
-    }
-
-    pub fn web_ui_url(&self) -> String {
-        if let Ok(url) = env::var("AEGIS_WEB_URL") {
-            let url = url.trim();
-            if !url.is_empty() {
-                return url.to_string();
-            }
-        }
-
-        let port = self.frontend_dev_port().unwrap_or(5173);
-
-        format!("http://localhost:{port}")
-    }
-
     pub fn installer_readme(&self) -> PathBuf {
         self.installer_dir.join("README.md")
+    }
+
+    pub fn installer_windows_build_script(&self) -> PathBuf {
+        self.installer_dir
+            .join("windows")
+            .join("build_release.ps1")
     }
 
     pub fn rag_runtime_defined(&self) -> bool {
@@ -139,8 +124,13 @@ impl Workspace {
             || self.rag_dir.join("poetry.lock").exists()
     }
 
-    pub fn engine_target_dir(&self, _release: bool) -> PathBuf {
-        self.root.join(".cargo-target-engine")
+    pub fn engine_target_dir(&self, release: bool) -> PathBuf {
+        let profile = if release { "release" } else { "debug" };
+        self.cli_dir
+            .join("target")
+            .join("runtime")
+            .join("engine")
+            .join(profile)
     }
 
     pub fn cli_build_target_dir(&self, release: bool) -> PathBuf {
@@ -195,7 +185,8 @@ impl Workspace {
             path: self.engine_dir.clone(),
             state: ComponentState::Missing,
             launchable: false,
-            note: "The engine folder could not be found from the current workspace.".to_string(),
+            note: "The engine-rust folder could not be found from the current workspace."
+                .to_string(),
         }
     }
 
@@ -238,7 +229,7 @@ impl Workspace {
                 path: self.rag_dir.clone(),
                 state: ComponentState::Ready,
                 launchable: true,
-                note: "Python runtime files were found for the future retrieval service."
+                note: "Python RAG runtime files were found and can be packaged into the bootstrap runtime."
                     .to_string(),
             };
         }
@@ -265,13 +256,24 @@ impl Workspace {
     }
 
     pub fn installer_component(&self) -> ComponentInfo {
+        if self.installer_readme().exists() && self.installer_windows_build_script().exists() {
+            return ComponentInfo {
+                name: "Installer",
+                path: self.installer_dir.clone(),
+                state: ComponentState::Ready,
+                launchable: true,
+                note: "Installer docs and Windows release packaging scripts are present."
+                    .to_string(),
+            };
+        }
+
         if self.installer_readme().exists() {
             return ComponentInfo {
                 name: "Installer",
                 path: self.installer_dir.clone(),
                 state: ComponentState::Scaffolded,
                 launchable: false,
-                note: "Installer documentation exists, but the real automation flow is still TODO-only."
+                note: "Installer documentation exists, but release packaging scripts are missing."
                     .to_string(),
             };
         }
@@ -303,19 +305,5 @@ impl Workspace {
             self.rag_component(),
             self.installer_component(),
         ]
-    }
-
-    fn frontend_dev_port(&self) -> Option<u16> {
-        let vite_config = self.frontend_vite_config();
-        let source = fs::read_to_string(vite_config).ok()?;
-        let marker = "port:";
-        let start = source.find(marker)? + marker.len();
-        let digits: String = source[start..]
-            .chars()
-            .skip_while(|ch| ch.is_whitespace())
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect();
-
-        digits.parse().ok()
     }
 }

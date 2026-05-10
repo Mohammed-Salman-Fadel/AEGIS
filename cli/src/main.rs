@@ -14,15 +14,16 @@ mod engine_client;
 mod install;
 mod menu;
 mod runner;
+mod runtime;
 mod signals;
 mod ui;
-mod user_profile;
 mod workspace;
 
 use clap::Parser;
 
-use cli::Cli;
+use cli::{Cli, CommandKind};
 use engine_client::EngineClient;
+use runtime::RuntimeLayout;
 use ui::Ui;
 use workspace::Workspace;
 
@@ -32,6 +33,7 @@ pub(crate) type AppResult<T> = Result<T, String>;
 pub(crate) struct AppContext {
     pub ui: Ui,
     pub workspace: Workspace,
+    pub runtime: RuntimeLayout,
     // The engine client is the only planned backend connection surface for runtime commands.
     // Keep orchestration state behind the Rust engine instead of recreating it inside the CLI.
     pub engine: EngineClient,
@@ -39,10 +41,12 @@ pub(crate) struct AppContext {
 
 fn main() {
     let cli = Cli::parse();
+    let runtime = RuntimeLayout::discover();
     let ctx = AppContext {
         ui: Ui::new(cli.no_color, cli.verbose),
         workspace: Workspace::discover(),
-        engine: EngineClient::from_env(),
+        engine: EngineClient::from_sources(&runtime),
+        runtime,
     };
 
     if let Err(error) = signals::install_handler() {
@@ -54,13 +58,16 @@ fn main() {
         );
     }
 
-    // Keep the local-first runtime warm for normal CLI usage:
-    // - Python RAG service on 127.0.0.1:8000
-    // - Rust engine on 127.0.0.1:8080
-    // - Vite Web UI on the configured localhost UI port
-    // This is intentionally best-effort so commands can still explain what is missing.
-    runner::ensure_local_runtime(&ctx.ui, &ctx.workspace);
-    ctx.engine.warm_active_model_in_background();
+    if should_auto_start_runtime(cli.command.as_ref()) {
+        if let Err(error) = install::ensure_runtime_started_silent(&ctx.runtime) {
+            eprintln!(
+                "{}",
+                ctx.ui.warning(&format!(
+                    "Warning: could not auto-start the AEGIS runtime stack: {error}"
+                ))
+            );
+        }
+    }
 
     // The banner stays a presentation concern. Main decides whether it appears,
     // then hands off all command behavior to `commands.rs`.
@@ -77,4 +84,11 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+fn should_auto_start_runtime(command: Option<&CommandKind>) -> bool {
+    !matches!(
+        command,
+        Some(CommandKind::Install(_)) | Some(CommandKind::Stop) | Some(CommandKind::Doctor { .. })
+    )
 }

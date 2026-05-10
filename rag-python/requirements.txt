@@ -1,12 +1,7 @@
-fastapi==0.136.1
-uvicorn==0.46.0
-pydantic==2.13.3
-pydantic-settings==2.14.0
-chromadb==1.5.8
-PyMuPDF==1.27.2.3
-
-# Optional semantic embedding backend.
-# The default remains local hash embeddings so first-run RAG does not need to
-# download a Hugging Face model. Enable this with:
-# AEGIS_RAG_EMBEDDING_BACKEND=sentence-transformers
-sentence-transformers==5.4.1
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+chromadb==0.5.23
+sentence-transformers==3.3.1
+PyMuPDF==1.24.14
+pydantic==2.10.4
+pydantic-settings==2.7.1
