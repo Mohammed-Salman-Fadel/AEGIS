@@ -61,8 +61,8 @@ impl Workspace {
             .unwrap_or_else(|| root.join("frontend"));
         let installer_dir =
             Self::resolve_existing(&root, &["installer"]).unwrap_or_else(|| root.join("installer"));
-        let rag_dir = Self::resolve_existing(&root, &["src/rag-python", "rag-python"])
-            .unwrap_or_else(|| root.join("src").join("rag-python"));
+        let rag_dir = Self::resolve_existing(&root, &["rag-python", "src/rag-python"])
+            .unwrap_or_else(|| root.join("rag-python"));
 
         Self {
             root,
