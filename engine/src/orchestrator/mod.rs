@@ -1,6 +1,7 @@
 use anyhow::Context;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::classifier::Classifier;
@@ -147,6 +148,142 @@ fn is_document_scoped_request(message: &str) -> bool {
     has_document_reference && asks_for_document_action
 }
 
+fn session_title_prompt(first_prompt: &str) -> String {
+    let first_prompt: String = first_prompt.trim().chars().take(1_200).collect();
+
+    format!(
+        "Create a short title for a chat session using only the user's first message.\n\
+        Rules:\n\
+        - 3 to 7 words\n\
+        - capture the main topic\n\
+        - do not use later conversation context\n\
+        - return only the title\n\
+        - no quotes, markdown, explanations, or ending punctuation\n\n\
+        First user message:\n{first_prompt}\n\n\
+        Title:"
+    )
+}
+
+fn imported_document_title_prompt(
+    first_prompt: Option<&str>,
+    document_names: &[String],
+    document_excerpts: &[String],
+) -> String {
+    let first_prompt = first_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("<no first prompt yet>");
+    let first_prompt: String = first_prompt.chars().take(1_200).collect();
+    let documents = if document_names.is_empty() {
+        "<no document names provided>".to_string()
+    } else {
+        document_names
+            .iter()
+            .map(|name| format!("- {name}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let excerpts = if document_excerpts.is_empty() {
+        "<no document excerpts were retrieved; infer only from the file names and first prompt>"
+            .to_string()
+    } else {
+        document_excerpts
+            .iter()
+            .map(|excerpt| excerpt.trim())
+            .filter(|excerpt| !excerpt.is_empty())
+            .take(4)
+            .collect::<Vec<_>>()
+            .join("\n---\n")
+            .chars()
+            .take(2_400)
+            .collect()
+    };
+
+    format!(
+        "Create a short title for an AEGIS chat session.\n\
+        Use the user's first prompt if it exists, and the imported document context.\n\
+        Rules:\n\
+        - 3 to 7 words\n\
+        - capture the main topic of the conversation or document\n\
+        - return only the title\n\
+        - no quotes, markdown, explanations, or ending punctuation\n\n\
+        First user prompt:\n{first_prompt}\n\n\
+        Imported documents:\n{documents}\n\n\
+        Document excerpts:\n{excerpts}\n\n\
+        Title:"
+    )
+}
+
+fn strip_thinking_sections(raw: &str) -> String {
+    let mut output = String::new();
+    let mut remaining = raw;
+
+    loop {
+        let lower = remaining.to_lowercase();
+        let Some(start) = lower.find("<think>") else {
+            output.push_str(remaining);
+            break;
+        };
+
+        output.push_str(&remaining[..start]);
+        let after_start = &remaining[start + "<think>".len()..];
+        let lower_after_start = after_start.to_lowercase();
+
+        let Some(end) = lower_after_start.find("</think>") else {
+            break;
+        };
+
+        remaining = &after_start[end + "</think>".len()..];
+    }
+
+    output
+}
+
+fn clean_generated_session_title(raw: &str) -> Option<String> {
+    let without_thinking = strip_thinking_sections(raw);
+    let mut candidate = without_thinking
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?
+        .to_string();
+
+    for prefix in [
+        "session title:",
+        "chat title:",
+        "title:",
+        "the title is:",
+        "the title:",
+        "here is a short title:",
+        "here's a short title:",
+    ] {
+        if candidate.to_lowercase().starts_with(prefix) {
+            candidate = candidate[prefix.len()..].trim().to_string();
+        }
+    }
+
+    candidate = candidate
+        .trim_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '"' | '\'' | '`' | '*' | '#' | '-' | ':' | '.')
+        })
+        .to_string();
+    candidate = candidate
+        .trim_end_matches(|ch: char| matches!(ch, '.' | ':' | ';' | ',' | '!' | '?'))
+        .to_string();
+
+    let title = candidate
+        .split_whitespace()
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let title: String = title.chars().take(60).collect();
+
+    if title.trim().is_empty() {
+        None
+    } else {
+        Some(title.trim().to_string())
+    }
+}
+
 impl Orchestrator {
     pub fn new(
         inference: Box<dyn InferenceBackend + Send + Sync>,
@@ -244,6 +381,99 @@ impl Orchestrator {
 
     pub async fn call_inference(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
         self.inference.read().await.call(prompt, model).await
+    }
+
+    async fn generate_session_title(
+        &self,
+        first_prompt: &str,
+        model: &str,
+    ) -> anyhow::Result<String> {
+        let prompt = session_title_prompt(first_prompt);
+        let raw_title = self.inference.read().await.call(&prompt, model).await?;
+
+        clean_generated_session_title(&raw_title).ok_or_else(|| {
+            anyhow::anyhow!("The model returned an empty or unusable session title.")
+        })
+    }
+
+    async fn generate_imported_document_session_title(
+        &self,
+        first_prompt: Option<&str>,
+        document_names: &[String],
+        document_excerpts: &[String],
+        model: &str,
+    ) -> anyhow::Result<String> {
+        let prompt =
+            imported_document_title_prompt(first_prompt, document_names, document_excerpts);
+        let raw_title = self.inference.read().await.call(&prompt, model).await?;
+
+        clean_generated_session_title(&raw_title).ok_or_else(|| {
+            anyhow::anyhow!("The model returned an empty or unusable imported-document title.")
+        })
+    }
+
+    async fn title_first_turn_session(&self, session_id: &str, first_prompt: &str, model: &str) {
+        match self.generate_session_title(first_prompt, model).await {
+            Ok(title) => {
+                if let Err(error) = self.memory_store.rename_session(session_id, &title).await {
+                    warn!(
+                        session_id,
+                        "Could not save generated session title `{title}`: {error}"
+                    );
+                }
+            }
+            Err(error) => {
+                warn!(
+                    session_id,
+                    "Could not generate a title for the first session prompt: {error}"
+                );
+            }
+        }
+    }
+
+    pub async fn title_session_from_import(
+        &self,
+        session_id: &str,
+        document_names: &[String],
+    ) -> anyhow::Result<Session> {
+        let session = self
+            .memory_store
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Session `{session_id}` was not found."))?;
+
+        let first_prompt = session
+            .history
+            .turns
+            .first()
+            .map(|turn| turn.query.as_str());
+        let query = match first_prompt {
+            Some(prompt) if !prompt.trim().is_empty() => {
+                format!("{prompt}\n{}", document_names.join("\n"))
+            }
+            _ => format!("main topic summary title {}", document_names.join(" ")),
+        };
+        let document_excerpts = match self.rag_client.retrieve(&query, 4, session_id).await {
+            Ok(excerpts) => excerpts,
+            Err(error) => {
+                warn!(
+                    session_id,
+                    "Could not retrieve document excerpts for imported-document title: {error}"
+                );
+                Vec::new()
+            }
+        };
+        let model = self.model_registry.get_active();
+        let title = self
+            .generate_imported_document_session_title(
+                first_prompt,
+                document_names,
+                &document_excerpts,
+                &model.name,
+            )
+            .await?;
+
+        self.memory_store.rename_session(session_id, &title).await
     }
 
     pub fn list_providers(&self) -> Vec<(String, String, bool)> {
@@ -416,6 +646,10 @@ impl Orchestrator {
             session.history.turns.truncate(turn_index);
         }
 
+        let should_title_first_turn_session = persisted_session_id.is_some()
+            && req.edit_from_turn_index.is_none()
+            && session.history.turns.is_empty();
+
         let model = self.model_registry.get_active();
         let mut ctx = RequestContext::new(
             working_session_id.clone(),
@@ -442,6 +676,11 @@ impl Orchestrator {
                         req.edit_from_turn_index.is_some(),
                     )
                     .await?;
+
+                if should_title_first_turn_session {
+                    self.title_first_turn_session(session_id, &req.message, &ctx.model.name)
+                        .await;
+                }
             }
 
             return Ok(final_answer);
@@ -553,6 +792,11 @@ impl Orchestrator {
                     req.edit_from_turn_index.is_some(),
                 )
                 .await?;
+
+            if should_title_first_turn_session {
+                self.title_first_turn_session(session_id, &req.message, &ctx.model.name)
+                    .await;
+            }
         }
 
         Ok(final_answer)

@@ -54,6 +54,13 @@ fn main() {
         );
     }
 
+    // Keep the local-first runtime warm for normal CLI usage:
+    // - Python RAG service on 127.0.0.1:8000
+    // - Rust engine on 127.0.0.1:8080
+    // - Vite Web UI on the configured localhost UI port
+    // This is intentionally best-effort so commands can still explain what is missing.
+    runner::ensure_local_runtime(&ctx.ui, &ctx.workspace);
+
     // The banner stays a presentation concern. Main decides whether it appears,
     // then hands off all command behavior to `commands.rs`.
     if banner::should_render_banner(cli.command.as_ref()) {

@@ -5,22 +5,25 @@ import {
   Bot,
   Calendar,
   ChevronDown,
+  Check,
+  Copy,
   Cpu,
   Download,
   Edit3,
   HardDrive,
-  MessageSquare,
+  MoreHorizontal,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
   Plus,
-  RefreshCw,
   Send,
   Sun,
   Trash2,
   Upload,
   User,
   Wrench,
+  X,
 } from 'lucide-react';
 
 type Role = 'user' | 'assistant';
@@ -29,7 +32,7 @@ type MarkdownBlock =
   | { type: 'paragraph'; text: string }
   | { type: 'ordered'; items: string[] }
   | { type: 'unordered'; items: string[] }
-  | { type: 'code'; text: string };
+  | { type: 'code'; text: string; language: string };
 
 interface Message {
   role: Role;
@@ -113,6 +116,7 @@ interface IngestResponse {
   status: string;
   total_chunks: number;
   documents: IndexedDocument[];
+  session?: EngineSession | null;
 }
 
 type ImportPhase = 'idle' | 'uploading' | 'indexing' | 'complete' | 'error';
@@ -120,11 +124,7 @@ type ImportPhase = 'idle' | 'uploading' | 'indexing' | 'complete' | 'error';
 const API_BASE = '/api';
 const THEME_STORAGE_KEY = 'aegis-ui-theme';
 const INDEXED_DOCUMENTS_STORAGE_KEY = 'aegis-indexed-documents-by-session';
-
-function sessionDescription(session: EngineSessionSummary) {
-  const turnLabel = session.turn_count === 1 ? 'turn' : 'turns';
-  return `${session.turn_count} ${turnLabel}`;
-}
+const PINNED_SESSIONS_STORAGE_KEY = 'aegis-pinned-session-ids';
 
 function turnsToMessages(turns: EngineTurn[]): Message[] {
   return turns.flatMap((turn) => [
@@ -252,6 +252,26 @@ function loadStoredIndexedDocumentsBySession() {
   }
 }
 
+function loadStoredPinnedSessionIds() {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PINNED_SESSIONS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((sessionId): sessionId is string => typeof sessionId === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function mergeIndexedDocuments(
   currentDocuments: IndexedDocument[],
   nextDocuments: IndexedDocument[],
@@ -271,9 +291,9 @@ function mergeIndexedDocuments(
 function normalizeAssistantMarkdown(content: string) {
   return content
     .replace(/\r\n/g, '\n')
+    .replace(/\(([^()\n]+?)\s+[-*+]\s+([^()\n]+?)\)/g, '($1 and $2)')
     .replace(/([:.!?])\s*(\d+\.\s+)/g, '$1\n$2')
     .replace(/([:.!?])\s*([*+-]\s+)/g, '$1\n$2')
-    .replace(/([A-Za-z0-9)])\s*([*+-]\s+)/g, '$1\n$2')
     .replace(/([A-Za-z0-9)])\s+(\d+\.\s+)/g, '$1\n$2')
     .replace(/([^\n])(\d+\.\s+\*\*)/g, '$1\n$2')
     .replace(/\n{3,}/g, '\n\n');
@@ -307,6 +327,7 @@ function parseMarkdownBlocks(content: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let paragraph: string[] = [];
   let codeLines: string[] = [];
+  let codeLanguage = '';
   let inCode = false;
 
   function flushParagraph() {
@@ -350,14 +371,17 @@ function parseMarkdownBlocks(content: string): MarkdownBlock[] {
     const rawLine = lines[index];
     const line = rawLine.trim();
 
-    if (line.startsWith('```')) {
+    const fenceMatch = line.match(/^```([A-Za-z0-9_+.#-]*)/);
+    if (fenceMatch) {
       if (inCode) {
-        blocks.push({ type: 'code', text: codeLines.join('\n') });
+        blocks.push({ type: 'code', text: codeLines.join('\n'), language: codeLanguage });
         codeLines = [];
+        codeLanguage = '';
         inCode = false;
       } else {
         flushParagraph();
         inCode = true;
+        codeLanguage = fenceMatch[1]?.trim().toLowerCase() || 'text';
       }
       continue;
     }
@@ -390,7 +414,7 @@ function parseMarkdownBlocks(content: string): MarkdownBlock[] {
   }
 
   if (inCode && codeLines.length > 0) {
-    blocks.push({ type: 'code', text: codeLines.join('\n') });
+    blocks.push({ type: 'code', text: codeLines.join('\n'), language: codeLanguage });
   }
   flushParagraph();
 
@@ -399,7 +423,7 @@ function parseMarkdownBlocks(content: string): MarkdownBlock[] {
 
 function renderInlineMarkdown(text: string) {
   const parts: ReactNode[] = [];
-  const pattern = /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g;
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -409,7 +433,16 @@ function renderInlineMarkdown(text: string) {
     }
 
     const value = match[0];
-    if (value.startsWith('**')) {
+    if (value.startsWith('`')) {
+      parts.push(
+        <code
+          className="rounded bg-black/15 px-1.5 py-0.5 font-mono text-[0.92em] text-emerald-500"
+          key={`${match.index}-code`}
+        >
+          {value.slice(1, -1)}
+        </code>,
+      );
+    } else if (value.startsWith('**')) {
       parts.push(
         <strong className="font-semibold" key={`${match.index}-strong`}>
           {value.slice(2, -2)}
@@ -431,6 +464,224 @@ function renderInlineMarkdown(text: string) {
   }
 
   return parts;
+}
+
+const CODE_KEYWORDS = new Set([
+  'as',
+  'async',
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'def',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'false',
+  'fn',
+  'for',
+  'from',
+  'function',
+  'if',
+  'impl',
+  'import',
+  'in',
+  'interface',
+  'let',
+  'match',
+  'mod',
+  'mut',
+  'new',
+  'none',
+  'null',
+  'ok',
+  'pub',
+  'return',
+  'self',
+  'some',
+  'struct',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'type',
+  'use',
+  'var',
+  'while',
+  'with',
+]);
+
+const CODE_TYPES = new Set([
+  'bool',
+  'dict',
+  'error',
+  'i32',
+  'i64',
+  'number',
+  'object',
+  'result',
+  'str',
+  'string',
+  'u32',
+  'u64',
+  'vec',
+  'void',
+]);
+
+const CODE_TOKEN_PATTERN =
+  /(\/\/.*|#.*|\/\*.*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b|[{}()[\].,;:+\-*/%=<>!&|?]+)/g;
+
+function normalizedCodeLanguage(language: string) {
+  const label = language.trim().toLowerCase();
+
+  if (!label || label === 'text' || label === 'txt') {
+    return 'code';
+  }
+
+  if (label === 'ts') {
+    return 'typescript';
+  }
+
+  if (label === 'js') {
+    return 'javascript';
+  }
+
+  if (label === 'py') {
+    return 'python';
+  }
+
+  if (label === 'rs') {
+    return 'rust';
+  }
+
+  return label;
+}
+
+function codeTokenClass(token: string) {
+  const lowerToken = token.toLowerCase();
+
+  if (token.startsWith('//') || token.startsWith('#') || token.startsWith('/*')) {
+    return 'text-emerald-400/80 italic';
+  }
+
+  if (token.startsWith('"') || token.startsWith("'") || token.startsWith('`')) {
+    return 'text-amber-300';
+  }
+
+  if (/^\d/.test(token)) {
+    return 'text-cyan-300';
+  }
+
+  if (CODE_KEYWORDS.has(lowerToken)) {
+    return 'text-sky-300';
+  }
+
+  if (CODE_TYPES.has(lowerToken) || /^[A-Z][A-Za-z0-9_]*$/.test(token)) {
+    return 'text-violet-300';
+  }
+
+  if (/^[{}()[\].,;:+\-*/%=<>!&|?]+$/.test(token)) {
+    return 'text-zinc-400';
+  }
+
+  return 'text-zinc-100';
+}
+
+function renderHighlightedCodeLine(line: string, lineIndex: number) {
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  CODE_TOKEN_PATTERN.lastIndex = 0;
+  while ((match = CODE_TOKEN_PATTERN.exec(line)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(line.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+    parts.push(
+      <span className={codeTokenClass(token)} key={`${lineIndex}-${match.index}`}>
+        {token}
+      </span>,
+    );
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < line.length) {
+    parts.push(line.slice(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : '\u00A0';
+}
+
+async function copyTextToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+}
+
+function fitTextareaToContent(textarea: HTMLTextAreaElement) {
+  textarea.style.height = '0px';
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 224)}px`;
+}
+
+function isFatalUiError(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('fatal') || normalized.includes('unrecoverable');
+}
+
+function CodeBlock({ language, text }: { language: string; text: string }) {
+  const [copied, setCopied] = useState(false);
+  const languageLabel = normalizedCodeLanguage(language);
+  const lines = text.split('\n');
+
+  async function copyCode() {
+    await copyTextToClipboard(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  }
+
+  return (
+    <div className="group max-w-[42rem] overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 shadow-md shadow-white/5">
+      <div className="flex items-center justify-between gap-3 px-3 pt-2.5">
+        <span className="truncate font-mono text-[11px] uppercase tracking-wide text-zinc-500">
+          {languageLabel}
+        </span>
+        <button
+          className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950/80 px-1.5 py-0.5 text-[11px] font-medium text-zinc-300 transition hover:border-emerald-500/70 hover:bg-emerald-500/10 hover:text-emerald-200"
+          onClick={copyCode}
+          type="button"
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre className="overflow-x-auto px-3 pb-3 pt-2 text-left font-mono text-[12px] leading-5">
+        <code>
+          {lines.map((line, lineIndex) => (
+            <span className="block whitespace-pre" key={`${lineIndex}-${line}`}>
+              {renderHighlightedCodeLine(line, lineIndex)}
+            </span>
+          ))}
+        </code>
+      </pre>
+    </div>
+  );
 }
 
 function AssistantMarkdown({ content }: { content: string }) {
@@ -460,14 +711,7 @@ function AssistantMarkdown({ content }: { content: string }) {
         }
 
         if (block.type === 'code') {
-          return (
-            <pre
-              className="overflow-x-auto rounded-md bg-black/30 p-3 font-mono text-xs leading-5"
-              key={`code-${blockIndex}`}
-            >
-              <code>{block.text}</code>
-            </pre>
-          );
+          return <CodeBlock key={`code-${blockIndex}`} language={block.language} text={block.text} />;
         }
 
         return <p key={`p-${blockIndex}`}>{renderInlineMarkdown(block.text)}</p>;
@@ -591,6 +835,31 @@ function createConversationPdf(options: {
   return new Blob([pdf], { type: 'application/pdf' });
 }
 
+function safeExportFileName(title: string) {
+  return title
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '-')
+    .toLowerCase();
+}
+
+function downloadConversationPdf(options: {
+  title: string;
+  sessionId?: string | null;
+  messages: Message[];
+  indexedDocuments: IndexedDocument[];
+}) {
+  const blob = createConversationPdf(options);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  const safeTitle = safeExportFileName(options.title);
+
+  anchor.href = url;
+  anchor.download = `${safeTitle || 'aegis-chat'}.pdf`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<EngineSessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -614,8 +883,12 @@ export default function App() {
   >(
     loadStoredIndexedDocumentsBySession,
   );
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(
+    loadStoredPinnedSessionIds,
+  );
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState<string | null>(null);
+  const [dismissedResourceWarning, setDismissedResourceWarning] = useState<string | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -629,6 +902,7 @@ export default function App() {
   const [systemStats, setSystemStats] = useState<SystemStats>({ cpu: 0, ram: 0 });
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
   const [editingMessageText, setEditingMessageText] = useState('');
+  const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [deletingSessionIds, setDeletingSessionIds] = useState<string[]>([]);
@@ -643,6 +917,7 @@ export default function App() {
     recall: 0,
   });
   const inferenceStartTime = useRef<number | null>(null);
+  const [sessionMenuOpenId, setSessionMenuOpenId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isDark = theme === 'dark';
@@ -655,11 +930,38 @@ export default function App() {
           .filter(Boolean)
           .join(' and ')} ${systemStats.cpu > 80 && systemStats.ram > 80 ? 'are' : 'is'} almost at full capacity.`
       : null;
+  const visibleResourceWarning =
+    resourceWarning && resourceWarning !== dismissedResourceWarning ? resourceWarning : null;
+  const errorDismissible = error ? !isFatalUiError(error) : false;
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.session_id === activeSessionId),
     [activeSessionId, sessions],
   );
+  const pinnedSessionIdSet = useMemo(
+    () => new Set(pinnedSessionIds),
+    [pinnedSessionIds],
+  );
+  const sortedSessions = useMemo(() => {
+    const originalOrder = new Map(
+      sessions.map((session, index) => [session.session_id, index]),
+    );
+
+    return [...sessions].sort((left, right) => {
+      const pinnedDifference =
+        Number(pinnedSessionIdSet.has(right.session_id)) -
+        Number(pinnedSessionIdSet.has(left.session_id));
+
+      if (pinnedDifference !== 0) {
+        return pinnedDifference;
+      }
+
+      return (
+        (originalOrder.get(left.session_id) ?? 0) -
+        (originalOrder.get(right.session_id) ?? 0)
+      );
+    });
+  }, [pinnedSessionIdSet, sessions]);
   const indexedDocuments = activeSessionId
     ? indexedDocumentsBySession[activeSessionId] ?? []
     : [];
@@ -782,6 +1084,30 @@ export default function App() {
       return;
     }
 
+    window.localStorage.setItem(
+      PINNED_SESSIONS_STORAGE_KEY,
+      JSON.stringify(pinnedSessionIds),
+    );
+  }, [pinnedSessionIds]);
+
+  useEffect(() => {
+    if (sessions.length === 0) {
+      return;
+    }
+
+    const availableSessionIds = new Set(sessions.map((session) => session.session_id));
+
+    setPinnedSessionIds((current) => {
+      const next = current.filter((sessionId) => availableSessionIds.has(sessionId));
+      return next.length === current.length ? current : next;
+    });
+  }, [sessions]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
     window.localStorage.removeItem('aegis-indexed-documents');
     window.localStorage.setItem(
       INDEXED_DOCUMENTS_STORAGE_KEY,
@@ -801,6 +1127,8 @@ export default function App() {
       return;
     }
 
+    setSessionMenuOpenId(null);
+
     try {
       await loadSession(sessionId);
     } catch (loadError) {
@@ -809,34 +1137,24 @@ export default function App() {
     }
   }
 
-  async function handleNewSession() {
+  function handleNewSession() {
     if (isStreaming) {
       return;
     }
 
-    setStatus('Creating session');
+    setSessionMenuOpenId(null);
+    setActiveSessionId(null);
     setMessages([]);
+    setInput('');
     setError(null);
-
-    try {
-      const session = await createSession();
-      setIndexedDocumentsBySession((current) => {
-        const next = { ...current };
-        delete next[session.session_id];
-        return next;
-      });
-      setNewSessionPulseId(session.session_id);
-      await loadSessions();
-      setStatus('Ready');
-      window.setTimeout(() => {
-        setNewSessionPulseId((current) =>
-          current === session.session_id ? null : current,
-        );
-      }, 1400);
-    } catch (createError) {
-      setError(createError instanceof Error ? createError.message : 'Could not create a new session.');
-      setStatus('Session creation failed');
-    }
+    setEditingMessageIndex(null);
+    setEditingMessageText('');
+    setEditingSessionId(null);
+    setEditingTitle('');
+    setImportPhase('idle');
+    setImportProgress(0);
+    setImportFileLabel('');
+    setStatus('Ready');
   }
 
   async function handleDeleteSession(session: EngineSessionSummary) {
@@ -844,6 +1162,7 @@ export default function App() {
       return;
     }
 
+    setSessionMenuOpenId(null);
     const confirmed = globalThis.confirm(
       `Delete session "${session.title}"?\n\nThis will permanently remove the saved conversation.`,
     );
@@ -875,6 +1194,9 @@ export default function App() {
         delete next[session.session_id];
         return next;
       });
+      setPinnedSessionIds((current) =>
+        current.filter((sessionId) => sessionId !== session.session_id),
+      );
 
       await new Promise((resolve) => {
         window.setTimeout(resolve, 320);
@@ -900,6 +1222,7 @@ export default function App() {
       return;
     }
 
+    setSessionMenuOpenId(null);
     setEditingSessionId(session.session_id);
     setEditingTitle(session.title);
     setError(null);
@@ -955,8 +1278,9 @@ export default function App() {
       return;
     }
 
+    const selectedFiles = Array.from(files);
     const validExtensions = ['.pdf', '.txt'];
-    const unsupportedFiles = Array.from(files).filter(
+    const unsupportedFiles = selectedFiles.filter(
       (file) => !validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext)),
     );
 
@@ -970,17 +1294,28 @@ export default function App() {
     setImportPhase('uploading');
     setImportProgress(3);
     setImportFileLabel(
-      files.length === 1 ? files[0].name : `${files.length} documents`,
+      selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles.length} documents`,
     );
-    setStatus('Indexing documents');
+    setStatus(activeSessionId ? 'Indexing documents' : 'Starting document session');
     setError(null);
 
     try {
-      const sessionId = activeSessionId ?? (await createSession()).session_id;
+      let sessionId = activeSessionId;
+      let createdSessionId: string | null = null;
+
+      if (!sessionId) {
+        const session = await createSession();
+        sessionId = session.session_id;
+        createdSessionId = session.session_id;
+        setNewSessionPulseId(session.session_id);
+        setMessages([]);
+      }
+
+      setStatus('Indexing documents');
       const formData = new FormData();
       formData.append('session_id', sessionId);
-      for (let i = 0; i < files.length; i++) {
-        formData.append('file', files[i]);
+      for (const file of selectedFiles) {
+        formData.append('file', file);
       }
 
       const ingestResponse = await new Promise<IngestResponse>((resolve, reject) => {
@@ -1047,6 +1382,17 @@ export default function App() {
       );
       setImportPhase('complete');
       setImportProgress(100);
+      if (ingestResponse.session) {
+        setActiveSessionId(ingestResponse.session.session_id);
+      }
+      await loadSessions();
+      if (createdSessionId) {
+        window.setTimeout(() => {
+          setNewSessionPulseId((current) =>
+            current === createdSessionId ? null : current,
+          );
+        }, 1400);
+      }
       setStatus(`Indexed ${ingestResponse.total_chunks} document chunks`);
     } catch (uploadError) {
       setImportPhase('error');
@@ -1192,24 +1538,54 @@ export default function App() {
       return;
     }
 
-    const safeTitle = (activeSession?.title ?? 'aegis-chat')
-      .trim()
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .replace(/\s+/g, '-')
-      .toLowerCase();
-    const blob = createConversationPdf({
+    downloadConversationPdf({
       title: activeSession?.title ?? 'AEGIS Chat Export',
       sessionId: activeSession?.session_id,
       messages,
       indexedDocuments,
     });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${safeTitle || 'aegis-chat'}.pdf`;
-    anchor.click();
-    URL.revokeObjectURL(url);
     setToolsOpen(false);
+  }
+
+  async function exportSessionAsPdf(sessionSummary: EngineSessionSummary) {
+    if (isStreaming) {
+      return;
+    }
+
+    setSessionMenuOpenId(null);
+    setError(null);
+    setStatus('Preparing export');
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/sessions/${encodeURIComponent(sessionSummary.session_id)}`,
+      );
+
+      if (!response.ok) {
+        throw new Error(`Engine returned HTTP ${response.status} while loading the session export.`);
+      }
+
+      const session = (await response.json()) as EngineSession;
+      downloadConversationPdf({
+        title: session.title || sessionSummary.title || 'AEGIS Chat Export',
+        sessionId: session.session_id,
+        messages: turnsToMessages(session.history.turns),
+        indexedDocuments: indexedDocumentsBySession[session.session_id] ?? [],
+      });
+      setStatus('Export ready');
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : 'Could not export the session.');
+      setStatus('Export failed');
+    }
+  }
+
+  function togglePinnedSession(sessionId: string) {
+    setPinnedSessionIds((current) =>
+      current.includes(sessionId)
+        ? current.filter((pinnedSessionId) => pinnedSessionId !== sessionId)
+        : [sessionId, ...current],
+    );
+    setSessionMenuOpenId(null);
   }
 
   async function streamPrompt(
@@ -1236,7 +1612,17 @@ export default function App() {
     ]);
 
     try {
-      const sessionId = activeSessionId ?? (await createSession()).session_id;
+      let sessionId = activeSessionId;
+      let createdSessionId: string | null = null;
+
+      if (!sessionId) {
+        const session = await createSession();
+        sessionId = session.session_id;
+        createdSessionId = session.session_id;
+        setNewSessionPulseId(session.session_id);
+        await loadSessions();
+      }
+
       const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: {
@@ -1330,6 +1716,13 @@ export default function App() {
 
       setStatus('Complete');
       await loadSessions();
+      if (createdSessionId) {
+        window.setTimeout(() => {
+          setNewSessionPulseId((current) =>
+            current === createdSessionId ? null : current,
+          );
+        }, 1400);
+      }
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Could not send chat request.');
       setStatus('Chat failed');
@@ -1371,6 +1764,14 @@ export default function App() {
     setEditingMessageText('');
   }
 
+  async function copyUserMessage(index: number, content: string) {
+    await copyTextToClipboard(content);
+    setCopiedMessageIndex(index);
+    window.setTimeout(() => {
+      setCopiedMessageIndex((current) => (current === index ? null : current));
+    }, 1400);
+  }
+
   async function resendEditedMessage(index: number) {
     const prompt = editingMessageText.trim();
     if (!prompt || isStreaming) {
@@ -1394,71 +1795,88 @@ export default function App() {
       className={`flex h-screen overflow-hidden ${
         isDark ? 'bg-zinc-950 text-zinc-100' : 'bg-stone-100 text-slate-900'
       }`}
+      onClick={() => setSessionMenuOpenId(null)}
     >
+      <nav
+        aria-label="Sidebar controls"
+        className={`flex w-14 shrink-0 flex-col items-center border-r ${
+          isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'
+        }`}
+      >
+        <button
+          aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+          aria-pressed={sidebarOpen}
+          className={`mt-4 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${
+            isDark
+              ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+              : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
+          }`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setSidebarOpen((current) => !current);
+          }}
+          title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+          type="button"
+        >
+          {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+        </button>
+        <button
+          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${
+            isDark
+              ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+              : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
+          }`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+          }}
+          title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          type="button"
+        >
+          {isDark ? <Sun size={17} /> : <Moon size={17} />}
+        </button>
+      </nav>
+
       <aside
         aria-hidden={!sidebarOpen}
-        className={`flex shrink-0 flex-col overflow-hidden border-r transition-all duration-300 ease-out ${
-          sidebarOpen ? 'w-72 translate-x-0 p-4 opacity-100' : 'w-0 -translate-x-3 p-0 opacity-0'
+        className={`shrink-0 overflow-hidden border-r transition-[width] duration-300 ease-out ${
+          sidebarOpen ? 'w-64' : 'w-0 pointer-events-none'
         } ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
       >
+        <div
+          className={`flex h-full w-64 shrink-0 flex-col py-4 pl-2 pr-4 transition-opacity duration-150 ease-out ${
+            sidebarOpen ? 'opacity-100 delay-100' : 'opacity-0'
+          }`}
+        >
         <div className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <div className="text-xl font-semibold tracking-wide">AEGIS</div>
+            <div className="aegis-wordmark">AEGIS</div>
           </div>
-          <div className="flex items-start gap-3">
-            <div className="space-y-1 text-right font-mono text-[11px] text-violet-300">
-              <div className="flex items-center justify-end gap-1.5">
-                <Cpu size={12} />
-                <span>{systemStats.cpu}%</span>
-              </div>
-              <div className="flex items-center justify-end gap-1.5">
-                <HardDrive size={12} />
-                <span>{systemStats.ram}%</span>
-              </div>
+          <div
+            className={`space-y-1 text-right font-mono text-[11px] ${
+              isDark ? 'text-zinc-100' : 'text-slate-900'
+            }`}
+          >
+            <div className="flex items-center justify-end gap-1.5">
+              <Cpu size={12} />
+              <span>{systemStats.cpu}%</span>
             </div>
-            <button
-              aria-label="Close sidebar"
-              className={`rounded-md border p-1.5 transition ${
-                isDark
-                  ? 'border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
-                  : 'border-stone-300 text-slate-500 hover:bg-stone-200 hover:text-slate-900'
-              }`}
-              onClick={() => setSidebarOpen(false)}
-              type="button"
-            >
-              <PanelLeftClose size={15} />
-            </button>
+            <div className="flex items-center justify-end gap-1.5">
+              <HardDrive size={12} />
+              <span>{systemStats.ram}%</span>
+            </div>
           </div>
         </div>
 
         <button
           className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
           disabled={isStreaming}
-          onClick={() => {
-            void handleNewSession();
-          }}
+          onClick={handleNewSession}
           type="button"
         >
           <Plus size={16} />
           New Chat
-        </button>
-
-        <button
-          className={`mb-4 flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm disabled:opacity-60 ${
-            isDark
-              ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
-              : 'border-stone-300 text-slate-700 hover:bg-stone-200'
-          }`}
-          disabled={isStreaming}
-          onClick={() => {
-            loadSessions().catch((loadError: unknown) => {
-              setError(loadError instanceof Error ? loadError.message : 'Could not refresh sessions.');
-            });
-          }}
-          type="button"
-        >
-          <RefreshCw size={15} />
-          Refresh
         </button>
 
         <div
@@ -1469,7 +1887,7 @@ export default function App() {
           Sessions
         </div>
 
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+        <div className="sessions-scroll -ml-1.5 -mr-3 min-h-0 flex-1 space-y-1 overflow-y-auto py-1.5 pl-2 pr-3">
           {sessions.length === 0 ? (
             <div
               className={`rounded-lg border p-3 text-sm ${
@@ -1479,106 +1897,181 @@ export default function App() {
               No saved sessions yet.
             </div>
           ) : (
-            sessions.map((session) => {
+            sortedSessions.map((session, sessionIndex) => {
               const isDeleting = deletingSessionIds.includes(session.session_id);
               const isNewSession = newSessionPulseId === session.session_id;
+              const isActive = session.session_id === activeSessionId;
+              const isPinned = pinnedSessionIdSet.has(session.session_id);
+              const shouldOpenMenuUp = sessionIndex > sortedSessions.length - 4;
               const cardStateClasses = isDeleting
                 ? isDark
-                  ? 'border-red-500 bg-red-950/40 opacity-0 scale-95 -translate-x-2'
-                  : 'border-red-300 bg-red-100 opacity-0 scale-95 -translate-x-2'
-                : session.session_id === activeSessionId
+                  ? 'border-transparent bg-red-950/40 text-red-100 opacity-0 scale-95 -translate-x-2'
+                  : 'border-transparent bg-red-100 text-red-800 opacity-0 scale-95 -translate-x-2'
+                : isActive && isPinned
                   ? isDark
-                    ? 'border-emerald-600 bg-emerald-950/30'
-                    : 'border-emerald-500 bg-emerald-100'
-                  : isDark
-                    ? 'border-zinc-800 hover:bg-zinc-900'
-                    : 'border-stone-300 hover:bg-stone-200';
+                    ? 'border-transparent bg-zinc-800/95 text-zinc-50 shadow-[0_3px_10px_rgba(255,255,255,0.16),inset_0_1px_0_rgba(255,255,255,0.16)] ring-1 ring-amber-500/20'
+                    : 'border-transparent bg-white text-slate-950 shadow-[0_8px_22px_rgba(120,113,108,0.16)] ring-1 ring-amber-300/55'
+                : isActive
+                  ? isDark
+                    ? 'border-transparent bg-zinc-800/95 text-zinc-50 shadow-[0_3px_10px_rgba(255,255,255,0.16),inset_0_1px_0_rgba(255,255,255,0.16)]'
+                    : 'border-transparent bg-white text-slate-950 shadow-[0_8px_22px_rgba(120,113,108,0.16)]'
+                  : isPinned
+                    ? isDark
+                      ? 'border-transparent bg-zinc-900/75 text-zinc-100 shadow-[0_2px_8px_rgba(255,255,255,0.12)]'
+                      : 'border-transparent bg-white/80 text-slate-900 shadow-[0_3px_14px_rgba(120,113,108,0.10)]'
+                    : isDark
+                      ? 'border-transparent text-zinc-300 shadow-[0_1px_0_rgba(255,255,255,0.09)] hover:bg-zinc-900/85 hover:shadow-[0_3px_9px_rgba(255,255,255,0.14)]'
+                      : 'border-transparent text-slate-700 shadow-[0_1px_0_rgba(120,113,108,0.12)] hover:bg-white/80 hover:shadow-[0_8px_20px_rgba(120,113,108,0.12)]';
 
               return (
-              <div
-                className={`w-full rounded-lg border p-3 text-left transition-all duration-500 ease-out ${
-                  isNewSession ? 'animate-[fadeInSession_520ms_ease-out]' : ''
-                } ${cardStateClasses}`}
-                key={session.session_id}
-              >
-                <div className="flex items-start gap-2">
-                  {editingSessionId === session.session_id ? (
-                    <div className="min-w-0 flex-1 text-left">
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        <MessageSquare size={15} />
-                        <input
-                          autoFocus
-                          className={`min-w-0 flex-1 rounded border px-2 py-1 text-sm outline-none ${
-                            isDark
-                              ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
-                              : 'border-emerald-500 bg-white text-slate-900'
-                          }`}
-                          onBlur={() => {
+                <div
+                  className={`relative w-full rounded-lg border px-2 py-2 text-left transition-all duration-200 ease-out ${
+                    isNewSession ? 'animate-[fadeInSession_520ms_ease-out]' : ''
+                  } ${cardStateClasses}`}
+                  key={session.session_id}
+                >
+                  <div className="flex items-center gap-1.5">
+                    {editingSessionId === session.session_id ? (
+                      <input
+                        autoFocus
+                        className={`session-title-text min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-sm outline-none ${
+                          isDark
+                            ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
+                            : 'border-emerald-500 bg-white text-slate-900'
+                        }`}
+                        onBlur={() => {
+                          void submitRenamingSession(session);
+                        }}
+                        onChange={(event) => setEditingTitle(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
                             void submitRenamingSession(session);
-                          }}
-                          onChange={(event) => setEditingTitle(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault();
-                              void submitRenamingSession(session);
-                            }
-                            if (event.key === 'Escape') {
-                              event.preventDefault();
-                              cancelRenamingSession();
-                            }
-                          }}
-                          value={editingTitle}
-                        />
-                      </div>
-                      <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-                        {sessionDescription(session)}
-                      </div>
-                    </div>
-                  ) : (
+                          }
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            cancelRenamingSession();
+                          }
+                        }}
+                        value={editingTitle}
+                      />
+                    ) : (
+                      <button
+                        className="min-w-0 flex-1 py-1 text-left"
+                        disabled={isStreaming || isDeleting}
+                        onClick={() => {
+                          void handleSessionSelect(session.session_id);
+                        }}
+                        type="button"
+                      >
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span
+                            className="session-title-text truncate text-sm leading-5"
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
+                              beginRenamingSession(session);
+                            }}
+                          >
+                            {session.title}
+                          </span>
+                        </span>
+                      </button>
+                    )}
+
+                    {isPinned && (
+                      <span
+                        className={`inline-flex shrink-0 items-center justify-center rounded-lg p-1 ${
+                          isDark ? 'text-amber-300' : 'text-amber-600'
+                        }`}
+                        title="Pinned session"
+                      >
+                        <Pin fill="currentColor" size={14} />
+                      </span>
+                    )}
+
                     <button
-                      className="min-w-0 flex-1 text-left"
+                      aria-expanded={sessionMenuOpenId === session.session_id}
+                      aria-label={`Open actions for ${session.title}`}
+                      className={`rounded-lg p-1.5 transition disabled:opacity-50 ${
+                        isDark
+                          ? 'text-zinc-400 hover:bg-zinc-700/80 hover:text-zinc-100'
+                          : 'text-slate-500 hover:bg-stone-100 hover:text-slate-900'
+                      }`}
                       disabled={isStreaming || isDeleting}
-                      onClick={() => {
-                        void handleSessionSelect(session.session_id);
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSessionMenuOpenId((current) =>
+                          current === session.session_id ? null : session.session_id,
+                        );
                       }}
                       type="button"
                     >
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        <MessageSquare size={15} />
-                        <span
-                          className="truncate"
-                          onDoubleClick={(event) => {
-                            event.stopPropagation();
-                            beginRenamingSession(session);
-                          }}
-                        >
-                          {session.title}
-                        </span>
-                      </div>
-                      <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-                        {sessionDescription(session)}
-                      </div>
+                      <MoreHorizontal size={17} />
                     </button>
+                  </div>
+
+                  {sessionMenuOpenId === session.session_id && (
+                    <div
+                      className={`absolute right-2 z-30 w-40 rounded-xl border p-1 text-sm shadow-xl ${
+                        shouldOpenMenuUp ? 'bottom-10' : 'top-10'
+                      } ${
+                        isDark
+                          ? 'border-zinc-800 bg-zinc-950 text-zinc-100 shadow-white/5'
+                          : 'border-stone-200 bg-white text-slate-900 shadow-stone-300/50'
+                      }`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <button
+                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
+                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                        }`}
+                        onClick={() => beginRenamingSession(session)}
+                        type="button"
+                      >
+                        <Edit3 size={14} />
+                        Rename
+                      </button>
+                      <button
+                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
+                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                        }`}
+                        onClick={() => {
+                          void exportSessionAsPdf(session);
+                        }}
+                        type="button"
+                      >
+                        <Download size={14} />
+                        Export chat
+                      </button>
+                      <button
+                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
+                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                        }`}
+                        onClick={() => togglePinnedSession(session.session_id)}
+                        type="button"
+                      >
+                        <Pin fill={isPinned ? 'currentColor' : 'none'} size={14} />
+                        {isPinned ? 'Unpin' : 'Pin'}
+                      </button>
+                      <button
+                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left font-medium text-red-500 transition ${
+                          isDark ? 'hover:bg-red-950/30' : 'hover:bg-red-50'
+                        }`}
+                        onClick={() => {
+                          void handleDeleteSession(session);
+                        }}
+                        type="button"
+                      >
+                        <Trash2 size={14} />
+                        Delete
+                      </button>
+                    </div>
                   )}
-                  <button
-                    aria-label={`Delete session ${session.title}`}
-                    className={`rounded-md p-2 transition disabled:opacity-60 ${
-                      isDark
-                        ? 'text-zinc-500 hover:bg-red-950/40 hover:text-red-300'
-                        : 'text-slate-500 hover:bg-red-100 hover:text-red-600'
-                    }`}
-                    disabled={isStreaming || isDeleting}
-                    onClick={() => {
-                      void handleDeleteSession(session);
-                    }}
-                    type="button"
-                  >
-                    <Trash2 size={15} />
-                  </button>
                 </div>
-              </div>
-            )})
+              );
+            })
           )}
+        </div>
         </div>
       </aside>
 
@@ -1589,20 +2082,6 @@ export default function App() {
           }`}
         >
           <div className="flex min-w-0 items-center gap-3">
-            {!sidebarOpen && (
-              <button
-                aria-label="Open sidebar"
-                className={`rounded-lg border p-2 transition ${
-                  isDark
-                    ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
-                    : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
-                }`}
-                onClick={() => setSidebarOpen(true)}
-                type="button"
-              >
-                <PanelLeftOpen size={16} />
-              </button>
-            )}
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">{activeSession?.title ?? 'New chat'}</div>
               <div className={`truncate text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
@@ -1649,32 +2128,68 @@ export default function App() {
           </div>
         </header>
 
-        {resourceWarning && (
+        {visibleResourceWarning && (
           <div
-            className={`border-b px-6 py-3 text-sm font-medium ${
+            className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm font-medium ${
               isDark
                 ? 'border-amber-900/60 bg-amber-950/30 text-amber-200'
                 : 'border-amber-200 bg-amber-50 text-amber-800'
             }`}
           >
-            Warning: {resourceWarning}
+            <span className="min-w-0 flex-1">Warning: {visibleResourceWarning}</span>
+            <button
+              aria-label="Dismiss resource warning"
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+                isDark
+                  ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100'
+                  : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'
+              }`}
+              onClick={() => setDismissedResourceWarning(visibleResourceWarning)}
+              title="Dismiss warning"
+              type="button"
+            >
+              <X size={15} />
+            </button>
           </div>
         )}
 
         {error && (
           <div
-            className={`border-b px-6 py-3 text-sm ${
+            className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm ${
               isDark
                 ? 'border-red-900/60 bg-red-950/30 text-red-200'
                 : 'border-red-200 bg-red-50 text-red-700'
             }`}
+            role="alert"
           >
-            {error}
+            <span className="min-w-0 flex-1">{error}</span>
+            {errorDismissible && (
+              <button
+                aria-label="Dismiss error"
+                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
+                  isDark
+                    ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100'
+                    : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'
+                }`}
+                onClick={() => setError(null)}
+                title="Dismiss error"
+                type="button"
+              >
+                <X size={15} />
+              </button>
+            )}
           </div>
         )}
 
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-          <div className="mx-auto flex max-w-3xl flex-col gap-4">
+        <div
+          ref={scrollRef}
+          className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 ${
+            isDark
+              ? 'bg-zinc-950'
+              : 'bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.75),_rgba(245,245,244,0)_42%)]'
+          }`}
+        >
+          <div className="mx-auto flex max-w-4xl flex-col gap-4">
             {messages.length === 0 ? null : (
               messages.map((message, index) => (
                 <div
@@ -1684,7 +2199,9 @@ export default function App() {
                   {message.role === 'assistant' && (
                     <div
                       className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                        isDark ? 'bg-zinc-800' : 'bg-stone-200 text-slate-700'
+                        isDark
+                          ? 'bg-zinc-800 text-zinc-200 shadow-sm shadow-white/5'
+                          : 'bg-white text-slate-700 shadow-sm shadow-stone-300/70 ring-1 ring-stone-200'
                       }`}
                     >
                       <Bot size={16} />
@@ -1697,7 +2214,7 @@ export default function App() {
                   >
                     {editingMessageIndex === index && message.role === 'user' ? (
                       <div
-                        className={`w-80 rounded-lg border p-3 ${
+                        className={`w-[min(32rem,78vw)] rounded-lg border p-2.5 shadow-sm ${
                           isDark
                             ? 'border-emerald-700 bg-zinc-900'
                             : 'border-emerald-500 bg-white'
@@ -1705,12 +2222,21 @@ export default function App() {
                       >
                         <textarea
                           autoFocus
-                          className={`mb-3 min-h-24 w-full resize-y rounded-md border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${
+                          className={`mb-2 max-h-56 min-h-11 w-full resize-none overflow-hidden rounded-md border px-3 py-2.5 text-sm leading-5 outline-none focus:border-emerald-600 ${
                             isDark
                               ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                               : 'border-stone-300 bg-white text-slate-900'
                           }`}
-                          onChange={(event) => setEditingMessageText(event.target.value)}
+                          onChange={(event) => {
+                            setEditingMessageText(event.target.value);
+                            fitTextareaToContent(event.currentTarget);
+                          }}
+                          ref={(textarea) => {
+                            if (textarea) {
+                              fitTextareaToContent(textarea);
+                            }
+                          }}
+                          rows={1}
                           value={editingMessageText}
                         />
                         <div className="flex justify-end gap-2">
@@ -1737,12 +2263,14 @@ export default function App() {
                       </div>
                     ) : (
                       <div
-                        className={`rounded-lg px-4 py-3 text-sm leading-6 ${
+                        className={`rounded-lg px-4 py-3 text-sm leading-6 shadow-sm ${
                           message.role === 'user'
-                            ? 'bg-emerald-600 text-white'
+                            ? isDark
+                              ? 'bg-emerald-600 text-white shadow-[0_8px_22px_rgba(255,255,255,0.07)]'
+                              : 'bg-emerald-600 text-white shadow-[0_10px_24px_rgba(16,185,129,0.24)]'
                             : isDark
-                              ? 'border border-zinc-800 bg-zinc-900 text-zinc-200'
-                              : 'border border-stone-300 bg-white text-slate-800'
+                              ? 'border border-zinc-800 bg-zinc-900 text-zinc-200 shadow-[0_8px_22px_rgba(255,255,255,0.065)]'
+                              : 'border border-stone-200 bg-white/95 text-slate-800 shadow-[0_10px_26px_rgba(120,113,108,0.20)]'
                         }`}
                       >
                         {message.role === 'assistant' ? (
@@ -1753,25 +2281,47 @@ export default function App() {
                       </div>
                     )}
                     {message.role === 'user' && editingMessageIndex !== index && (
-                      <div className="mt-1 flex items-center gap-2">
+                      <div className="mt-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                         <button
-                          className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs opacity-0 transition group-hover:opacity-100 ${
+                          aria-label="Edit message"
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${
                             isDark
                               ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
                               : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
                           }`}
                           disabled={isStreaming}
                           onClick={() => beginEditingMessage(index, message.content)}
+                          title="Edit message"
                           type="button"
                         >
-                          <Edit3 size={12} />
-                          Edit
+                          <Edit3 size={13} />
+                        </button>
+                        <button
+                          aria-label="Copy message"
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${
+                            isDark
+                              ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                              : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                          }`}
+                          onClick={() => {
+                            void copyUserMessage(index, message.content);
+                          }}
+                          title={copiedMessageIndex === index ? 'Copied' : 'Copy message'}
+                          type="button"
+                        >
+                          {copiedMessageIndex === index ? <Check size={13} /> : <Copy size={13} />}
                         </button>
                       </div>
                     )}
                   </div>
                   {message.role === 'user' && (
-                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-700">
+                    <div
+                      className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${
+                        isDark
+                          ? 'bg-emerald-700 text-white shadow-white/5'
+                          : 'bg-emerald-50 text-emerald-700 shadow-emerald-100 ring-1 ring-emerald-200'
+                      }`}
+                    >
                       <User size={16} />
                     </div>
                   )}
@@ -1782,8 +2332,19 @@ export default function App() {
         </div>
 
         <footer
-          className={`shrink-0 border-t p-4 ${isDark ? 'border-zinc-800' : 'border-stone-300'}`}
+          className={`relative shrink-0 px-4 pb-4 pt-5 ${
+            isDark
+              ? 'bg-zinc-950/95 shadow-[0_-24px_42px_rgba(0,0,0,0.35)]'
+              : 'bg-stone-100/95 shadow-[0_-24px_42px_rgba(120,113,108,0.18)]'
+          }`}
         >
+          <div
+            className={`pointer-events-none absolute inset-x-0 -top-8 h-8 ${
+              isDark
+                ? 'bg-gradient-to-t from-zinc-950/95 to-transparent'
+                : 'bg-gradient-to-t from-stone-100/95 to-transparent'
+            }`}
+          />
           {showImportProgress && (
             <div
               className={`mx-auto mb-3 max-w-3xl rounded-lg border px-3 py-2 ${
@@ -1862,24 +2423,32 @@ export default function App() {
             />
             <div className="relative">
               <button
-                className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm transition ${
+                aria-expanded={toolsOpen}
+                className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm transition-all duration-200 ${
                   isStreaming ? 'cursor-not-allowed opacity-60' : ''
-                } ${
-                  isDark
-                    ? 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
-                    : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-50'
+                } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${
+                  toolsOpen
+                    ? isDark
+                      ? 'border-emerald-500/40 bg-zinc-800 text-emerald-200 shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
+                      : 'border-emerald-400/70 bg-emerald-50 text-emerald-800 shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
+                    : isDark
+                      ? 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                      : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-50'
                 }`}
                 disabled={isStreaming}
                 onClick={() => setToolsOpen((current) => !current)}
                 type="button"
               >
-                <Wrench size={16} />
+                <Wrench className={toolsOpen ? 'rotate-12 transition-transform' : 'transition-transform'} size={16} />
                 <span>Tools</span>
-                <ChevronDown size={14} />
+                <ChevronDown
+                  className={`transition-transform duration-200 ${toolsOpen ? 'rotate-180' : 'rotate-0'}`}
+                  size={14}
+                />
               </button>
               {toolsOpen && (
                 <div
-                  className={`absolute bottom-full right-0 z-20 mb-2 w-48 rounded-lg border p-1 shadow-xl ${
+                  className={`absolute bottom-full right-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${
                     isDark
                       ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                       : 'border-stone-300 bg-white text-slate-900'
