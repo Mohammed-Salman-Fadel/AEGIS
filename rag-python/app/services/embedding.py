@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingService:
     def __init__(self, model_name: str):
+        from app.core.config import EMBEDDING_MODEL_PATH
         self.model_name = model_name
+        self.model_path = EMBEDDING_MODEL_PATH
         self._model = None
         backend = os.getenv("AEGIS_RAG_EMBEDDING_BACKEND", "hash").strip().lower()
 
@@ -21,7 +23,14 @@ class EmbeddingService:
         try:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name, local_files_only=True)
+            # Priority 1: Direct local path
+            if os.path.exists(self.model_path):
+                logger.info(f"Loading embedding model from local path: {self.model_path}")
+                self._model = SentenceTransformer(self.model_path)
+            else:
+                # Priority 2: Hugging Face cache (offline mode if local_files_only=True)
+                logger.info(f"Loading embedding model from HF cache: {self.model_name}")
+                self._model = SentenceTransformer(self.model_name, local_files_only=True)
         except Exception as error:
             logger.warning(
                 "Could not load local embedding model %s; using local hash embeddings: %s",

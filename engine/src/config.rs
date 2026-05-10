@@ -55,6 +55,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub inference: InferenceConfig,
     pub rag: RagConfig,
+    pub semble_path: String,
 }
 
 impl AppConfig {
@@ -77,6 +78,7 @@ impl AppConfig {
                 base_url: env::var("AEGIS_RAG_URL")
                     .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
             },
+            semble_path: env::var("AEGIS_SEMBLE_PATH").unwrap_or_else(|_| ".".to_string()),
         })
     }
 }

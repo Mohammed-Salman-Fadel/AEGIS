@@ -60,6 +60,47 @@ fn format_active_documents(attachments: &[String]) -> String {
         .join("\n")
 }
 
+fn is_code_scoped_request(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    let has_code_reference = [
+        "code",
+        "function",
+        "method",
+        "class",
+        "variable",
+        "module",
+        "file",
+        "implementation",
+        "logic",
+        "repo",
+        "codebase",
+        "source",
+        "rust",
+        "python",
+        "initialize",
+        "orchestrator",
+        "engine",
+        "handler",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+
+    let asks_for_search = [
+        "where",
+        "how",
+        "find",
+        "show",
+        "explain",
+        "what",
+        "search",
+        "list",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+
+    has_code_reference && asks_for_search
+}
+
 fn is_document_scoped_request(message: &str) -> bool {
     let lower = message.to_lowercase();
     let has_document_reference = [
@@ -107,7 +148,6 @@ fn is_document_scoped_request(message: &str) -> bool {
 }
 
 impl Orchestrator {
-    /// Initializes the Orchestrator with required backend services.
     pub fn new(
         inference: Box<dyn InferenceBackend + Send + Sync>,
         rag_client: Arc<RagClient>,
@@ -115,6 +155,7 @@ impl Orchestrator {
         provider: InferenceProvider,
         _active_base_url: String,
         _api_key: Option<String>,
+        semble_path: String,
     ) -> Self {
         let provider_registry = ProviderRegistry::new();
         provider_registry.set_active_provider(provider);
@@ -126,7 +167,7 @@ impl Orchestrator {
             inference: RwLock::new(inference),
             plan_parser: PlanParser::new(),
             rag_client,
-            tool_registry: ToolRegistry::new(),
+            tool_registry: ToolRegistry::new(&semble_path),
             model_registry: ModelRegistry::new(),
             provider_registry,
             memory_store,
@@ -427,17 +468,48 @@ impl Orchestrator {
         };
         let context_from_docs = relevant_chunks.join("\n---\n");
 
-        // 2. Prompt Synthesis: Perform "Context Injection" if document data is available
-        let synthesis_prompt = if !context_from_docs.is_empty() {
-            ctx.trace_summary("rag", "context found and injected into prompt");
+        // 1.5 Code Search: If the query is code-related, use Semble MCP
+        let context_from_code = if is_code_scoped_request(&req.message) {
+            tracing::info!("Query detected as code-related: invoking Semble MCP tool");
+            ctx.trace_summary("code_search", "query looks code-related; invoking Semble");
+            match self.tool_registry.execute("code_search", &req.message).await {
+                Ok(context) => {
+                    tracing::info!("Code search successful, retrieved context length: {}", context.len());
+                    context
+                },
+                Err(e) => {
+                    tracing::warn!("Code search tool execution failed: {}", e);
+                    String::new()
+                }
+            }
+        } else {
+            String::new()
+        };
+
+        // 2. Prompt Synthesis: Perform "Context Injection" if data is available
+        let synthesis_prompt = if !context_from_docs.is_empty() || !context_from_code.is_empty() {
+            ctx.trace_summary("synthesis", "context found and injected into prompt");
             let active_documents = format_active_documents(&req.attachments);
-            format!(
-                "You are the AEGIS AI Assistant. Below are excerpts from a document provided by the user. \
-                Please use this information to answer the question as accurately as possible. \
-                If the document does not contain the answer, use your general knowledge to assist.\n\n\
-                ACTIVE IMPORTED DOCUMENTS:\n{}\n\nDOCUMENT CONTENT:\n{}\n\nUSER QUERY: {}",
-                active_documents, context_from_docs, ctx.original_query
-            )
+            let mut prompt = format!(
+                "You are the AEGIS AI Assistant. Below is the retrieved context to help you answer the user's question.\n\n"
+            );
+
+            if !context_from_docs.is_empty() {
+                prompt.push_str(&format!(
+                    "ACTIVE IMPORTED DOCUMENTS:\n{}\n\nDOCUMENT CONTENT:\n{}\n\n",
+                    active_documents, context_from_docs
+                ));
+            }
+
+            if !context_from_code.is_empty() {
+                prompt.push_str(&format!(
+                    "CODEBASE EXCERPTS (from Semble):\n{}\n\n",
+                    context_from_code
+                ));
+            }
+
+            prompt.push_str(&format!("USER QUERY: {}", ctx.original_query));
+            prompt
         } else {
             if req.attachments.is_empty() {
                 ctx.trace_summary("rag", "no relevant document context found");

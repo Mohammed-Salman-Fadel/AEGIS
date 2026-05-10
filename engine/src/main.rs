@@ -5,6 +5,7 @@ mod compactor;
 mod config;
 mod context;
 mod inference;
+mod mcp_client;
 mod memory_store;
 mod model_registry;
 mod network;
@@ -63,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
         config.inference.provider,
         config.inference.base_url,
         config.inference.api_key,
+        config.semble_path,
     );
     orchestrator
         .warm_active_model()
