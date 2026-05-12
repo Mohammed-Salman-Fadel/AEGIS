@@ -63,6 +63,7 @@ async fn handle_chat_ws(
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             let msg_data: Value = serde_json::from_str(&text).unwrap_or_default();
             let user_query = msg_data["query"].as_str().unwrap_or("").to_string();
+            let mode = msg_data["mode"].as_str().map(|s| s.to_string());
 
             let mut full_ai_response = String::new();
             let (tx, mut rx) = mpsc::channel::<String>(100);
@@ -72,6 +73,7 @@ async fn handle_chat_ws(
                 message: user_query,
                 attachments: vec![],
                 edit_from_turn_index: None,
+                mode,
             };
 
             let orchestrator = state.orchestrator.clone();

@@ -14,6 +14,7 @@ class LifecycleState:
         
         self.embedding_service: EmbeddingService | None = None
         self.vector_store: VectorStore | None = None
+        self.backend_name: str = "unknown"
 
     def initialize(self):
         with self.lock:
@@ -38,7 +39,8 @@ class LifecycleState:
             )
 
             self.is_initialized = True
-            logger.info("RAG Subsystem Initialized successfully.")
+            self.backend_name = self.embedding_service.backend
+            logger.info(f"RAG Subsystem Initialized successfully with {self.backend_name} backend.")
             return True
 
     def shutdown(self):

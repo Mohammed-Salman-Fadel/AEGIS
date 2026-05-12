@@ -55,6 +55,21 @@ pub struct ContextUsageSnapshot {
     pub used_tokens: usize,
     pub context_window: usize,
     pub usage_source: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatMode {
+    General,
+    Coder,
+    Academic,
+}
+
+impl From<Option<String>> for ChatMode {
+    fn from(mode: Option<String>) -> Self {
+        match mode.as_deref() {
+            Some("coder") => ChatMode::Coder,
+            Some("academic") => ChatMode::Academic,
+            _ => ChatMode::General,
+        }
+    }
 }
 
 fn format_active_documents(attachments: &[String]) -> String {
@@ -67,6 +82,47 @@ fn format_active_documents(attachments: &[String]) -> String {
         .map(|attachment| format!("- {attachment}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn is_code_scoped_request(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    let has_code_reference = [
+        "code",
+        "function",
+        "method",
+        "class",
+        "variable",
+        "module",
+        "file",
+        "implementation",
+        "logic",
+        "repo",
+        "codebase",
+        "source",
+        "rust",
+        "python",
+        "initialize",
+        "orchestrator",
+        "engine",
+        "handler",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+
+    let asks_for_search = [
+        "where",
+        "how",
+        "find",
+        "show",
+        "explain",
+        "what",
+        "search",
+        "list",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+
+    has_code_reference && asks_for_search
 }
 
 fn is_document_scoped_request(message: &str) -> bool {
@@ -113,6 +169,41 @@ fn is_document_scoped_request(message: &str) -> bool {
     .any(|phrase| lower.contains(phrase));
 
     has_document_reference && asks_for_document_action
+}
+
+fn is_research_scoped_request(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    let has_research_reference = [
+        "zotero",
+        "citation",
+        "cite",
+        "paper",
+        "article",
+        "journal",
+        "reference",
+        "bibliography",
+        "research",
+        "study",
+        "author",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+
+    let asks_for_search = [
+        "where",
+        "how",
+        "find",
+        "show",
+        "explain",
+        "what",
+        "search",
+        "list",
+        "get",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+
+    has_research_reference && asks_for_search
 }
 
 fn session_title_prompt(first_prompt: &str) -> String {
@@ -252,7 +343,6 @@ fn clean_generated_session_title(raw: &str) -> Option<String> {
 }
 
 impl Orchestrator {
-    /// Initializes the Orchestrator with required backend services.
     pub fn new(
         inference: Box<dyn InferenceBackend + Send + Sync>,
         rag_client: Arc<RagClient>,
@@ -260,6 +350,8 @@ impl Orchestrator {
         provider: InferenceProvider,
         _active_base_url: String,
         _api_key: Option<String>,
+        semble_path: String,
+        python_path: String,
     ) -> Self {
         let provider_registry = ProviderRegistry::new();
         provider_registry.set_active_provider(provider);
@@ -271,7 +363,7 @@ impl Orchestrator {
             inference: RwLock::new(inference),
             plan_parser: PlanParser::new(),
             rag_client,
-            tool_registry: ToolRegistry::new(),
+            tool_registry: ToolRegistry::new(&python_path, &semble_path),
             model_registry: ModelRegistry::new(),
             provider_registry,
             memory_store,
@@ -323,6 +415,12 @@ impl Orchestrator {
     }
 
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
+        // First delete the documents from the RAG subsystem
+        if let Err(e) = self.rag_client.delete_session(session_id).await {
+            warn!("Failed to delete RAG documents for session {}: {}", session_id, e);
+            // We continue anyway so the session file is still removed
+        }
+        
         self.memory_store.delete_session(session_id).await
     }
 
@@ -459,7 +557,7 @@ impl Orchestrator {
             _ => format!("main topic summary title {}", document_names.join(" ")),
         };
         let document_excerpts = match self.rag_client.retrieve(&query, 4, session_id).await {
-            Ok(excerpts) => excerpts,
+            Ok(outcome) => outcome.chunks,
             Err(error) => {
                 warn!(
                     session_id,
@@ -695,16 +793,16 @@ impl Orchestrator {
 
         // 1. RAG is strictly session-scoped. If this turn has no current-session
         // attachments, do not query the global RAG store at all.
-        let relevant_chunks = if req.attachments.is_empty() {
+        let (relevant_chunks, rag_metrics) = if req.attachments.is_empty() {
             ctx.trace_summary("rag", "no current-session document attachments");
-            Vec::new()
+            (Vec::new(), None)
         } else {
             match self
                 .rag_client
                 .retrieve(&ctx.original_query, 5, &working_session_id)
                 .await
             {
-                Ok(chunks) => chunks,
+                Ok(outcome) => (outcome.chunks, Some(outcome.metrics)),
                 Err(error) => {
                     anyhow::bail!(
                         "Could not retrieve context from the current session's imported documents: {error}"
@@ -712,11 +810,58 @@ impl Orchestrator {
                 }
             }
         };
+
+        if let Some(metrics) = &rag_metrics {
+            if let Ok(json) = serde_json::to_string(metrics) {
+                let _ = tx.send(format!("[RAG_METRICS] {json}")).await;
+            }
+        }
+
         let context_from_docs = relevant_chunks.join("\n---\n");
 
-        // 2. Prompt Synthesis: Perform "Context Injection" if document data is available
-        let synthesis_prompt = if !context_from_docs.is_empty() {
-            ctx.trace_summary("rag", "context found and injected into prompt");
+        let mode = ChatMode::from(req.mode.clone());
+
+        // 1.5 Code Search: If the query is code-related, use Semble MCP
+        // Optimization: In Coder mode, always try code search if classification passes or if we are forced
+        let context_from_code = if mode == ChatMode::Coder || is_code_scoped_request(&req.message) {
+            tracing::info!("Query detected as code-related or in Coder mode: invoking Semble MCP tool");
+            ctx.trace_summary("code_search", "invoking Semble");
+            match self.tool_registry.execute("code_search", &req.message).await {
+                Ok(context) => {
+                    tracing::info!("Code search successful, retrieved context length: {}", context.len());
+                    context
+                },
+                Err(e) => {
+                    tracing::warn!("Code search tool execution failed: {}", e);
+                    String::new()
+                }
+            }
+        } else {
+            String::new()
+        };
+
+        // 1.6 Zotero Search: If the query is research-related, use Zotero MCP
+        // Optimization: In Academic mode, always try zotero search
+        let context_from_zotero = if mode == ChatMode::Academic || is_research_scoped_request(&req.message) {
+            tracing::info!("Query detected as research-related or in Academic mode: invoking Zotero MCP tool");
+            ctx.trace_summary("zotero_search", "invoking Zotero");
+            match self.tool_registry.execute("zotero", &req.message).await {
+                Ok(context) => {
+                    tracing::info!("Zotero search successful, retrieved context length: {}", context.len());
+                    context
+                },
+                Err(e) => {
+                    tracing::warn!("Zotero search tool execution failed: {}", e);
+                    String::new()
+                }
+            }
+        } else {
+            String::new()
+        };
+
+        // 2. Prompt Synthesis: Perform "Context Injection" if data is available
+        let synthesis_prompt = if !context_from_docs.is_empty() || !context_from_code.is_empty() || !context_from_zotero.is_empty() {
+            ctx.trace_summary("synthesis", "context found and injected into prompt");
             let active_documents = format_active_documents(&req.attachments);
             format!(
                 "You are the AEGIS AI Assistant. Below are excerpts from a document provided by the user. \
@@ -729,6 +874,41 @@ impl Orchestrator {
                 context_from_docs,
                 ctx.original_query
             )
+            
+            let system_persona = match mode {
+                ChatMode::Coder => "You are the AEGIS AI Coder. You specialize in analyzing local codebases, explaining logic, and providing high-quality implementation suggestions.",
+                ChatMode::Academic => "You are the AEGIS AI Researcher. You specialize in analyzing scientific papers, providing precise citations from the Zotero library, and maintaining a formal, evidence-based tone.",
+                ChatMode::General => "You are the AEGIS AI Assistant. You provide balanced and helpful assistance across various tasks.",
+            };
+
+            let mut prompt = format!(
+                "{}\nBelow is the retrieved context to help you answer the user's question.\n\n",
+                system_persona
+            );
+
+            if !context_from_docs.is_empty() {
+                prompt.push_str(&format!(
+                    "ACTIVE IMPORTED DOCUMENTS:\n{}\n\nDOCUMENT CONTENT:\n{}\n\n",
+                    active_documents, context_from_docs
+                ));
+            }
+
+            if !context_from_code.is_empty() {
+                prompt.push_str(&format!(
+                    "CODEBASE EXCERPTS (from Semble):\n{}\n\n",
+                    context_from_code
+                ));
+            }
+
+            if !context_from_zotero.is_empty() {
+                prompt.push_str(&format!(
+                    "ZOTERO LIBRARY EXCERPTS:\n{}\n\n",
+                    context_from_zotero
+                ));
+            }
+
+            prompt.push_str(&format!("USER QUERY: {}", ctx.original_query));
+            prompt
         } else {
             if req.attachments.is_empty() {
                 ctx.trace_summary("rag", "no relevant document context found");
@@ -807,15 +987,14 @@ impl Orchestrator {
                         .await?
                 }
                 "rag" | "search" | "document" => {
-                    let chunks = self
+                    let outcome = self
                         .rag_client
                         .retrieve(&step.input, 5, &ctx.session_id)
-                        .await
-                        .unwrap_or_default();
-                    if chunks.is_empty() {
-                        "No relevant information was found in the document.".to_string()
-                    } else {
-                        chunks.join("\n---\n")
+                        .await;
+
+                    match outcome {
+                        Ok(o) if !o.chunks.is_empty() => o.chunks.join("\n---\n"),
+                        _ => "No relevant information was found in the document.".to_string(),
                     }
                 }
                 unsupported => {

@@ -1,11 +1,36 @@
+import time
 from typing import List, Dict, Any
 from ..core.lifecycle import state
 
 class RetrievalService:
-    def query(self, query_text: str, top_k: int, session_id: str) -> List[Dict[str, Any]]:
+    def query(self, query_text: str, top_k: int, session_id: str) -> Dict[str, Any]:
         if not query_text.strip() or not session_id.strip():
-            return []
+            return {
+                "results": [],
+                "metrics": {
+                    "retrieval_time_ms": 0.0,
+                    "avg_similarity": 0.0,
+                    "chunk_count": 0,
+                    "backend": state.backend_name
+                }
+            }
             
-        return state.vector_store.query(query_text, top_k, session_id.strip())
+        start_time = time.time()
+        results = state.vector_store.query(query_text, top_k, session_id.strip())
+        duration_ms = (time.time() - start_time) * 1000
+        
+        avg_sim = 0.0
+        if results:
+            avg_sim = sum(r["score"] for r in results) / len(results)
+            
+        return {
+            "results": results,
+            "metrics": {
+                "retrieval_time_ms": round(duration_ms, 2),
+                "avg_similarity": round(avg_sim, 4),
+                "chunk_count": len(results),
+                "backend": state.backend_name
+            }
+        }
 
 retrieval_service = RetrievalService()
