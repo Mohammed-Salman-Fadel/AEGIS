@@ -23,7 +23,7 @@ The Web UI is responsible for:
 Run the rust engine first:
 
 ```cmd
-cd C:\AEGIS\AEGIS\engine-rust
+cd C:\AEGIS\AEGIS\engine
 cargo run
 ```
 
