@@ -65,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
         config.inference.base_url,
         config.inference.api_key,
         config.semble_path,
+        config.python_path,
     );
     orchestrator
         .warm_active_model()

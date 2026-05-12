@@ -112,6 +112,7 @@ class VectorStore:
     def query(self, query_text: str, n_results: int, session_id: str) -> List[Dict[str, Any]]:
         """
         Query only documents owned by the active AEGIS session.
+        Returns list of dicts with 'document', 'metadata', and 'score'.
         """
         embedding = self.embedding_service.embed_query(query_text)
         session_id = session_id.strip()
@@ -123,7 +124,7 @@ class VectorStore:
                 query_embeddings=[embedding],
                 n_results=n_results,
                 where={"session_id": session_id},
-                include=["documents", "metadatas"]
+                include=["documents", "metadatas", "distances"]
             )
             
             formatted_results = []
@@ -132,13 +133,41 @@ class VectorStore:
                 
             docs = results["documents"][0]
             metas = results["metadatas"][0]
+            distances = results["distances"][0] if results.get("distances") else [0.0] * len(docs)
             
-            for doc, meta in zip(docs, metas):
-                formatted_results.append(_format_result(doc, meta))
+            for doc, meta, dist in zip(docs, metas, distances):
+                # Convert distance to similarity score (Chroma uses L2 by default, but HNWS:space:cosine returns 1-cosine)
+                # For cosine space: similarity = 1 - distance
+                score = 1.0 - dist
+                formatted_results.append({
+                    **_format_result(doc, meta),
+                    "score": float(max(0.0, min(1.0, score)))
+                })
                 
             return formatted_results
 
         return self._json_query(embedding, n_results, session_id)
+
+    def delete_session_documents(self, session_id: str) -> int:
+        """
+        Delete all document chunks associated with a session_id.
+        Returns the number of deleted records (if supported by backend).
+        """
+        session_id = session_id.strip()
+        if not session_id:
+            return 0
+
+        if self._use_chroma:
+            # Chroma doesn't return count directly on delete, but we can query then delete
+            self.collection.delete(where={"session_id": session_id})
+            return -1 # Success indicator
+
+        with self._lock:
+            records = self._read_json_records()
+            new_records = [r for r in records if r.get("metadata", {}).get("session_id") != session_id]
+            deleted_count = len(records) - len(new_records)
+            self._write_json_records(new_records)
+            return deleted_count
 
     def _json_upsert(
         self,
@@ -181,7 +210,10 @@ class VectorStore:
         scored.sort(key=lambda item: item[0], reverse=True)
 
         return [
-            _format_result(record.get("document", ""), record.get("metadata", {}))
+            {
+                **_format_result(record.get("document", ""), record.get("metadata", {})),
+                "score": float(score)
+            }
             for score, record in scored[:n_results]
             if score > 0
         ]

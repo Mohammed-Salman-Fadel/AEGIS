@@ -10,6 +10,7 @@ import {
   Cpu,
   Download,
   Edit3,
+  GraduationCap,
   HardDrive,
   MoreHorizontal,
   Moon,
@@ -33,6 +34,8 @@ type MarkdownBlock =
   | { type: 'ordered'; items: string[] }
   | { type: 'unordered'; items: string[] }
   | { type: 'code'; text: string; language: string };
+
+type ChatMode = 'general' | 'coder' | 'academic';
 
 interface Message {
   role: Role;
@@ -782,9 +785,8 @@ function createConversationPdf(options: {
   addLine('');
 
   options.messages.forEach((message) => {
-    const label = `${speakerLabel(message.role)} | ${formatExportTimestamp(message.timestamp)}${
-      message.edited ? ' | edited' : ''
-    }`;
+    const label = `${speakerLabel(message.role)} | ${formatExportTimestamp(message.timestamp)}${message.edited ? ' | edited' : ''
+      }`;
     addLine(label);
     message.content.split('\n').forEach((line) => {
       wrapPdfLine(line, maxCharsPerLine).forEach((wrappedLine) => addLine(`  ${wrappedLine}`));
@@ -913,22 +915,24 @@ export default function App() {
     tps: 0,
     ttft: 0,
     ragTime: 0,
-    precision: 0,
-    recall: 0,
+    similarity: 0,
+    chunks: 0,
+    backend: '---',
   });
   const inferenceStartTime = useRef<number | null>(null);
   const [sessionMenuOpenId, setSessionMenuOpenId] = useState<string | null>(null);
+  const [chatMode, setChatMode] = useState<ChatMode>('general');
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isDark = theme === 'dark';
   const resourceWarning =
     systemStats.cpu > 80 || systemStats.ram > 80
       ? `${[
-          systemStats.cpu > 80 ? 'CPU' : null,
-          systemStats.ram > 80 ? 'RAM' : null,
-        ]
-          .filter(Boolean)
-          .join(' and ')} ${systemStats.cpu > 80 && systemStats.ram > 80 ? 'are' : 'is'} almost at full capacity.`
+        systemStats.cpu > 80 ? 'CPU' : null,
+        systemStats.ram > 80 ? 'RAM' : null,
+      ]
+        .filter(Boolean)
+        .join(' and ')} ${systemStats.cpu > 80 && systemStats.ram > 80 ? 'are' : 'is'} almost at full capacity.`
       : null;
   const visibleResourceWarning =
     resourceWarning && resourceWarning !== dismissedResourceWarning ? resourceWarning : null;
@@ -1352,7 +1356,7 @@ export default function App() {
           reject(
             new Error(
               request.responseText ||
-                `Engine returned HTTP ${request.status} while uploading.`,
+              `Engine returned HTTP ${request.status} while uploading.`,
             ),
           );
         };
@@ -1635,6 +1639,7 @@ export default function App() {
             (document) => `${document.file_name} (${document.chunks_added} chunks)`,
           ),
           edit_from_turn_index: editFromTurnIndex,
+          mode: chatMode,
         }),
       });
 
@@ -1660,6 +1665,22 @@ export default function App() {
         for (const event of parsed.events) {
           const data = sseEventData(event);
           if (!data) {
+            continue;
+          }
+
+          if (data.startsWith('[RAG_METRICS] ')) {
+            try {
+              const metrics = JSON.parse(data.replace('[RAG_METRICS] ', ''));
+              setInferenceStats((prev) => ({
+                ...prev,
+                ragTime: metrics.retrieval_time_ms,
+                similarity: metrics.avg_similarity,
+                chunks: metrics.chunk_count,
+                backend: metrics.backend
+              }));
+            } catch (e) {
+              console.error('Failed to parse RAG metrics:', e);
+            }
             continue;
           }
 
@@ -1700,18 +1721,10 @@ export default function App() {
       const estimatedTokens = Math.max(1, Math.floor(charCount / 4));
       const tps = totalLatency > 0 ? parseFloat(((estimatedTokens / totalLatency) * 1000).toFixed(1)) : 0;
 
-      // Mock academic RAG metrics for dashboard visibility
-      const precision = 0.85 + Math.random() * 0.1;
-      const recall = 0.78 + Math.random() * 0.15;
-      const ragTime = 120 + Math.floor(Math.random() * 300);
-
       setInferenceStats((prev) => ({
         ...prev,
         latency: totalLatency,
         tps,
-        precision,
-        recall,
-        ragTime,
       }));
 
       setStatus('Complete');
@@ -1792,25 +1805,22 @@ export default function App() {
 
   return (
     <div
-      className={`flex h-screen overflow-hidden ${
-        isDark ? 'bg-zinc-950 text-zinc-100' : 'bg-stone-100 text-slate-900'
-      }`}
+      className={`flex h-screen overflow-hidden ${isDark ? 'bg-zinc-950 text-zinc-100' : 'bg-stone-100 text-slate-900'
+        }`}
       onClick={() => setSessionMenuOpenId(null)}
     >
       <nav
         aria-label="Sidebar controls"
-        className={`flex w-14 shrink-0 flex-col items-center border-r ${
-          isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'
-        }`}
+        className={`flex w-14 shrink-0 flex-col items-center border-r ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'
+          }`}
       >
         <button
           aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
           aria-pressed={sidebarOpen}
-          className={`mt-4 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${
-            isDark
+          className={`mt-4 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark
               ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
               : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
-          }`}
+            }`}
           onClick={(event) => {
             event.stopPropagation();
             setSidebarOpen((current) => !current);
@@ -1822,11 +1832,10 @@ export default function App() {
         </button>
         <button
           aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${
-            isDark
+          className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark
               ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
               : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
-          }`}
+            }`}
           onClick={(event) => {
             event.stopPropagation();
             setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
@@ -1840,246 +1849,230 @@ export default function App() {
 
       <aside
         aria-hidden={!sidebarOpen}
-        className={`shrink-0 overflow-hidden border-r transition-[width] duration-300 ease-out ${
-          sidebarOpen ? 'w-64' : 'w-0 pointer-events-none'
-        } ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
+        className={`shrink-0 overflow-hidden border-r transition-[width] duration-300 ease-out ${sidebarOpen ? 'w-64' : 'w-0 pointer-events-none'
+          } ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
       >
         <div
-          className={`flex h-full w-64 shrink-0 flex-col py-4 pl-2 pr-4 transition-opacity duration-150 ease-out ${
-            sidebarOpen ? 'opacity-100 delay-100' : 'opacity-0'
-          }`}
-        >
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div>
-            <div className="aegis-wordmark">AEGIS</div>
-          </div>
-          <div
-            className={`space-y-1 text-right font-mono text-[11px] ${
-              isDark ? 'text-zinc-100' : 'text-slate-900'
+          className={`flex h-full w-64 shrink-0 flex-col py-4 pl-2 pr-4 transition-opacity duration-150 ease-out ${sidebarOpen ? 'opacity-100 delay-100' : 'opacity-0'
             }`}
-          >
-            <div className="flex items-center justify-end gap-1.5">
-              <Cpu size={12} />
-              <span>{systemStats.cpu}%</span>
+        >
+          <div className="mb-6 flex items-start justify-between gap-4">
+            <div>
+              <div className="aegis-wordmark">AEGIS</div>
             </div>
-            <div className="flex items-center justify-end gap-1.5">
-              <HardDrive size={12} />
-              <span>{systemStats.ram}%</span>
+            <div
+              className={`space-y-1 text-right font-mono text-[11px] ${isDark ? 'text-zinc-100' : 'text-slate-900'
+                }`}
+            >
+              <div className="flex items-center justify-end gap-1.5">
+                <Cpu size={12} />
+                <span>{systemStats.cpu}%</span>
+              </div>
+              <div className="flex items-center justify-end gap-1.5">
+                <HardDrive size={12} />
+                <span>{systemStats.ram}%</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <button
-          className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
-          disabled={isStreaming}
-          onClick={handleNewSession}
-          type="button"
-        >
-          <Plus size={16} />
-          New Chat
-        </button>
+          <button
+            className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+            disabled={isStreaming}
+            onClick={handleNewSession}
+            type="button"
+          >
+            <Plus size={16} />
+            New Chat
+          </button>
 
-        <div
-          className={`mb-2 text-xs font-semibold uppercase tracking-wide ${
-            isDark ? 'text-zinc-500' : 'text-slate-500'
-          }`}
-        >
-          Sessions
-        </div>
-
-        <div className="sessions-scroll -ml-1.5 -mr-3 min-h-0 flex-1 space-y-1 overflow-y-auto py-1.5 pl-2 pr-3">
-          {sessions.length === 0 ? (
-            <div
-              className={`rounded-lg border p-3 text-sm ${
-                isDark ? 'border-zinc-800 text-zinc-500' : 'border-stone-300 text-slate-500'
+          <div
+            className={`mb-2 text-xs font-semibold uppercase tracking-wide ${isDark ? 'text-zinc-500' : 'text-slate-500'
               }`}
-            >
-              No saved sessions yet.
-            </div>
-          ) : (
-            sortedSessions.map((session, sessionIndex) => {
-              const isDeleting = deletingSessionIds.includes(session.session_id);
-              const isNewSession = newSessionPulseId === session.session_id;
-              const isActive = session.session_id === activeSessionId;
-              const isPinned = pinnedSessionIdSet.has(session.session_id);
-              const shouldOpenMenuUp = sessionIndex > sortedSessions.length - 4;
-              const cardStateClasses = isDeleting
-                ? isDark
-                  ? 'border-transparent bg-red-950/40 text-red-100 opacity-0 scale-95 -translate-x-2'
-                  : 'border-transparent bg-red-100 text-red-800 opacity-0 scale-95 -translate-x-2'
-                : isActive && isPinned
+          >
+            Sessions
+          </div>
+
+          <div className="sessions-scroll -ml-1.5 -mr-3 min-h-0 flex-1 space-y-1 overflow-y-auto py-1.5 pl-2 pr-3">
+            {sessions.length === 0 ? (
+              <div
+                className={`rounded-lg border p-3 text-sm ${isDark ? 'border-zinc-800 text-zinc-500' : 'border-stone-300 text-slate-500'
+                  }`}
+              >
+                No saved sessions yet.
+              </div>
+            ) : (
+              sortedSessions.map((session, sessionIndex) => {
+                const isDeleting = deletingSessionIds.includes(session.session_id);
+                const isNewSession = newSessionPulseId === session.session_id;
+                const isActive = session.session_id === activeSessionId;
+                const isPinned = pinnedSessionIdSet.has(session.session_id);
+                const shouldOpenMenuUp = sessionIndex > sortedSessions.length - 4;
+                const cardStateClasses = isDeleting
                   ? isDark
-                    ? 'border-transparent bg-zinc-800/95 text-zinc-50 shadow-[0_3px_10px_rgba(255,255,255,0.16),inset_0_1px_0_rgba(255,255,255,0.16)] ring-1 ring-amber-500/20'
-                    : 'border-transparent bg-white text-slate-950 shadow-[0_8px_22px_rgba(120,113,108,0.16)] ring-1 ring-amber-300/55'
-                : isActive
-                  ? isDark
-                    ? 'border-transparent bg-zinc-800/95 text-zinc-50 shadow-[0_3px_10px_rgba(255,255,255,0.16),inset_0_1px_0_rgba(255,255,255,0.16)]'
-                    : 'border-transparent bg-white text-slate-950 shadow-[0_8px_22px_rgba(120,113,108,0.16)]'
-                  : isPinned
+                    ? 'border-transparent bg-red-950/40 text-red-100 opacity-0 scale-95 -translate-x-2'
+                    : 'border-transparent bg-red-100 text-red-800 opacity-0 scale-95 -translate-x-2'
+                  : isActive && isPinned
                     ? isDark
-                      ? 'border-transparent bg-zinc-900/75 text-zinc-100 shadow-[0_2px_8px_rgba(255,255,255,0.12)]'
-                      : 'border-transparent bg-white/80 text-slate-900 shadow-[0_3px_14px_rgba(120,113,108,0.10)]'
-                    : isDark
-                      ? 'border-transparent text-zinc-300 shadow-[0_1px_0_rgba(255,255,255,0.09)] hover:bg-zinc-900/85 hover:shadow-[0_3px_9px_rgba(255,255,255,0.14)]'
-                      : 'border-transparent text-slate-700 shadow-[0_1px_0_rgba(120,113,108,0.12)] hover:bg-white/80 hover:shadow-[0_8px_20px_rgba(120,113,108,0.12)]';
+                      ? 'border-transparent bg-zinc-800/95 text-zinc-50 shadow-[0_3px_10px_rgba(255,255,255,0.16),inset_0_1px_0_rgba(255,255,255,0.16)] ring-1 ring-amber-500/20'
+                      : 'border-transparent bg-white text-slate-950 shadow-[0_8px_22px_rgba(120,113,108,0.16)] ring-1 ring-amber-300/55'
+                    : isActive
+                      ? isDark
+                        ? 'border-transparent bg-zinc-800/95 text-zinc-50 shadow-[0_3px_10px_rgba(255,255,255,0.16),inset_0_1px_0_rgba(255,255,255,0.16)]'
+                        : 'border-transparent bg-white text-slate-950 shadow-[0_8px_22px_rgba(120,113,108,0.16)]'
+                      : isPinned
+                        ? isDark
+                          ? 'border-transparent bg-zinc-900/75 text-zinc-100 shadow-[0_2px_8px_rgba(255,255,255,0.12)]'
+                          : 'border-transparent bg-white/80 text-slate-900 shadow-[0_3px_14px_rgba(120,113,108,0.10)]'
+                        : isDark
+                          ? 'border-transparent text-zinc-300 shadow-[0_1px_0_rgba(255,255,255,0.09)] hover:bg-zinc-900/85 hover:shadow-[0_3px_9px_rgba(255,255,255,0.14)]'
+                          : 'border-transparent text-slate-700 shadow-[0_1px_0_rgba(120,113,108,0.12)] hover:bg-white/80 hover:shadow-[0_8px_20px_rgba(120,113,108,0.12)]';
 
-              return (
-                <div
-                  className={`relative w-full rounded-lg border px-2 py-2 text-left transition-all duration-200 ease-out ${
-                    isNewSession ? 'animate-[fadeInSession_520ms_ease-out]' : ''
-                  } ${cardStateClasses}`}
-                  key={session.session_id}
-                >
-                  <div className="flex items-center gap-1.5">
-                    {editingSessionId === session.session_id ? (
-                      <input
-                        autoFocus
-                        className={`session-title-text min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-sm outline-none ${
-                          isDark
-                            ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
-                            : 'border-emerald-500 bg-white text-slate-900'
-                        }`}
-                        onBlur={() => {
-                          void submitRenamingSession(session);
-                        }}
-                        onChange={(event) => setEditingTitle(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
+                return (
+                  <div
+                    className={`relative w-full rounded-lg border px-2 py-2 text-left transition-all duration-200 ease-out ${isNewSession ? 'animate-[fadeInSession_520ms_ease-out]' : ''
+                      } ${cardStateClasses}`}
+                    key={session.session_id}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {editingSessionId === session.session_id ? (
+                        <input
+                          autoFocus
+                          className={`session-title-text min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-sm outline-none ${isDark
+                              ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
+                              : 'border-emerald-500 bg-white text-slate-900'
+                            }`}
+                          onBlur={() => {
                             void submitRenamingSession(session);
-                          }
-                          if (event.key === 'Escape') {
-                            event.preventDefault();
-                            cancelRenamingSession();
-                          }
-                        }}
-                        value={editingTitle}
-                      />
-                    ) : (
-                      <button
-                        className="min-w-0 flex-1 py-1 text-left"
-                        disabled={isStreaming || isDeleting}
-                        onClick={() => {
-                          void handleSessionSelect(session.session_id);
-                        }}
-                        type="button"
-                      >
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          <span
-                            className="session-title-text truncate text-sm leading-5"
-                            onDoubleClick={(event) => {
-                              event.stopPropagation();
-                              beginRenamingSession(session);
-                            }}
-                          >
-                            {session.title}
+                          }}
+                          onChange={(event) => setEditingTitle(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              void submitRenamingSession(session);
+                            }
+                            if (event.key === 'Escape') {
+                              event.preventDefault();
+                              cancelRenamingSession();
+                            }
+                          }}
+                          value={editingTitle}
+                        />
+                      ) : (
+                        <button
+                          className="min-w-0 flex-1 py-1 text-left"
+                          disabled={isStreaming || isDeleting}
+                          onClick={() => {
+                            void handleSessionSelect(session.session_id);
+                          }}
+                          type="button"
+                        >
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span
+                              className="session-title-text truncate text-sm leading-5"
+                              onDoubleClick={(event) => {
+                                event.stopPropagation();
+                                beginRenamingSession(session);
+                              }}
+                            >
+                              {session.title}
+                            </span>
                           </span>
+                        </button>
+                      )}
+
+                      {isPinned && (
+                        <span
+                          className={`inline-flex shrink-0 items-center justify-center rounded-lg p-1 ${isDark ? 'text-amber-300' : 'text-amber-600'
+                            }`}
+                          title="Pinned session"
+                        >
+                          <Pin fill="currentColor" size={14} />
                         </span>
-                      </button>
-                    )}
+                      )}
 
-                    {isPinned && (
-                      <span
-                        className={`inline-flex shrink-0 items-center justify-center rounded-lg p-1 ${
-                          isDark ? 'text-amber-300' : 'text-amber-600'
-                        }`}
-                        title="Pinned session"
-                      >
-                        <Pin fill="currentColor" size={14} />
-                      </span>
-                    )}
-
-                    <button
-                      aria-expanded={sessionMenuOpenId === session.session_id}
-                      aria-label={`Open actions for ${session.title}`}
-                      className={`rounded-lg p-1.5 transition disabled:opacity-50 ${
-                        isDark
-                          ? 'text-zinc-400 hover:bg-zinc-700/80 hover:text-zinc-100'
-                          : 'text-slate-500 hover:bg-stone-100 hover:text-slate-900'
-                      }`}
-                      disabled={isStreaming || isDeleting}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSessionMenuOpenId((current) =>
-                          current === session.session_id ? null : session.session_id,
-                        );
-                      }}
-                      type="button"
-                    >
-                      <MoreHorizontal size={17} />
-                    </button>
-                  </div>
-
-                  {sessionMenuOpenId === session.session_id && (
-                    <div
-                      className={`absolute right-2 z-30 w-40 rounded-xl border p-1 text-sm shadow-xl ${
-                        shouldOpenMenuUp ? 'bottom-10' : 'top-10'
-                      } ${
-                        isDark
-                          ? 'border-zinc-800 bg-zinc-950 text-zinc-100 shadow-white/5'
-                          : 'border-stone-200 bg-white text-slate-900 shadow-stone-300/50'
-                      }`}
-                      onClick={(event) => event.stopPropagation()}
-                    >
                       <button
-                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
-                        onClick={() => beginRenamingSession(session)}
-                        type="button"
-                      >
-                        <Edit3 size={14} />
-                        Rename
-                      </button>
-                      <button
-                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
-                        onClick={() => {
-                          void exportSessionAsPdf(session);
+                        aria-expanded={sessionMenuOpenId === session.session_id}
+                        aria-label={`Open actions for ${session.title}`}
+                        className={`rounded-lg p-1.5 transition disabled:opacity-50 ${isDark
+                            ? 'text-zinc-400 hover:bg-zinc-700/80 hover:text-zinc-100'
+                            : 'text-slate-500 hover:bg-stone-100 hover:text-slate-900'
+                          }`}
+                        disabled={isStreaming || isDeleting}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSessionMenuOpenId((current) =>
+                            current === session.session_id ? null : session.session_id,
+                          );
                         }}
                         type="button"
                       >
-                        <Download size={14} />
-                        Export chat
-                      </button>
-                      <button
-                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
-                        onClick={() => togglePinnedSession(session.session_id)}
-                        type="button"
-                      >
-                        <Pin fill={isPinned ? 'currentColor' : 'none'} size={14} />
-                        {isPinned ? 'Unpin' : 'Pin'}
-                      </button>
-                      <button
-                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left font-medium text-red-500 transition ${
-                          isDark ? 'hover:bg-red-950/30' : 'hover:bg-red-50'
-                        }`}
-                        onClick={() => {
-                          void handleDeleteSession(session);
-                        }}
-                        type="button"
-                      >
-                        <Trash2 size={14} />
-                        Delete
+                        <MoreHorizontal size={17} />
                       </button>
                     </div>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
+
+                    {sessionMenuOpenId === session.session_id && (
+                      <div
+                        className={`absolute right-2 z-30 w-40 rounded-xl border p-1 text-sm shadow-xl ${shouldOpenMenuUp ? 'bottom-10' : 'top-10'
+                          } ${isDark
+                            ? 'border-zinc-800 bg-zinc-950 text-zinc-100 shadow-white/5'
+                            : 'border-stone-200 bg-white text-slate-900 shadow-stone-300/50'
+                          }`}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <button
+                          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                            }`}
+                          onClick={() => beginRenamingSession(session)}
+                          type="button"
+                        >
+                          <Edit3 size={14} />
+                          Rename
+                        </button>
+                        <button
+                          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                            }`}
+                          onClick={() => {
+                            void exportSessionAsPdf(session);
+                          }}
+                          type="button"
+                        >
+                          <Download size={14} />
+                          Export chat
+                        </button>
+                        <button
+                          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                            }`}
+                          onClick={() => togglePinnedSession(session.session_id)}
+                          type="button"
+                        >
+                          <Pin fill={isPinned ? 'currentColor' : 'none'} size={14} />
+                          {isPinned ? 'Unpin' : 'Pin'}
+                        </button>
+                        <button
+                          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left font-medium text-red-500 transition ${isDark ? 'hover:bg-red-950/30' : 'hover:bg-red-50'
+                            }`}
+                          onClick={() => {
+                            void handleDeleteSession(session);
+                          }}
+                          type="button"
+                        >
+                          <Trash2 size={14} />
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
         <header
-          className={`flex h-16 shrink-0 items-center justify-between border-b px-6 ${
-            isDark ? 'border-zinc-800' : 'border-stone-300'
-          }`}
+          className={`flex h-16 shrink-0 items-center justify-between border-b px-6 ${isDark ? 'border-zinc-800' : 'border-stone-300'
+            }`}
         >
           <div className="flex min-w-0 items-center gap-3">
             <div className="min-w-0">
@@ -2089,27 +2082,52 @@ export default function App() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+
+          <div className="flex items-center gap-1 rounded-xl border border-zinc-800/50 bg-zinc-900/30 p-1 shadow-inner backdrop-blur-sm">
             <button
-              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${
-                isDark
-                  ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
-                  : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
-              }`}
-              onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'general'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                  : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+                }`}
+              onClick={() => setChatMode('general')}
               type="button"
             >
-              {isDark ? <Sun size={14} /> : <Moon size={14} />}
-              {isDark ? 'Light mode' : 'Dark mode'}
+              <Bot size={14} />
+              General
             </button>
             <button
-              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${
-                isMetricsOpen
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'coder'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                  : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+                }`}
+              onClick={() => setChatMode('coder')}
+              type="button"
+            >
+              <Cpu size={14} />
+              Coder
+            </button>
+            <button
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                chatMode === 'academic'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                  : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+              }`}
+              onClick={() => setChatMode('academic')}
+              type="button"
+            >
+              <GraduationCap size={14} />
+              Academic
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${isMetricsOpen
                   ? 'border-emerald-600 bg-emerald-950/30 text-emerald-400'
                   : isDark
                     ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
                     : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
-              }`}
+                }`}
               onClick={() => setIsMetricsOpen((current) => !current)}
               type="button"
             >
@@ -2117,11 +2135,10 @@ export default function App() {
               Metrics
             </button>
             <div
-              className={`rounded-lg border px-3 py-1 text-xs ${
-                isDark
+              className={`rounded-lg border px-3 py-1 text-xs ${isDark
                   ? 'border-zinc-800 text-zinc-400'
                   : 'border-stone-300 bg-white text-slate-500'
-              }`}
+                }`}
             >
               {status}
             </div>
@@ -2130,20 +2147,18 @@ export default function App() {
 
         {visibleResourceWarning && (
           <div
-            className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm font-medium ${
-              isDark
+            className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm font-medium ${isDark
                 ? 'border-amber-900/60 bg-amber-950/30 text-amber-200'
                 : 'border-amber-200 bg-amber-50 text-amber-800'
-            }`}
+              }`}
           >
             <span className="min-w-0 flex-1">Warning: {visibleResourceWarning}</span>
             <button
               aria-label="Dismiss resource warning"
-              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
-                isDark
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark
                   ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100'
                   : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'
-              }`}
+                }`}
               onClick={() => setDismissedResourceWarning(visibleResourceWarning)}
               title="Dismiss warning"
               type="button"
@@ -2155,22 +2170,20 @@ export default function App() {
 
         {error && (
           <div
-            className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm ${
-              isDark
+            className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm ${isDark
                 ? 'border-red-900/60 bg-red-950/30 text-red-200'
                 : 'border-red-200 bg-red-50 text-red-700'
-            }`}
+              }`}
             role="alert"
           >
             <span className="min-w-0 flex-1">{error}</span>
             {errorDismissible && (
               <button
                 aria-label="Dismiss error"
-                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${
-                  isDark
+                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark
                     ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100'
                     : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'
-                }`}
+                  }`}
                 onClick={() => setError(null)}
                 title="Dismiss error"
                 type="button"
@@ -2183,11 +2196,10 @@ export default function App() {
 
         <div
           ref={scrollRef}
-          className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 ${
-            isDark
+          className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 ${isDark
               ? 'bg-zinc-950'
               : 'bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.75),_rgba(245,245,244,0)_42%)]'
-          }`}
+            }`}
         >
           <div className="mx-auto flex max-w-4xl flex-col gap-4">
             {messages.length === 0 ? null : (
@@ -2198,35 +2210,31 @@ export default function App() {
                 >
                   {message.role === 'assistant' && (
                     <div
-                      className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                        isDark
+                      className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isDark
                           ? 'bg-zinc-800 text-zinc-200 shadow-sm shadow-white/5'
                           : 'bg-white text-slate-700 shadow-sm shadow-stone-300/70 ring-1 ring-stone-200'
-                      }`}
+                        }`}
                     >
                       <Bot size={16} />
                     </div>
                   )}
                   <div
-                    className={`group flex max-w-[78%] flex-col ${
-                      message.role === 'user' ? 'items-end' : 'items-start'
-                    }`}
+                    className={`group flex max-w-[78%] flex-col ${message.role === 'user' ? 'items-end' : 'items-start'
+                      }`}
                   >
                     {editingMessageIndex === index && message.role === 'user' ? (
                       <div
-                        className={`w-[min(32rem,78vw)] rounded-lg border p-2.5 shadow-sm ${
-                          isDark
+                        className={`w-[min(32rem,78vw)] rounded-lg border p-2.5 shadow-sm ${isDark
                             ? 'border-emerald-700 bg-zinc-900'
                             : 'border-emerald-500 bg-white'
-                        }`}
+                          }`}
                       >
                         <textarea
                           autoFocus
-                          className={`mb-2 max-h-56 min-h-11 w-full resize-none overflow-hidden rounded-md border px-3 py-2.5 text-sm leading-5 outline-none focus:border-emerald-600 ${
-                            isDark
+                          className={`mb-2 max-h-56 min-h-11 w-full resize-none overflow-hidden rounded-md border px-3 py-2.5 text-sm leading-5 outline-none focus:border-emerald-600 ${isDark
                               ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                               : 'border-stone-300 bg-white text-slate-900'
-                          }`}
+                            }`}
                           onChange={(event) => {
                             setEditingMessageText(event.target.value);
                             fitTextareaToContent(event.currentTarget);
@@ -2241,11 +2249,10 @@ export default function App() {
                         />
                         <div className="flex justify-end gap-2">
                           <button
-                            className={`rounded-md border px-3 py-1.5 text-xs ${
-                              isDark
+                            className={`rounded-md border px-3 py-1.5 text-xs ${isDark
                                 ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-800'
                                 : 'border-stone-300 text-slate-700 hover:bg-stone-100'
-                            }`}
+                              }`}
                             onClick={cancelEditingMessage}
                             type="button"
                           >
@@ -2263,15 +2270,14 @@ export default function App() {
                       </div>
                     ) : (
                       <div
-                        className={`rounded-lg px-4 py-3 text-sm leading-6 shadow-sm ${
-                          message.role === 'user'
+                        className={`rounded-lg px-4 py-3 text-sm leading-6 shadow-sm ${message.role === 'user'
                             ? isDark
                               ? 'bg-emerald-600 text-white shadow-[0_8px_22px_rgba(255,255,255,0.07)]'
                               : 'bg-emerald-600 text-white shadow-[0_10px_24px_rgba(16,185,129,0.24)]'
                             : isDark
                               ? 'border border-zinc-800 bg-zinc-900 text-zinc-200 shadow-[0_8px_22px_rgba(255,255,255,0.065)]'
                               : 'border border-stone-200 bg-white/95 text-slate-800 shadow-[0_10px_26px_rgba(120,113,108,0.20)]'
-                        }`}
+                          }`}
                       >
                         {message.role === 'assistant' ? (
                           <AssistantMarkdown content={message.content} />
@@ -2284,11 +2290,10 @@ export default function App() {
                       <div className="mt-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                         <button
                           aria-label="Edit message"
-                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${
-                            isDark
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
                               ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
                               : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
-                          }`}
+                            }`}
                           disabled={isStreaming}
                           onClick={() => beginEditingMessage(index, message.content)}
                           title="Edit message"
@@ -2298,11 +2303,10 @@ export default function App() {
                         </button>
                         <button
                           aria-label="Copy message"
-                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${
-                            isDark
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
                               ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
                               : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
-                          }`}
+                            }`}
                           onClick={() => {
                             void copyUserMessage(index, message.content);
                           }}
@@ -2316,11 +2320,10 @@ export default function App() {
                   </div>
                   {message.role === 'user' && (
                     <div
-                      className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${
-                        isDark
+                      className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${isDark
                           ? 'bg-emerald-700 text-white shadow-white/5'
                           : 'bg-emerald-50 text-emerald-700 shadow-emerald-100 ring-1 ring-emerald-200'
-                      }`}
+                        }`}
                     >
                       <User size={16} />
                     </div>
@@ -2332,39 +2335,35 @@ export default function App() {
         </div>
 
         <footer
-          className={`relative shrink-0 px-4 pb-4 pt-5 ${
-            isDark
+          className={`relative shrink-0 px-4 pb-4 pt-5 ${isDark
               ? 'bg-zinc-950/95 shadow-[0_-24px_42px_rgba(0,0,0,0.35)]'
               : 'bg-stone-100/95 shadow-[0_-24px_42px_rgba(120,113,108,0.18)]'
-          }`}
+            }`}
         >
           <div
-            className={`pointer-events-none absolute inset-x-0 -top-8 h-8 ${
-              isDark
+            className={`pointer-events-none absolute inset-x-0 -top-8 h-8 ${isDark
                 ? 'bg-gradient-to-t from-zinc-950/95 to-transparent'
                 : 'bg-gradient-to-t from-stone-100/95 to-transparent'
-            }`}
+              }`}
           />
           {showImportProgress && (
             <div
-              className={`mx-auto mb-3 max-w-3xl rounded-lg border px-3 py-2 ${
-                importPhase === 'error'
+              className={`mx-auto mb-3 max-w-3xl rounded-lg border px-3 py-2 ${importPhase === 'error'
                   ? isDark
                     ? 'border-red-900/70 bg-red-950/20 text-red-200'
                     : 'border-red-200 bg-red-50 text-red-800'
                   : isDark
                     ? 'border-zinc-800 bg-zinc-900/80 text-zinc-200'
                     : 'border-stone-300 bg-white text-slate-700'
-              }`}
+                }`}
             >
               <div className="mb-2 flex items-center justify-between gap-3 text-xs">
                 <span className="truncate">{importPhaseLabel(importPhase, importFileLabel)}</span>
                 <span className="font-mono">{importProgress}%</span>
               </div>
               <div
-                className={`h-1.5 overflow-hidden rounded-full ${
-                  isDark ? 'bg-zinc-800' : 'bg-stone-200'
-                }`}
+                className={`h-1.5 overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'
+                  }`}
                 role="progressbar"
                 aria-label="Document import progress"
                 aria-valuemin={0}
@@ -2372,13 +2371,12 @@ export default function App() {
                 aria-valuenow={importProgress}
               >
                 <div
-                  className={`h-full rounded-full transition-all duration-300 ${
-                    importPhase === 'error'
+                  className={`h-full rounded-full transition-all duration-300 ${importPhase === 'error'
                       ? 'bg-red-500'
                       : importPhase === 'complete'
                         ? 'bg-emerald-500'
                         : 'bg-emerald-400'
-                  } ${importPhase === 'indexing' ? 'animate-pulse' : ''}`}
+                    } ${importPhase === 'indexing' ? 'animate-pulse' : ''}`}
                   style={{ width: `${importProgress}%` }}
                 />
               </div>
@@ -2386,11 +2384,10 @@ export default function App() {
           )}
           {indexedDocuments.length > 0 && (
             <div
-              className={`mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
-                isDark
+              className={`mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border px-3 py-2 text-xs ${isDark
                   ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
                   : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-              }`}
+                }`}
             >
               <Upload size={14} />
               <span className="truncate">
@@ -2401,11 +2398,10 @@ export default function App() {
           )}
           <form className="mx-auto flex max-w-3xl gap-3" onSubmit={handleSubmit}>
             <input
-              className={`min-w-0 flex-1 rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${
-                isDark
+              className={`min-w-0 flex-1 rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${isDark
                   ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
                   : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
-              }`}
+                }`}
               disabled={isStreaming}
               onChange={(event) => setInput(event.target.value)}
               placeholder="Message AEGIS"
@@ -2424,17 +2420,15 @@ export default function App() {
             <div className="relative">
               <button
                 aria-expanded={toolsOpen}
-                className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm transition-all duration-200 ${
-                  isStreaming ? 'cursor-not-allowed opacity-60' : ''
-                } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${
-                  toolsOpen
+                className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm transition-all duration-200 ${isStreaming ? 'cursor-not-allowed opacity-60' : ''
+                  } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${toolsOpen
                     ? isDark
                       ? 'border-emerald-500/40 bg-zinc-800 text-emerald-200 shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
                       : 'border-emerald-400/70 bg-emerald-50 text-emerald-800 shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
                     : isDark
                       ? 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
                       : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-50'
-                }`}
+                  }`}
                 disabled={isStreaming}
                 onClick={() => setToolsOpen((current) => !current)}
                 type="button"
@@ -2448,16 +2442,14 @@ export default function App() {
               </button>
               {toolsOpen && (
                 <div
-                  className={`absolute bottom-full right-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${
-                    isDark
+                  className={`absolute bottom-full right-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${isDark
                       ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                       : 'border-stone-300 bg-white text-slate-900'
-                  }`}
+                    }`}
                 >
                   <button
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${
-                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                    }`}
+                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                      }`}
                     disabled={isStreaming || isUploading}
                     onClick={handleImportToolClick}
                     type="button"
@@ -2466,9 +2458,8 @@ export default function App() {
                     Import
                   </button>
                   <button
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
-                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                    }`}
+                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                      }`}
                     onClick={openCalendarTool}
                     type="button"
                   >
@@ -2476,9 +2467,8 @@ export default function App() {
                     Calendar
                   </button>
                   <button
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
-                      isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                    }`}
+                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                      }`}
                     disabled={messages.length === 0}
                     onClick={exportChatAsPdf}
                     type="button"
@@ -2503,9 +2493,8 @@ export default function App() {
 
       {/* PERFORMANCE METRICS SIDEBAR */}
       <aside
-        className={`flex shrink-0 flex-col border-l transition-all duration-300 ease-in-out ${
-          isMetricsOpen ? 'w-80' : 'w-0 border-transparent p-0'
-        } ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
+        className={`flex shrink-0 flex-col border-l transition-all duration-300 ease-in-out ${isMetricsOpen ? 'w-80' : 'w-0 border-transparent p-0'
+          } ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
       >
         <div
           className={`flex h-full flex-col overflow-hidden ${isMetricsOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
@@ -2542,13 +2531,12 @@ export default function App() {
                   className={`h-1.5 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
                 >
                   <div
-                    className={`h-full transition-all duration-500 ${
-                      systemStats.cpu > 85
+                    className={`h-full transition-all duration-500 ${systemStats.cpu > 85
                         ? 'bg-red-500'
                         : systemStats.cpu > 60
                           ? 'bg-amber-500'
                           : 'bg-emerald-500'
-                    }`}
+                      }`}
                     style={{ width: `${systemStats.cpu}%` }}
                   />
                 </div>
@@ -2564,13 +2552,12 @@ export default function App() {
                   className={`h-1.5 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
                 >
                   <div
-                    className={`h-full transition-all duration-500 ${
-                      systemStats.ram > 85
+                    className={`h-full transition-all duration-500 ${systemStats.ram > 85
                         ? 'bg-red-500'
                         : systemStats.ram > 60
                           ? 'bg-amber-500'
                           : 'bg-emerald-500'
-                    }`}
+                      }`}
                     style={{ width: `${systemStats.ram}%` }}
                   />
                 </div>
@@ -2622,20 +2609,20 @@ export default function App() {
 
             <div className={`h-px w-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`} />
 
-            {/* RAG METRICS */}
+            {/* RAG ANALYSIS */}
             <div>
               <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                RAG Analysis (Academic)
+                RAG Engine Analysis
               </div>
               <div className="space-y-4">
                 <div>
                   <div className="mb-1.5 flex justify-between text-[11px]">
                     <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>
-                      Context Precision
+                      Semantic Similarity
                     </span>
                     <span className="font-mono font-medium">
-                      {inferenceStats.precision > 0
-                        ? `${(inferenceStats.precision * 100).toFixed(0)}%`
+                      {inferenceStats.similarity > 0
+                        ? `${(inferenceStats.similarity * 100).toFixed(0)}%`
                         : '---'}
                     </span>
                   </div>
@@ -2644,26 +2631,23 @@ export default function App() {
                   >
                     <div
                       className="h-full bg-emerald-500 opacity-60 transition-all duration-500"
-                      style={{ width: `${inferenceStats.precision * 100}%` }}
+                      style={{ width: `${inferenceStats.similarity * 100}%` }}
                     />
                   </div>
                 </div>
-                <div>
-                  <div className="mb-1.5 flex justify-between text-[11px]">
-                    <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>Context Recall</span>
-                    <span className="font-mono font-medium">
-                      {inferenceStats.recall > 0
-                        ? `${(inferenceStats.recall * 100).toFixed(0)}%`
-                        : '---'}
-                    </span>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
+                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Chunks</div>
+                    <div className="font-mono text-xs font-semibold">
+                      {inferenceStats.chunks || '0'}
+                    </div>
                   </div>
-                  <div
-                    className={`h-1 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
-                  >
-                    <div
-                      className="h-full bg-blue-500 opacity-60 transition-all duration-500"
-                      style={{ width: `${inferenceStats.recall * 100}%` }}
-                    />
+                  <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
+                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Backend</div>
+                    <div className="truncate font-mono text-[10px] font-semibold">
+                      {inferenceStats.backend}
+                    </div>
                   </div>
                 </div>
               </div>
