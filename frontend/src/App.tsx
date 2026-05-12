@@ -1808,14 +1808,10 @@ export default function App() {
       tps: 0,
       ttft: 0,
       ragTime: 0,
-      precision: 0,
-      recall: 0,
+      similarity: 0,
+      chunks: 0,
+      backend: '---',
     });
-    setMessages((current) => [
-      ...current,
-      { role: 'user', content: prompt },
-      { role: 'assistant', content: '' },
-    ]);
 
     try {
       let sessionId = activeSessionId;
@@ -1908,14 +1904,13 @@ export default function App() {
             throw new Error(data);
           }
 
-          updateTargetMessages((current) => {
           if (accumulatedResponse === '' && inferenceStartTime.current) {
             const ttft = Date.now() - inferenceStartTime.current;
             setInferenceStats((prev) => ({ ...prev, ttft }));
           }
 
           accumulatedResponse += data;
-          setMessages((current) => {
+          updateTargetMessages((current) => {
             const next = [...current];
             const last = next[next.length - 1];
 
@@ -1938,9 +1933,28 @@ export default function App() {
           throw new Error(finalData);
         }
 
+        if (accumulatedResponse === '' && inferenceStartTime.current) {
+          const ttft = Date.now() - inferenceStartTime.current;
+          setInferenceStats((prev) => ({ ...prev, ttft }));
+        }
+
+        accumulatedResponse += finalData;
         updateTargetMessages((current) => {
           const next = [...current];
           const last = next[next.length - 1];
+
+          if (last?.role === 'assistant') {
+            next[next.length - 1] = {
+              ...last,
+              content: `${last.content}${finalData}`,
+              timestamp: last.timestamp ?? new Date().toISOString(),
+            };
+          }
+
+          return next;
+        });
+      }
+
       const totalLatency = Date.now() - (inferenceStartTime.current ?? Date.now());
       const charCount = accumulatedResponse.length;
       const estimatedTokens = Math.max(1, Math.floor(charCount / 4));
@@ -2112,26 +2126,15 @@ export default function App() {
               </div>
             </div>
           </div>
-        </div>
-
-        <button
-          className="relative mb-4 flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold tracking-[0.14em] text-white hover:bg-emerald-500 disabled:opacity-60"
-          disabled={isStreaming}
-          onClick={handleNewSession}
-          type="button"
-        >
-          <MessageSquare className="absolute left-3" size={15} />
-          <span>NEW CONVERSATION</span>
-        </button>
 
           <button
-            className="mb-4 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+            className="relative mb-4 flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold tracking-[0.14em] text-white hover:bg-emerald-500 disabled:opacity-60"
             disabled={isStreaming}
             onClick={handleNewSession}
             type="button"
           >
-            <Plus size={16} />
-            New Chat
+            <MessageSquare className="absolute left-3" size={15} />
+            <span>NEW CONVERSATION</span>
           </button>
 
           <div
@@ -2211,21 +2214,28 @@ export default function App() {
                       ) : (
                         <button
                           className="min-w-0 flex-1 py-1 text-left"
-                          disabled={isStreaming || isDeleting}
+                          disabled={isDeleting}
                           onClick={() => {
                             void handleSessionSelect(session.session_id);
                           }}
                           type="button"
                         >
-                          <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="flex min-w-0 flex-col gap-0.5">
                             <span
-                              className="session-title-text truncate text-sm leading-5"
+                              className="session-title-text truncate text-[13px] leading-5"
                               onDoubleClick={(event) => {
                                 event.stopPropagation();
                                 beginRenamingSession(session);
                               }}
                             >
                               {session.title}
+                            </span>
+                            <span
+                              className={`truncate text-[11px] leading-4 ${
+                                isDark ? 'text-zinc-500' : 'text-slate-500'
+                              }`}
+                            >
+                              {lastAccessedLabel}
                             </span>
                           </span>
                         </button>
@@ -2242,31 +2252,6 @@ export default function App() {
                       )}
 
                       <button
-                        className="min-w-0 flex-1 py-1 text-left"
-                        disabled={isDeleting}
-                        onClick={() => {
-                          void handleSessionSelect(session.session_id);
-                        }}
-                        type="button"
-                      >
-                        <span className="flex min-w-0 flex-col gap-0.5">
-                          <span
-                            className="session-title-text truncate text-[13px] leading-5"
-                            onDoubleClick={(event) => {
-                              event.stopPropagation();
-                              beginRenamingSession(session);
-                            }}
-                          >
-                            {session.title}
-                          </span>
-                          <span
-                            className={`truncate text-[11px] leading-4 ${
-                              isDark ? 'text-zinc-500' : 'text-slate-500'
-                            }`}
-                          >
-                            {lastAccessedLabel}
-                          </span>
-                        </span>
                         aria-expanded={sessionMenuOpenId === session.session_id}
                         aria-label={`Open actions for ${session.title}`}
                         className={`rounded-lg p-1.5 transition disabled:opacity-50 ${isDark
@@ -2811,6 +2796,131 @@ export default function App() {
           </form>
         </footer>
       </main>
+
+      {calendarOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setCalendarOpen(false)}
+        >
+          <div
+            className={`w-full max-w-lg rounded-xl border p-6 shadow-2xl ${
+              isDark
+                ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                : 'border-stone-300 bg-white text-slate-900'
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-lg font-semibold">
+                <Calendar size={18} />
+                Create Calendar Event
+              </div>
+              <button
+                className={`rounded-md p-1 ${
+                  isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                }`}
+                onClick={() => setCalendarOpen(false)}
+                type="button"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mb-4 space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-wide opacity-70">
+                Local Outlook calendar
+              </label>
+              <select
+                className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${
+                  isDark
+                    ? 'border-zinc-800 bg-zinc-900 text-zinc-100'
+                    : 'border-stone-300 bg-white text-slate-900'
+                }`}
+                disabled={
+                  creatingCalendarEvent ||
+                  loadingOutlookCalendars ||
+                  outlookCalendars.length === 0
+                }
+                onChange={(event) => void selectOutlookCalendar(event.target.value)}
+                value={selectedOutlookCalendarId}
+              >
+                <option value="">
+                  {loadingOutlookCalendars
+                    ? 'Loading Outlook calendars...'
+                    : outlookCalendars.length === 0
+                      ? 'Default Outlook calendar / ICS fallback'
+                      : 'Choose an Outlook calendar'}
+                </option>
+                {outlookCalendars.map((calendar) => (
+                  <option key={`${calendar.store_name}-${calendar.id}`} value={calendar.id}>
+                    {outlookCalendarLabel(calendar)}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs opacity-60">AEGIS uses local Outlook only.</p>
+              {calendarMessage && !calendarResult && (
+                <div
+                  className={`rounded-lg border px-3 py-2 text-xs ${
+                    isDark
+                      ? 'border-emerald-800 bg-emerald-950/40 text-emerald-200'
+                      : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                  }`}
+                >
+                  {calendarMessage}
+                </div>
+              )}
+            </div>
+
+            <textarea
+              className={`mb-4 w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${
+                isDark
+                  ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
+                  : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
+              }`}
+              disabled={creatingCalendarEvent}
+              onChange={(event) => setCalendarPrompt(event.target.value)}
+              placeholder='e.g. "Meeting with Jasser tomorrow at 3pm for 1 hour"'
+              rows={3}
+              value={calendarPrompt}
+            />
+
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+              disabled={creatingCalendarEvent || !calendarPrompt.trim()}
+              onClick={() => void createCalendarEvent()}
+              type="button"
+            >
+              <Calendar size={16} />
+              {creatingCalendarEvent ? 'Creating...' : 'Create Event'}
+            </button>
+
+            {(calendarMessage || calendarResult) && (
+              <div
+                className={`mt-4 rounded-lg border p-4 text-sm ${
+                  isDark
+                    ? 'border-emerald-800 bg-emerald-950/40 text-emerald-200'
+                    : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                }`}
+              >
+                {calendarMessage && <div className="mb-2 font-semibold">{calendarMessage}</div>}
+                {calendarResult && (
+                  <>
+                    <div className="mb-1 font-semibold">{calendarResult.title}</div>
+                    <div className="opacity-80">Start: {calendarResult.start}</div>
+                    <div className="opacity-80">End: {calendarResult.end}</div>
+                    {calendarResult.location && (
+                      <div className="opacity-80">Location: {calendarResult.location}</div>
+                    )}
+                    {calendarResult.description && (
+                      <div className="mt-1 opacity-80">{calendarResult.description}</div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* PERFORMANCE METRICS SIDEBAR */}
       <aside

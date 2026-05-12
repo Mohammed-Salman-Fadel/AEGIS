@@ -55,6 +55,8 @@ pub struct ContextUsageSnapshot {
     pub used_tokens: usize,
     pub context_window: usize,
     pub usage_source: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatMode {
     General,
@@ -863,18 +865,6 @@ impl Orchestrator {
         let synthesis_prompt = if !context_from_docs.is_empty() || !context_from_code.is_empty() || !context_from_zotero.is_empty() {
             ctx.trace_summary("synthesis", "context found and injected into prompt");
             let active_documents = format_active_documents(&req.attachments);
-            format!(
-                "You are the AEGIS AI Assistant. Below are excerpts from a document provided by the user. \
-                Please use this information to answer the question as accurately as possible. \
-                If the document does not contain the answer, use your general knowledge to assist.\n\n\
-                LOCAL RUNTIME CONTEXT:\n{}\n\n\
-                ACTIVE IMPORTED DOCUMENTS:\n{}\n\nDOCUMENT CONTENT:\n{}\n\nUSER QUERY: {}",
-                self.prompt_builder.runtime_context(),
-                active_documents,
-                context_from_docs,
-                ctx.original_query
-            )
-            
             let system_persona = match mode {
                 ChatMode::Coder => "You are the AEGIS AI Coder. You specialize in analyzing local codebases, explaining logic, and providing high-quality implementation suggestions.",
                 ChatMode::Academic => "You are the AEGIS AI Researcher. You specialize in analyzing scientific papers, providing precise citations from the Zotero library, and maintaining a formal, evidence-based tone.",
@@ -882,8 +872,9 @@ impl Orchestrator {
             };
 
             let mut prompt = format!(
-                "{}\nBelow is the retrieved context to help you answer the user's question.\n\n",
-                system_persona
+                "{}\nBelow is the retrieved context to help you answer the user's question.\n\nLOCAL RUNTIME CONTEXT:\n{}\n\n",
+                system_persona,
+                self.prompt_builder.runtime_context()
             );
 
             if !context_from_docs.is_empty() {
