@@ -21,6 +21,7 @@ pub struct ChatRequest {
     pub attachments: Vec<String>,
     #[serde(default)]
     pub edit_from_turn_index: Option<usize>,
+    pub mode: Option<String>,
 }
 
 /// Handler for POST /chat

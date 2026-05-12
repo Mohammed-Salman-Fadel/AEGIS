@@ -32,6 +32,18 @@ class SearchResult(BaseModel):
     source: str
     page: Optional[int] = None
     type: str
+    score: float
+
+class RagMetrics(BaseModel):
+    retrieval_time_ms: float
+    avg_similarity: float
+    chunk_count: int
+    backend: str
+
+class DeleteResponse(BaseModel):
+    status: str
+    deleted_count: int
 
 class QueryResponse(BaseModel):
     results: List[SearchResult]
+    metrics: RagMetrics

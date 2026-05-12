@@ -16,16 +16,24 @@ interface SystemResources {
   ram: number;
 }
 
+interface RagMetrics {
+  retrieval_time_ms: number;
+  avg_similarity: number;
+  chunk_count: number;
+}
+
 interface ChatState {
   messages: Message[];
   isStreaming: boolean;
   currentTrace: TracePhase;
   resources: SystemResources;
+  ragMetrics: RagMetrics | null;
   // Actions
   addMessage: (content: string, role: 'user' | 'assistant') => void;
   updateStreamingMessage: (chunk: string) => void;
   setTrace: (phase: TracePhase) => void;
   updateResources: (cpu: number, ram: number) => void;
+  setRagMetrics: (metrics: RagMetrics | null) => void;
   addSourcesToLastMessage: (sources: string[]) => void;
   resetChat: () => void; // FR-19: Session management
 }
@@ -35,6 +43,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isStreaming: false,
   currentTrace: 'Idle',
   resources: { cpu: 0, ram: 0 },
+  ragMetrics: null,
 
   // FR-19: Adds a new message to the session context
   addMessage: (content, role) =>
@@ -76,10 +85,15 @@ export const useChatStore = create<ChatState>((set) => ({
     resources: { cpu, ram } 
   }),
 
+  setRagMetrics: (ragMetrics) => set({ 
+    ragMetrics 
+  }),
+
   // FR-19: Clears session context
   resetChat: () => set({ 
     messages: [], 
     currentTrace: 'Idle', 
-    isStreaming: false 
+    isStreaming: false,
+    ragMetrics: null
   }),
 }));

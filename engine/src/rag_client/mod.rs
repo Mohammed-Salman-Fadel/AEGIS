@@ -1,4 +1,5 @@
 use reqwest::Client;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub struct RagClient {
@@ -24,11 +25,47 @@ struct SearchResult {
     text: String,
     #[allow(dead_code)]
     source: String,
+    #[allow(dead_code)]
+    score: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RagMetrics {
+    pub retrieval_time_ms: f64,
+    pub avg_similarity: f64,
+    pub chunk_count: usize,
+    pub backend: String,
+}
+
+impl Default for RagMetrics {
+    fn default() -> Self {
+        Self {
+            retrieval_time_ms: 0.0,
+            avg_similarity: 0.0,
+            chunk_count: 0,
+            backend: "unknown".to_string(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
 struct QueryResponse {
     results: Vec<SearchResult>,
+    metrics: RagMetrics,
+}
+
+pub struct RetrievalOutcome {
+    pub chunks: Vec<String>,
+    pub metrics: RagMetrics,
+}
+
+impl Default for RetrievalOutcome {
+    fn default() -> Self {
+        Self {
+            chunks: Vec::new(),
+            metrics: RagMetrics::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -86,7 +123,7 @@ impl RagClient {
         query: &str,
         limit: usize,
         session_id: &str,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<RetrievalOutcome> {
         self.init().await?; // Ensure it is initialized before querying
 
         let resp = self
@@ -106,6 +143,27 @@ impl RagClient {
         }
 
         let result: QueryResponse = resp.json().await?;
-        Ok(result.results.into_iter().map(|r| r.text).collect())
+        Ok(RetrievalOutcome {
+            chunks: result.results.into_iter().map(|r| r.text).collect(),
+            metrics: result.metrics,
+        })
+    }
+
+    pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<()> {
+        let url = format!("{}/delete/{}", self.base_url, session_id);
+
+        let response = self
+            .client
+            .post(&url)
+            .send()
+            .await
+            .context("Failed to send delete request to RAG service")?;
+
+        if !response.status().is_success() {
+            let error: serde_json::Value = response.json::<serde_json::Value>().await.unwrap_or_default();
+            anyhow::bail!("RAG deletion failed: {}", error);
+        }
+
+        Ok(())
     }
 }

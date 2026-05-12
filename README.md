@@ -62,6 +62,7 @@ The main components of AEGIS are:
   ├── docs/
   ├── scripts/
   └── data/
+  ```
 
   ### Directory Roles
 
@@ -113,6 +114,10 @@ The main components of AEGIS are:
   - response streaming
   - basic session handling
 
+  ## Getting Started
+
+  To set up the AEGIS environment and run the system on your local machine, please follow the detailed instructions in **[docs/setup.md](./docs/setup.md)**.
+  
   ## Status
 
   AEGIS is currently under active development as a graduation project. The architecture and backlog are
