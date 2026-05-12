@@ -1,6 +1,6 @@
 # AEGIS Rust Engine
 
-The `engine-rust` module is the central orchestration layer of AEGIS. It acts as the main backend of
+The `engine` module is the central orchestration layer of AEGIS. It acts as the main backend of
 the system and coordinates communication between the user interfaces, the local inference backend,
 the document retrieval subsystem, and selected MCP-based local tools.
 

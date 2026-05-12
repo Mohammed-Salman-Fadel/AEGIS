@@ -54,7 +54,7 @@ The main components of AEGIS are:
 
   ```text
   aegis/
-  ├── engine-rust/
+  ├── engine/
   ├── rag-python/
   ├── web-ui/
   ├── cli/
@@ -66,7 +66,7 @@ The main components of AEGIS are:
 
   ### Directory Roles
 
-  - engine-rust/
+  - engine/
       - Central orchestration engine
       - API layer
       - Session handling
@@ -140,7 +140,7 @@ The main components of AEGIS are:
 
 
 › this is the currents structure // jasserlabiadh@Jassers-MacBook-Air AEGIS % ls
-  README.md       cli             engine-rust     installer       rag-python      scripts         web-
+  README.md       cli             engine     installer       rag-python      scripts         web-
   ui
   jasserlabiadh@Jassers-MacBook-Air AEGIS %
 
@@ -208,7 +208,7 @@ The main components of AEGIS are:
   AEGIS/
   ├── README.md
   ├── cli/
-  ├── engine-rust/
+  ├── engine/
   ├── installer/
   ├── rag-python/
   ├── scripts/
@@ -216,7 +216,7 @@ The main components of AEGIS are:
 
   ## Directory Roles
 
-  ### engine-rust/
+  ### engine/
 
   Contains the central orchestration engine.
   This is the main backend of AEGIS and is responsible for:

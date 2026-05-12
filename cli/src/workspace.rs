@@ -52,14 +52,7 @@ impl Workspace {
         let cli_dir = Self::resolve_existing(&root, &["src/cli", "cli"])
             .unwrap_or_else(|| root.join("src").join("cli"));
         let engine_dir =
-            Self::resolve_existing(&root, &["engine", "engine-rust"]).unwrap_or_else(|| {
-                let engine = root.join("engine");
-                if engine.exists() {
-                    engine
-                } else {
-                    root.join("engine-rust")
-                }
-            });
+            Self::resolve_existing(&root, &["engine"]).unwrap_or_else(|| root.join("engine"));
         let frontend_dir = Self::resolve_existing(&root, &["frontend", "web-ui"])
             .unwrap_or_else(|| root.join("frontend"));
         let installer_dir =
@@ -79,8 +72,7 @@ impl Workspace {
 
     fn locate_root(start: &Path) -> Option<PathBuf> {
         for candidate in start.ancestors() {
-            let has_engine =
-                candidate.join("engine").exists() || candidate.join("engine-rust").exists();
+            let has_engine = candidate.join("engine").exists();
             let has_cli =
                 candidate.join("src").join("cli").exists() || candidate.join("cli").exists();
 

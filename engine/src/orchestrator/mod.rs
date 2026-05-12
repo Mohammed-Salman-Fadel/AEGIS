@@ -49,6 +49,12 @@ pub struct ProviderSwitchOutcome {
     pub changed: bool,
 }
 
+pub struct ContextUsageSnapshot {
+    pub provider: String,
+    pub model: String,
+    pub used_tokens: usize,
+    pub context_window: usize,
+    pub usage_source: String,
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatMode {
     General,
@@ -426,6 +432,44 @@ impl Orchestrator {
         self.provider_registry.current_provider_name()
     }
 
+    pub async fn context_usage(
+        &self,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<ContextUsageSnapshot> {
+        let model = self.model_registry.current_model_name();
+        let provider = self.current_provider_name();
+        let context_window = self
+            .inference
+            .read()
+            .await
+            .context_window(&model)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.model_registry.get_active().context_window);
+
+        let used_tokens = match session_id {
+            Some(session_id) if !session_id.trim().is_empty() => self
+                .memory_store
+                .latest_prompt_token_usage(session_id)
+                .await?
+                .unwrap_or(0),
+            _ => 0,
+        };
+
+        Ok(ContextUsageSnapshot {
+            provider,
+            model,
+            used_tokens,
+            context_window,
+            usage_source: if used_tokens > 0 {
+                "ollama-prompt-eval-count".to_string()
+            } else {
+                "no-session-usage-yet".to_string()
+            },
+        })
+    }
+
     pub async fn list_available_models(&self) -> anyhow::Result<(String, Vec<String>)> {
         let provider = self.current_provider_name();
         let models = self
@@ -733,6 +777,8 @@ impl Orchestrator {
                         &ctx.trace,
                         req.edit_from_turn_index,
                         req.edit_from_turn_index.is_some(),
+                        None,
+                        None,
                     )
                     .await?;
 
@@ -817,6 +863,17 @@ impl Orchestrator {
         let synthesis_prompt = if !context_from_docs.is_empty() || !context_from_code.is_empty() || !context_from_zotero.is_empty() {
             ctx.trace_summary("synthesis", "context found and injected into prompt");
             let active_documents = format_active_documents(&req.attachments);
+            format!(
+                "You are the AEGIS AI Assistant. Below are excerpts from a document provided by the user. \
+                Please use this information to answer the question as accurately as possible. \
+                If the document does not contain the answer, use your general knowledge to assist.\n\n\
+                LOCAL RUNTIME CONTEXT:\n{}\n\n\
+                ACTIVE IMPORTED DOCUMENTS:\n{}\n\nDOCUMENT CONTENT:\n{}\n\nUSER QUERY: {}",
+                self.prompt_builder.runtime_context(),
+                active_documents,
+                context_from_docs,
+                ctx.original_query
+            )
             
             let system_persona = match mode {
                 ChatMode::Coder => "You are the AEGIS AI Coder. You specialize in analyzing local codebases, explaining logic, and providing high-quality implementation suggestions.",
@@ -880,7 +937,7 @@ impl Orchestrator {
             .inference
             .read()
             .await
-            .stream(&synthesis_prompt, &ctx.model.name, tx)
+            .stream_with_usage(&synthesis_prompt, &ctx.model.name, tx)
             .await?;
 
         if let Some(session_id) = persisted_session_id.as_deref() {
@@ -888,11 +945,13 @@ impl Orchestrator {
                 .append_turn_with_edit(
                     session_id,
                     &req.message,
-                    &final_answer,
+                    &final_answer.text,
                     &ctx.model.name,
                     &ctx.trace,
                     req.edit_from_turn_index,
                     req.edit_from_turn_index.is_some(),
+                    final_answer.usage.prompt_tokens,
+                    final_answer.usage.completion_tokens,
                 )
                 .await?;
 
@@ -902,7 +961,7 @@ impl Orchestrator {
             }
         }
 
-        Ok(final_answer)
+        Ok(final_answer.text)
     }
 
     /// Executes specific atomic steps planned by the reasoning engine.

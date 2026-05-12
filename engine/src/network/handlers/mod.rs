@@ -1,5 +1,6 @@
 pub mod calendar;
 pub mod chat;
+pub mod context;
 pub mod health;
 pub mod models;
 pub mod providers;

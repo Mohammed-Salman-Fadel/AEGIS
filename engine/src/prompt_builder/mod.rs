@@ -1,11 +1,22 @@
 use crate::context::ConversationHistory;
 use crate::plan_parser::StepResult;
+use chrono::Local;
 
 pub struct PromptBuilder;
 
 impl PromptBuilder {
     pub fn new() -> Self {
         Self
+    }
+
+    pub fn runtime_context(&self) -> String {
+        let now = Local::now();
+
+        format!(
+            "Current local date/time on this machine: {}. Timezone offset: {}. Use this for date/time and relative-date questions.",
+            now.format("%A, %B %e, %Y at %H:%M:%S"),
+            now.format("%:z"),
+        )
     }
 
     pub fn build_planning_prompt(
@@ -43,11 +54,15 @@ Allowed tools:
 
 Keep plans short. Use at most 3 steps.
 
+Runtime context:
+{}
+
 Conversation history:
 {}
 
 User message:
 {}"#,
+            self.runtime_context(),
             format_history(history),
             user_message
         )
@@ -62,6 +77,9 @@ User message:
         format!(
             r#"You are executing one internal AEGIS workflow step.
 
+Runtime context:
+{}
+
 Conversation history:
 {}
 
@@ -72,6 +90,7 @@ Step to execute:
 {}
 
 Return the step result only. Be concise and concrete."#,
+            self.runtime_context(),
             format_history(history),
             user_message,
             step_input
@@ -95,6 +114,9 @@ Return the step result only. Be concise and concrete."#,
 
 Use the conversation history, original user request, and executed workflow step results to produce the final answer.
 
+Runtime context:
+{}
+
 Conversation history:
 {}
 
@@ -105,6 +127,7 @@ Step results:
 {}
 
 Final answer:"#,
+            self.runtime_context(),
             format_history(history),
             user_message,
             rendered_results
