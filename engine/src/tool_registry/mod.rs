@@ -1,8 +1,8 @@
 use crate::mcp_client::McpClient;
 use anyhow::Result;
 use serde_json::json;
-use tokio::sync::Mutex;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub struct ToolRegistry {
     semble_mcp: Arc<Mutex<McpClient>>,
@@ -12,19 +12,14 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     pub fn new(python_path: &str, semble_path: &str) -> Self {
         // Initialize Semble MCP
-        let client = McpClient::new(python_path, vec![
-            "-c",
-            "from semble.cli import main; main()",
-            semble_path,
-        ]);
+        let client = McpClient::new(
+            python_path,
+            vec!["-c", "from semble.cli import main; main()", semble_path],
+        );
 
         // Initialize Zotero MCP
         // We run it as a module via the unified python environment
-        let zotero_client = McpClient::new(python_path, vec![
-            "-m",
-            "zotero_mcp.cli",
-            "serve",
-        ]);
+        let zotero_client = McpClient::new(python_path, vec!["-m", "zotero_mcp.cli", "serve"]);
 
         Self {
             semble_mcp: Arc::new(Mutex::new(client)),
@@ -38,7 +33,7 @@ impl ToolRegistry {
                 let mut client = self.semble_mcp.lock().await;
                 let args = json!({ "query": input });
                 let result = client.call_tool("search", args).await?;
-                
+
                 // Format the output for the LLM
                 if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
                     let mut formatted = String::new();
@@ -54,7 +49,7 @@ impl ToolRegistry {
             }
             "zotero" | "citation" | "research" => {
                 let mut client = self.zotero_mcp.lock().await;
-                
+
                 // Determine which tool to call based on keywords in the input
                 let tool_name = if input.to_lowercase().contains("recent") {
                     "zotero_get_recent"
@@ -68,13 +63,17 @@ impl ToolRegistry {
                 } else {
                     json!({ "query": input, "limit": 10 })
                 };
-                
+
                 // Try calling the tool. Some versions use 'search_items', others 'zotero_search_items'
                 let result = match client.call_tool(tool_name, args.clone()).await {
                     Ok(res) => res,
                     Err(_) => {
                         // Fallback to a simpler name if the prefixed one fails
-                        let fallback = if tool_name == "zotero_get_recent" { "get_recent" } else { "search_items" };
+                        let fallback = if tool_name == "zotero_get_recent" {
+                            "get_recent"
+                        } else {
+                            "search_items"
+                        };
                         client.call_tool(fallback, args).await?
                     }
                 };

@@ -17,7 +17,7 @@ use crossterm::event::{
     MouseButton, MouseEventKind,
 };
 use crossterm::style::{Attribute, Print, SetAttribute};
-use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use crossterm::{execute, queue};
 
 use crate::banner;
@@ -83,8 +83,6 @@ fn dispatch_command(
 fn show_home(ctx: &AppContext) -> AppResult<()> {
     let report = DoctorReport::collect(&ctx.workspace);
     let web_ui_url = ctx.workspace.web_ui_url();
-    // ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
-
     println!("{}", ctx.ui.header("AEGIS CLI"));
     println!("Private, local-first assistant scaffold built to stay inside the Rust CLI boundary.");
     // println!("{}", ctx.ui.muted("This pass is intentionally TODO-heavy: commands explain how the CLI should connect to the engine without pretending the backend wiring is finished."));
@@ -130,7 +128,7 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
 
 fn handle_clear(ctx: &AppContext) -> AppResult<()> {
     let web_ui_url = ctx.workspace.web_ui_url();
-    ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+    ctx.print_banner();
 
     println!("{}", ctx.ui.header("AEGIS CLI"));
     // println!();
@@ -384,7 +382,7 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
                 continue;
             }
             "banner" => {
-                ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+                ctx.print_banner();
                 continue;
             }
             "clear" => {
@@ -426,7 +424,7 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
             }
 
             if banner::should_render_banner(Some(&command)) {
-                ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+                ctx.print_banner();
             }
 
             if let Err(error) = dispatch_command(ctx, command, InvocationMode::Shell) {
@@ -449,28 +447,13 @@ fn print_shell_help(ctx: &AppContext) {
     println!("You can run the following commands without the `aegis` prefix:");
     // println!("Examples:");
     println!("- status");
-    println!("- chat \"hello\"");
-    println!("- load 1189578c-9c96-4b4c-8015-4d0673544a6a");
-    println!("- save \"my name is Sam\"");
-    println!("- repl");
-    println!("- session list");
-    println!("- provider select ollama");
-    println!("- provider select lmstudio");
-    println!("- model");
-    println!("- model list");
-    println!("- model switch qwen3:4b");
-    println!("- model download qwen3:4b");
+    println!("- chat     \"[user_prompt]\"");
+    println!("- load      [session_id]          s");
+    println!("- save      [your_information]    can store personal information");
+    println!("- session   [argument]            session commands");
+    println!("- provider  [argument]            provider related argument");
+    println!("- model     [argument]            model related command");
     println!("");
-    println!("Inside a session:");
-    println!("- /");
-    println!("  Open session tools: import document, calendar, export chat");
-    println!("");
-    println!("Built-ins:");
-    println!("- help");
-    println!("- home");
-    println!("- banner");
-    println!("- clear");
-    println!("- quit");
     println!(
         "{}",
         ctx.ui
@@ -904,6 +887,12 @@ fn print_providers(
     }
 
     for provider in providers {
+        if provider.name.eq_ignore_ascii_case("openai-compatible")
+            || provider.name.eq_ignore_ascii_case("openai-compat")
+        {
+            continue;
+        }
+
         let active = current_provider
             .map(|current| current.eq_ignore_ascii_case(&provider.name))
             .unwrap_or(false);

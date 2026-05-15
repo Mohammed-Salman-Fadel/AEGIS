@@ -1,5 +1,5 @@
+use anyhow::Context;
 use reqwest::Client;
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub struct RagClient {
@@ -18,6 +18,12 @@ struct QueryRequest {
     query: String,
     top_k: usize,
     session_id: String,
+}
+
+#[derive(Serialize)]
+struct DeleteDocumentRequest {
+    session_id: String,
+    source: String,
 }
 
 #[derive(Deserialize)]
@@ -160,10 +166,40 @@ impl RagClient {
             .context("Failed to send delete request to RAG service")?;
 
         if !response.status().is_success() {
-            let error: serde_json::Value = response.json::<serde_json::Value>().await.unwrap_or_default();
+            let error: serde_json::Value = response
+                .json::<serde_json::Value>()
+                .await
+                .unwrap_or_default();
             anyhow::bail!("RAG deletion failed: {}", error);
         }
 
         Ok(())
+    }
+
+    pub async fn delete_document(&self, session_id: &str, source: &str) -> anyhow::Result<usize> {
+        self.init().await?;
+
+        let response = self
+            .client
+            .post(&format!("{}/delete-document", self.base_url))
+            .json(&DeleteDocumentRequest {
+                session_id: session_id.to_string(),
+                source: source.to_string(),
+            })
+            .send()
+            .await
+            .context("Failed to send document delete request to RAG service")?;
+
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("RAG document deletion failed: {}", text);
+        }
+
+        let payload: serde_json::Value = response.json().await.unwrap_or_default();
+        Ok(payload
+            .get("deleted_count")
+            .and_then(|count| count.as_i64())
+            .filter(|count| *count > 0)
+            .unwrap_or(0) as usize)
     }
 }

@@ -19,6 +19,7 @@ import {
   PanelLeftOpen,
   Pin,
   Send,
+  Settings,
   Sun,
   Trash2,
   Upload,

@@ -5,8 +5,17 @@
 //! Does not own: Ollama model discovery, inference execution, or CLI rendering.
 //! Next TODOs: validate requested models against the provider catalog before accepting switches.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::State,
+    http::StatusCode,
+    response::sse::{Event, Sse},
+};
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::network::state::AppState;
 
@@ -17,6 +26,36 @@ pub struct CurrentModelResponse {
 
 #[derive(Deserialize)]
 pub struct SelectModelRequest {
+    name: String,
+}
+
+#[derive(Deserialize)]
+pub struct PullModelRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct OllamaPullRequest<'a> {
+    model: &'a str,
+    stream: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+struct OllamaPullChunk {
+    status: Option<String>,
+    digest: Option<String>,
+    total: Option<u64>,
+    completed: Option<u64>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct OllamaModelEntry {
     name: String,
 }
 
@@ -110,6 +149,137 @@ pub async fn select_model(
         persisted: true,
         message,
     }))
+}
+
+pub async fn list_ollama_models(State(state): State<AppState>) -> Json<ModelListResponse> {
+    let active_model = state.orchestrator.current_model_name();
+    let model_names = fetch_ollama_models().await.unwrap_or_default();
+
+    Json(ModelListResponse {
+        provider: "ollama".to_string(),
+        models: model_names
+            .into_iter()
+            .map(|name| ModelResponse {
+                active: name.eq_ignore_ascii_case(&active_model),
+                description: if name.eq_ignore_ascii_case(&active_model) {
+                    "Currently active in the engine.".to_string()
+                } else {
+                    String::new()
+                },
+                name,
+            })
+            .collect(),
+    })
+}
+
+async fn fetch_ollama_models() -> anyhow::Result<Vec<String>> {
+    let base_url = ollama_base_url();
+    let response = reqwest::Client::new()
+        .get(format!("{base_url}/api/tags"))
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("ollama tags error {status}: {body}");
+    }
+
+    let payload = response.json::<OllamaTagsResponse>().await?;
+    Ok(payload.models.into_iter().map(|model| model.name).collect())
+}
+
+pub async fn pull_ollama_model(
+    Json(payload): Json<PullModelRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
+    let model = payload.name.trim().to_string();
+    if model.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "The model name cannot be empty.".to_string(),
+        ));
+    }
+
+    let (tx, rx) = mpsc::channel::<String>(32);
+    tokio::spawn(async move {
+        if let Err(error) = stream_ollama_pull(&model, tx.clone()).await {
+            let _ = tx
+                .send(format!(
+                    r#"{{"error":{},"status":"failed"}}"#,
+                    serde_json::to_string(&error.to_string()).unwrap_or_else(|_| {
+                        "\"Model download failed.\"".to_string()
+                    })
+                ))
+                .await;
+        }
+    });
+
+    let stream = ReceiverStream::new(rx).map(|message| Ok(Event::default().data(message)));
+    Ok(Sse::new(stream))
+}
+
+async fn stream_ollama_pull(model: &str, tx: mpsc::Sender<String>) -> anyhow::Result<()> {
+    let base_url = ollama_base_url();
+
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}/api/pull"))
+        .json(&OllamaPullRequest {
+            model,
+            stream: true,
+        })
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("ollama pull error {status} for model `{model}`: {body}");
+    }
+
+    let mut pending = String::new();
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        pending.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(newline_index) = pending.find('\n') {
+            let line = pending[..newline_index].trim().to_string();
+            pending = pending[newline_index + 1..].to_string();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let parsed: OllamaPullChunk = serde_json::from_str(&line)?;
+            if let Some(error) = parsed.error.as_deref() {
+                anyhow::bail!("ollama pull error for model `{model}`: {error}");
+            }
+
+            if tx.send(serde_json::to_string(&parsed)?).await.is_err() {
+                return Ok(());
+            }
+        }
+    }
+
+    if !pending.trim().is_empty() {
+        let parsed: OllamaPullChunk = serde_json::from_str(pending.trim())?;
+        if tx.send(serde_json::to_string(&parsed)?).await.is_err() {
+            return Ok(());
+        }
+    }
+
+    let _ = tx
+        .send(r#"{"status":"success","completed":1,"total":1}"#.to_string())
+        .await;
+    Ok(())
+}
+
+fn ollama_base_url() -> String {
+    std::env::var("AEGIS_OLLAMA_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn model_switch_error(error: anyhow::Error) -> (StatusCode, String) {
