@@ -1,0 +1,24 @@
+### Directory Roles
+
+- engine/
+  - Central orchestration engine
+  - API layer
+  - Session handling
+  - Ollama integration
+  - RAG/MCP client communication
+- rag-python/
+  - RAG worker process
+  - Document indexing and retrieval
+  - Citation support
+- web-ui/
+  - Frontend application
+- cli/
+  - Command-line interface
+- installer/
+  - Setup and environment bootstrap logic
+- docs/
+  - Architecture notes, diagrams, and project documentation
+- scripts/
+  - Development and benchmark helper scripts
+- data/
+  - Local runtime data, indexes, and samples

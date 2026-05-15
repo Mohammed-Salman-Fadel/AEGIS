@@ -748,6 +748,12 @@ impl EngineClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
+            if status == reqwest::StatusCode::BAD_GATEWAY {
+                return Err(format!(
+                    "The engine could not warm `{name}` on this device, so the active model was not changed. {}",
+                    body.trim()
+                ));
+            }
             return Err(format!(
                 "Engine model switch request failed with HTTP {}. {}",
                 status,

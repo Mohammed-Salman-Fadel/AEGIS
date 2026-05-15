@@ -206,9 +206,8 @@ pub async fn pull_ollama_model(
             let _ = tx
                 .send(format!(
                     r#"{{"error":{},"status":"failed"}}"#,
-                    serde_json::to_string(&error.to_string()).unwrap_or_else(|_| {
-                        "\"Model download failed.\"".to_string()
-                    })
+                    serde_json::to_string(&error.to_string())
+                        .unwrap_or_else(|_| { "\"Model download failed.\"".to_string() })
                 ))
                 .await;
         }

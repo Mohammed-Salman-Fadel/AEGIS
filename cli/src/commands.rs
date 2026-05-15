@@ -17,7 +17,7 @@ use crossterm::event::{
     MouseButton, MouseEventKind,
 };
 use crossterm::style::{Attribute, Print, SetAttribute};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
+use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use crossterm::{execute, queue};
 
 use crate::banner;
@@ -84,22 +84,10 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
     let report = DoctorReport::collect(&ctx.workspace);
     let web_ui_url = ctx.workspace.web_ui_url();
     println!("{}", ctx.ui.header("AEGIS CLI"));
-    println!("Private, local-first assistant scaffold built to stay inside the Rust CLI boundary.");
-    // println!("{}", ctx.ui.muted("This pass is intentionally TODO-heavy: commands explain how the CLI should connect to the engine without pretending the backend wiring is finished."));
+    println!("Private, local-first assistant built to serve only you.");
     println!();
     println!("Workspace : {}", ctx.workspace.root.display());
     println!("Web UI URL: {web_ui_url}");
-    // println!();
-    // println!("{}", ctx.ui.header("Command Families"));
-    // println!("- install");
-    // println!("- chat");
-    // println!("- ask --stdin");
-    // println!("- repl");
-    // println!("- session");
-    // println!("- provider");
-    // println!("- model");
-    // println!("- status");
-    // println!("- doctor");
     println!();
     println!("{}", ctx.ui.header("Readiness Snapshot"));
     println!(
@@ -108,42 +96,36 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
         report.warnings(),
         report.missing()
     );
-    // println!("{}", ctx.ui.todo("TODO: once the engine endpoints are real, this home screen should show active session, provider, and model summaries from the backend."));
     if io::stdin().is_terminal() {
         println!();
         println!("{}", ctx.ui.header("Live Shell"));
         println!(
             "{}",
-            ctx.ui
-                .muted("Enter commands like `status`, `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
-        );
-        println!(
-            "{}",
-            ctx.ui
-                .muted("Type `quit` or `exit` to leave the shell. Or simply use Ctrl + C.")
+            ctx.ui.muted(
+                "Explore the command list using 'help'. Type `quit` or `exit` to leave the shell."
+            )
         );
     }
     Ok(())
 }
 
 fn handle_clear(ctx: &AppContext) -> AppResult<()> {
-    let web_ui_url = ctx.workspace.web_ui_url();
     ctx.print_banner();
 
-    println!("{}", ctx.ui.header("AEGIS CLI"));
+    // println!("{}", ctx.ui.header("AEGIS CLI"));
     // println!();
-    println!("Workspace : {}", ctx.workspace.root.display());
-    println!("Web UI URL: {web_ui_url}");
+    // println!("Workspace : {}", ctx.workspace.root.display());
+    // println!("Web UI URL: {web_ui_url}");
 
-    if io::stdin().is_terminal() {
-        println!();
-        // println!("{}", ctx.ui.header("Live Shell"));
-        println!(
-            "{}",
-            ctx.ui.muted("Enter commands `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
-        );
-        println!();
-    }
+    // if io::stdin().is_terminal() {
+    //     println!();
+    //     // println!("{}", ctx.ui.header("Live Shell"));
+    //     println!(
+    //         "{}",
+    //         ctx.ui.muted("Enter commands `chat \"hello\"`, or `provider list`, type `help` for full commands list.")
+    //     );
+    //     println!();
+    // }
     Ok(())
 }
 
@@ -325,7 +307,6 @@ where
                     .finish()
                     .map_err(|error| format!("Could not finish streamed response: {error}"))?;
                 println!();
-                println!();
             } else {
                 ctx.ui.print_markdownish_response(&reply.message);
             }
@@ -334,7 +315,6 @@ where
         Err(error) => {
             if saw_token {
                 let _ = renderer.finish();
-                println!();
                 println!();
             }
             Err(error)
@@ -444,15 +424,17 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
 
 fn print_shell_help(ctx: &AppContext) {
     println!("{}", ctx.ui.header("Aegis Help"));
-    println!("You can run the following commands without the `aegis` prefix:");
-    // println!("Examples:");
-    println!("- status");
-    println!("- chat     \"[user_prompt]\"");
-    println!("- load      [session_id]          s");
-    println!("- save      [your_information]    can store personal information");
-    println!("- session   [argument]            session commands");
-    println!("- provider  [argument]            provider related argument");
-    println!("- model     [argument]            model related command");
+    println!(" status                          reveal current status of the system");
+    println!(" chat     \"[user_prompt]\"        one-time prompt to the llm");
+    println!(" load      [session_id]          load previous sessions");
+    println!(" save      [your_information]    can store personal information");
+    println!(" session   [argument]            session commands");
+    println!(" provider  [argument]            provider related argument");
+    println!(" model     [argument]            model related command");
+    println!("");
+    println!(
+        " [command] --help                displays all the arguments you can pass into a command."
+    );
     println!("");
     println!(
         "{}",
@@ -932,7 +914,7 @@ fn handle_model_switch(ctx: &AppContext, new_model: &str) -> AppResult<()> {
 
     if !model_exists {
         return Err(format!(
-            "Model `{new_model}` is not installed locally in Ollama. Run `model list` to see available models."
+            "Model `{new_model}` is not available for the active provider. Run `model list` to see available models."
         ));
     }
 
@@ -949,6 +931,11 @@ fn handle_model_switch(ctx: &AppContext, new_model: &str) -> AppResult<()> {
     let switch_result =
         run_with_loading_message(ctx, &format!("Now switching to {new_model}"), || {
             ctx.engine.select_model(new_model)
+        })
+        .map_err(|error| {
+            format!(
+                "Could not switch to `{new_model}`. The previous model is still active. {error}"
+            )
         })?;
 
     println!("{}", ctx.ui.success(&switch_result.message));
@@ -1000,7 +987,7 @@ fn print_session_mode_hint(ctx: &AppContext) {
     println!(
         "{}",
         ctx.ui
-            .muted("Type `quit` or `exit` to leave this session and return to the CLI home page.")
+            .muted("Type `quit` or `exit` to leave this session and return to `aegis-shell>`.")
     );
     println!(
         "{}",
@@ -1116,9 +1103,8 @@ fn handle_session_tool_calendar(ctx: &AppContext) -> AppResult<()> {
     println!("{}", ctx.ui.header("Calendar"));
     println!(
         "{}",
-        ctx.ui.muted(
-            "Describe the event naturally, for example: `meeting with Jasser tomorrow at 3pm for one hour`."
-        )
+        ctx.ui
+            .muted("Set up a time block from 1pm to 2pm tomorrow for a meeting.")
     );
 
     let Some(prompt) = prompt_for_session_tool_input(

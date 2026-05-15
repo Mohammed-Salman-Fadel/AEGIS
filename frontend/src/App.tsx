@@ -10,8 +10,10 @@ import {
   Cpu,
   Download,
   Edit3,
+  FileCode,
+  FolderOpen,
+  FolderPlus,
   GraduationCap,
-  HardDrive,
   MessageSquare,
   MoreHorizontal,
   Moon,
@@ -37,6 +39,8 @@ type MarkdownBlock =
   | { type: 'code'; text: string; language: string };
 
 type ChatMode = 'general' | 'coder' | 'academic';
+type SettingsTab = 'general' | 'inference' | 'models' | 'personal';
+type ResponseStyle = 'default' | 'friendly' | 'concise' | 'elaborate' | 'technical';
 
 interface Message {
   role: Role;
@@ -131,12 +135,180 @@ interface IngestResponse {
   session?: EngineSession | null;
 }
 
+interface ModelResponse {
+  name: string;
+  description: string;
+  active: boolean;
+}
+
+interface ModelListResponse {
+  provider: string;
+  models: ModelResponse[];
+}
+
+interface ProviderResponse {
+  name: string;
+  description: string;
+  active: boolean;
+}
+
+interface ProviderListResponse {
+  providers: ProviderResponse[];
+}
+
+interface ProfileResponse {
+  contents: string;
+  path: string;
+}
+
+interface PullModelChunk {
+  status?: string;
+  digest?: string;
+  total?: number;
+  completed?: number;
+  error?: string;
+}
+
+interface FileSystemHandlePermissionDescriptor {
+  mode?: 'read' | 'readwrite';
+}
+
+interface FileSystemHandle {
+  kind: 'file' | 'directory';
+  name: string;
+  queryPermission?: (descriptor?: FileSystemHandlePermissionDescriptor) => Promise<PermissionState>;
+  requestPermission?: (descriptor?: FileSystemHandlePermissionDescriptor) => Promise<PermissionState>;
+}
+
+interface FileSystemFileHandle extends FileSystemHandle {
+  kind: 'file';
+  getFile: () => Promise<File>;
+  createWritable?: () => Promise<FileSystemWritableFileStream>;
+}
+
+interface FileSystemDirectoryHandle extends FileSystemHandle {
+  kind: 'directory';
+  entries: () => AsyncIterableIterator<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>;
+  getFileHandle?: (name: string, options?: { create?: boolean }) => Promise<FileSystemFileHandle>;
+  getDirectoryHandle?: (
+    name: string,
+    options?: { create?: boolean },
+  ) => Promise<FileSystemDirectoryHandle>;
+}
+
+interface FileSystemWritableFileStream extends WritableStream {
+  write: (data: string | Blob | BufferSource) => Promise<void>;
+  close: () => Promise<void>;
+}
+
+interface ProjectFileSnapshot {
+  path: string;
+  content: string;
+  size: number;
+  handle: FileSystemFileHandle;
+}
+
+interface CodeProject {
+  id: string;
+  name: string;
+  fileCount: number;
+  totalBytes: number;
+  snapshot: string;
+  files: ProjectFileSnapshot[];
+  writable: boolean;
+  updatedAt: string;
+  rootHandle: FileSystemDirectoryHandle;
+}
+
+declare global {
+  interface Window {
+    showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
+  }
+}
+
 type ImportPhase = 'idle' | 'uploading' | 'indexing' | 'complete' | 'error';
 
 const API_BASE = '/api';
 const THEME_STORAGE_KEY = 'aegis-ui-theme';
 const INDEXED_DOCUMENTS_STORAGE_KEY = 'aegis-indexed-documents-by-session';
 const PINNED_SESSIONS_STORAGE_KEY = 'aegis-pinned-session-ids';
+const RESPONSE_STYLE_STORAGE_KEY = 'aegis-response-style';
+const MAX_PROJECT_FILES = 120;
+const MAX_PROJECT_FILE_BYTES = 64 * 1024;
+const MAX_PROJECT_CONTEXT_CHARS = 120_000;
+const IGNORED_PROJECT_DIRECTORIES = new Set([
+  '.git',
+  '.next',
+  '.svelte-kit',
+  '.venv',
+  'dist',
+  'node_modules',
+  'target',
+  'vendor',
+]);
+const IGNORED_PROJECT_FILES = new Set([
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'Cargo.lock',
+]);
+const CODE_PROJECT_EXTENSIONS = new Set([
+  '.c',
+  '.cpp',
+  '.cs',
+  '.css',
+  '.go',
+  '.h',
+  '.html',
+  '.java',
+  '.js',
+  '.json',
+  '.jsx',
+  '.md',
+  '.py',
+  '.rs',
+  '.toml',
+  '.ts',
+  '.tsx',
+  '.vue',
+  '.yaml',
+  '.yml',
+]);
+const DEFAULT_WELCOME_MESSAGES = [
+  'Welcome back [insert_name]!',
+  'How may I assist you today?',
+  'What should we build or explore next?',
+  'Ready when you are.',
+  'What would you like AEGIS to help with?',
+];
+
+const RESPONSE_STYLE_OPTIONS: Array<{ value: ResponseStyle; label: string; description: string }> = [
+  {
+    value: 'default',
+    label: 'Default',
+    description: 'Balanced, direct, and close to the original AEGIS assistant behavior.',
+  },
+  {
+    value: 'friendly',
+    label: 'Friendly',
+    description: 'Warmer and more conversational while staying concise.',
+  },
+  {
+    value: 'concise',
+    label: 'Concise',
+    description: 'Shorter answers that prioritize the direct result.',
+  },
+  {
+    value: 'elaborate',
+    label: 'Elaborate',
+    description: 'More detailed explanations with fuller context and reasoning.',
+  },
+  {
+    value: 'technical',
+    label: 'Technical',
+    description: 'Precise engineering-oriented responses with implementation detail.',
+  },
+];
 
 const EMPTY_CONTEXT_USAGE: ContextUsage = {
   provider: '',
@@ -360,6 +532,211 @@ function loadStoredPinnedSessionIds() {
   } catch {
     return [];
   }
+}
+
+function loadStoredResponseStyle(): ResponseStyle {
+  if (typeof window === 'undefined') {
+    return 'default';
+  }
+
+  const storedStyle = window.localStorage.getItem(RESPONSE_STYLE_STORAGE_KEY);
+  return RESPONSE_STYLE_OPTIONS.some((option) => option.value === storedStyle)
+    ? (storedStyle as ResponseStyle)
+    : 'default';
+}
+
+function parseWelcomeMessages(markdown: string) {
+  const messages = markdown
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[-*]\s+/, ''))
+    .filter((line) => line && !line.startsWith('#'));
+
+  return messages.length > 0 ? messages : DEFAULT_WELCOME_MESSAGES;
+}
+
+function randomWelcomeMessage(messages: string[]) {
+  const index = Math.floor(Math.random() * Math.max(messages.length, 1));
+  return messages[index] ?? DEFAULT_WELCOME_MESSAGES[0];
+}
+
+function profileDisplayName(profileText: string) {
+  const match = profileText.match(/\b(?:my name is|name is|i am|i'm)\s+([A-Za-z][A-Za-z '-]{0,40})/i);
+  const rawName = match?.[1]?.trim().replace(/[.!,;:].*$/, '');
+  return rawName || 'there';
+}
+
+function personalizeWelcomeMessage(message: string, profileText: string) {
+  return message.replace(/\[insert_name\]/gi, profileDisplayName(profileText));
+}
+
+function modelDownloadPercent(chunk: PullModelChunk) {
+  if (chunk.total && chunk.total > 0 && typeof chunk.completed === 'number') {
+    return Math.max(0, Math.min(100, Math.round((chunk.completed / chunk.total) * 100)));
+  }
+
+  if (chunk.status === 'success') {
+    return 100;
+  }
+
+  return null;
+}
+
+function projectFileExtension(path: string) {
+  const dotIndex = path.lastIndexOf('.');
+  return dotIndex >= 0 ? path.slice(dotIndex).toLowerCase() : '';
+}
+
+function shouldReadProjectFile(path: string, size: number) {
+  const fileName = path.split('/').pop() ?? path;
+  return (
+    size <= MAX_PROJECT_FILE_BYTES &&
+    !IGNORED_PROJECT_FILES.has(fileName) &&
+    CODE_PROJECT_EXTENSIONS.has(projectFileExtension(path))
+  );
+}
+
+async function scanProjectDirectory(
+  directoryHandle: FileSystemDirectoryHandle,
+  prefix = '',
+  files: ProjectFileSnapshot[] = [],
+) {
+  for await (const [name, handle] of directoryHandle.entries()) {
+    if (files.length >= MAX_PROJECT_FILES) {
+      break;
+    }
+
+    const path = prefix ? `${prefix}/${name}` : name;
+
+    if (handle.kind === 'directory') {
+      if (!IGNORED_PROJECT_DIRECTORIES.has(name)) {
+        await scanProjectDirectory(handle, path, files);
+      }
+      continue;
+    }
+
+    const file = await handle.getFile();
+    if (!shouldReadProjectFile(path, file.size)) {
+      continue;
+    }
+
+    try {
+      files.push({
+        path,
+        content: await file.text(),
+        size: file.size,
+        handle,
+      });
+    } catch {
+      // Skip files the browser cannot decode as text.
+    }
+  }
+
+  return files;
+}
+
+function buildProjectSnapshot(projectName: string, files: ProjectFileSnapshot[]) {
+  const sortedFiles = [...files].sort((left, right) => left.path.localeCompare(right.path));
+  const tableOfContents = sortedFiles.map((file) => `- ${file.path} (${file.size} bytes)`).join('\n');
+  let snapshot = `PROJECT: ${projectName}\nFILES SCANNED: ${files.length}\n\nFILE TREE:\n${tableOfContents}\n`;
+
+  for (const file of sortedFiles) {
+    const next = `\n\n--- FILE: ${file.path} ---\n${file.content}`;
+    if (snapshot.length + next.length > MAX_PROJECT_CONTEXT_CHARS) {
+      snapshot += '\n\n[AEGIS truncated the project snapshot to fit the model context budget.]';
+      break;
+    }
+
+    snapshot += next;
+  }
+
+  return snapshot;
+}
+
+function findProjectFile(project: CodeProject, path: string) {
+  const normalizedPath = path.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+  return project.files.find((file) => file.path === normalizedPath);
+}
+
+function extractUnifiedDiff(content: string) {
+  const fencedMatch = content.match(/```(?:diff|patch)?\s*\n([\s\S]*?^```)/m);
+  const candidate = fencedMatch
+    ? fencedMatch[1].replace(/\n```$/, '')
+    : content.slice(content.indexOf('diff --git'));
+
+  if (!candidate || !candidate.includes('--- ') || !candidate.includes('+++ ')) {
+    return '';
+  }
+
+  return candidate.trim();
+}
+
+function parsePatchTarget(diff: string) {
+  const plusLine = diff
+    .split('\n')
+    .find((line) => line.startsWith('+++ ') && !line.includes('/dev/null'));
+
+  if (!plusLine) {
+    return '';
+  }
+
+  return plusLine
+    .replace(/^\+\+\+\s+/, '')
+    .replace(/^[ab]\//, '')
+    .trim();
+}
+
+function applySimpleUnifiedDiff(original: string, diff: string) {
+  const lines = original.split('\n');
+  const output: string[] = [];
+  let sourceIndex = 0;
+  const diffLines = diff.split(/\r?\n/);
+  let index = 0;
+
+  while (index < diffLines.length) {
+    const line = diffLines[index];
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (!hunkMatch) {
+      index += 1;
+      continue;
+    }
+
+    const hunkStart = Math.max(0, Number(hunkMatch[1]) - 1);
+    while (sourceIndex < hunkStart) {
+      output.push(lines[sourceIndex] ?? '');
+      sourceIndex += 1;
+    }
+
+    index += 1;
+    while (index < diffLines.length && !diffLines[index].startsWith('@@ ')) {
+      const hunkLine = diffLines[index];
+      const marker = hunkLine[0];
+      const value = hunkLine.slice(1);
+
+      if (marker === ' ') {
+        if ((lines[sourceIndex] ?? '') !== value) {
+          throw new Error('Patch context did not match the current file contents.');
+        }
+        output.push(value);
+        sourceIndex += 1;
+      } else if (marker === '-') {
+        if ((lines[sourceIndex] ?? '') !== value) {
+          throw new Error('Patch removal did not match the current file contents.');
+        }
+        sourceIndex += 1;
+      } else if (marker === '+') {
+        output.push(value);
+      }
+
+      index += 1;
+    }
+  }
+
+  while (sourceIndex < lines.length) {
+    output.push(lines[sourceIndex] ?? '');
+    sourceIndex += 1;
+  }
+
+  return output.join('\n');
 }
 
 function mergeIndexedDocuments(
@@ -999,10 +1376,36 @@ export default function App() {
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(
     loadStoredPinnedSessionIds,
   );
+  const [projectsOpen, setProjectsOpen] = useState(true);
+  const [sessionsOpen, setSessionsOpen] = useState(true);
+  const [codeProjects, setCodeProjects] = useState<CodeProject[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [scanningProject, setScanningProject] = useState(false);
+  const [projectPermissionRequestId, setProjectPermissionRequestId] = useState<string | null>(null);
+  const [projectEditMessage, setProjectEditMessage] = useState<string | null>(null);
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState<string | null>(null);
   const [dismissedResourceWarning, setDismissedResourceWarning] = useState<string | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [availableModels, setAvailableModels] = useState<ModelResponse[]>([]);
+  const [availableProviders, setAvailableProviders] = useState<ProviderResponse[]>([]);
+  const [modelSearch, setModelSearch] = useState('');
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [modelDownloadProgress, setModelDownloadProgress] = useState(0);
+  const [modelDownloadStatus, setModelDownloadStatus] = useState('');
+  const [responseStyle, setResponseStyle] = useState<ResponseStyle>(loadStoredResponseStyle);
+  const [profileText, setProfileText] = useState('');
+  const [profilePath, setProfilePath] = useState('');
+  const [welcomeMessages, setWelcomeMessages] = useState(DEFAULT_WELCOME_MESSAGES);
+  const [activeWelcomeMessage, setActiveWelcomeMessage] = useState(() =>
+    randomWelcomeMessage(DEFAULT_WELCOME_MESSAGES),
+  );
+  const [sessionPendingDeletion, setSessionPendingDeletion] =
+    useState<EngineSessionSummary | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [calendarPrompt, setCalendarPrompt] = useState('');
@@ -1040,6 +1443,7 @@ export default function App() {
   const [chatMode, setChatMode] = useState<ChatMode>('general');
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const profileImportInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   const streamingMessagesBySessionRef = useRef<Record<string, Message[]>>({});
@@ -1057,10 +1461,19 @@ export default function App() {
     resourceWarning && resourceWarning !== dismissedResourceWarning ? resourceWarning : null;
   const errorDismissible = error ? !isFatalUiError(error) : false;
   const tokenMeterLabel = formatTokenMeter(contextUsage);
+  const showCenteredComposer = !activeSessionId && messages.length === 0;
+  const filteredModels = availableModels.filter((model) =>
+    model.name.toLowerCase().includes(modelSearch.trim().toLowerCase()),
+  );
+  const activeProvider = availableProviders.find((provider) => provider.active);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.session_id === activeSessionId),
     [activeSessionId, sessions],
+  );
+  const activeProject = useMemo(
+    () => codeProjects.find((project) => project.id === activeProjectId) ?? null,
+    [activeProjectId, codeProjects],
   );
   const pinnedSessionIdSet = useMemo(
     () => new Set(pinnedSessionIds),
@@ -1149,6 +1562,41 @@ export default function App() {
     setStatus('Ready');
   }, []);
 
+  const loadSettingsData = useCallback(async () => {
+    setSettingsLoading(true);
+    setSettingsMessage(null);
+
+    try {
+      const [modelsResult, providersResult, profileResult] = await Promise.allSettled([
+        fetch(`${API_BASE}/models/ollama`),
+        fetch(`${API_BASE}/providers`),
+        fetch(`${API_BASE}/profile`),
+      ]);
+
+      if (modelsResult.status === 'fulfilled' && modelsResult.value.ok) {
+        const data = (await modelsResult.value.json()) as ModelListResponse;
+        setAvailableModels(data.models);
+      }
+
+      if (providersResult.status === 'fulfilled' && providersResult.value.ok) {
+        const data = (await providersResult.value.json()) as ProviderListResponse;
+        setAvailableProviders(data.providers);
+      }
+
+      if (profileResult.status === 'fulfilled' && profileResult.value.ok) {
+        const data = (await profileResult.value.json()) as ProfileResponse;
+        setProfileText(data.contents);
+        setProfilePath(data.path);
+      }
+    } catch (settingsError) {
+      setSettingsMessage(
+        settingsError instanceof Error ? settingsError.message : 'Could not load settings.',
+      );
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const interval = setInterval(() => {
       fetch(`${API_BASE}/system/stats`)
@@ -1169,6 +1617,26 @@ export default function App() {
       setStatus('Engine unavailable');
     });
   }, [loadSessions]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/profile`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: ProfileResponse | null) => {
+        if (data) {
+          setProfileText(data.contents);
+          setProfilePath(data.path);
+        }
+      })
+      .catch(() => {
+        // Profile personalization is optional; settings can retry later.
+      });
+  }, []);
+
+  useEffect(() => {
+    if (settingsOpen) {
+      void loadSettingsData();
+    }
+  }, [loadSettingsData, settingsOpen]);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -1244,6 +1712,43 @@ export default function App() {
 
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(RESPONSE_STYLE_STORAGE_KEY, responseStyle);
+  }, [responseStyle]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWelcomeMessages() {
+      try {
+        const response = await fetch('/welcome-messages.md', { cache: 'no-cache' });
+        if (!response.ok) {
+          return;
+        }
+
+        const messages = parseWelcomeMessages(await response.text());
+        if (!cancelled) {
+          setWelcomeMessages(messages);
+          setActiveWelcomeMessage((current) =>
+            DEFAULT_WELCOME_MESSAGES.includes(current) ? randomWelcomeMessage(messages) : current,
+          );
+        }
+      } catch {
+        // The built-in welcome messages remain available if the editable file is missing.
+      }
+    }
+
+    void loadWelcomeMessages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1338,7 +1843,152 @@ export default function App() {
     setImportPhase('idle');
     setImportProgress(0);
     setImportFileLabel('');
+    setActiveWelcomeMessage(randomWelcomeMessage(welcomeMessages));
     setStatus('Ready');
+  }
+
+  async function handleAddProject() {
+    if (!window.showDirectoryPicker) {
+      setError(
+        'Your browser does not support local folder access. Use Chrome or Edge for AEGIS Projects.',
+      );
+      return;
+    }
+
+    setScanningProject(true);
+    setProjectEditMessage(null);
+    setError(null);
+    setStatus('Scanning project');
+
+    try {
+      const rootHandle = await window.showDirectoryPicker();
+      const files = await scanProjectDirectory(rootHandle);
+      const totalBytes = files.reduce((total, file) => total + file.size, 0);
+      const project: CodeProject = {
+        id: `${rootHandle.name}-${Date.now()}`,
+        name: rootHandle.name,
+        fileCount: files.length,
+        totalBytes,
+        snapshot: buildProjectSnapshot(rootHandle.name, files),
+        files,
+        writable: false,
+        updatedAt: new Date().toISOString(),
+        rootHandle,
+      };
+
+      setCodeProjects((current) => [project, ...current.filter((item) => item.name !== project.name)]);
+      setActiveProjectId(project.id);
+      setProjectsOpen(true);
+      setChatMode('coder');
+      setProjectPermissionRequestId(project.id);
+      setStatus(`Project ${project.name} scanned`);
+    } catch (projectError) {
+      if (projectError instanceof DOMException && projectError.name === 'AbortError') {
+        setStatus('Ready');
+      } else {
+        setError(projectError instanceof Error ? projectError.message : 'Could not scan project.');
+        setStatus('Project scan failed');
+      }
+    } finally {
+      setScanningProject(false);
+    }
+  }
+
+  async function requestProjectWritePermission(projectId: string) {
+    const project = codeProjects.find((item) => item.id === projectId);
+    if (!project) {
+      setProjectPermissionRequestId(null);
+      return;
+    }
+
+    try {
+      const permission =
+        (await project.rootHandle.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
+
+      setCodeProjects((current) =>
+        current.map((item) =>
+          item.id === projectId ? { ...item, writable: permission === 'granted' } : item,
+        ),
+      );
+      setProjectEditMessage(
+        permission === 'granted'
+          ? `AEGIS can apply approved patches inside ${project.name}.`
+          : `${project.name} remains read-only until write access is granted.`,
+      );
+    } catch (permissionError) {
+      setProjectEditMessage(
+        permissionError instanceof Error
+          ? permissionError.message
+          : 'Could not request project write permission.',
+      );
+    } finally {
+      setProjectPermissionRequestId(null);
+    }
+  }
+
+  function removeProject(projectId: string) {
+    setCodeProjects((current) => current.filter((project) => project.id !== projectId));
+    setActiveProjectId((current) => (current === projectId ? null : current));
+    setProjectEditMessage(null);
+  }
+
+  async function applyAssistantPatch(messageContent: string) {
+    if (!activeProject) {
+      setError('Open a project before applying code patches.');
+      return;
+    }
+
+    if (!activeProject.writable) {
+      setError('Project edits are disabled. Grant edit permission before applying a patch.');
+      return;
+    }
+
+    const diff = extractUnifiedDiff(messageContent);
+    const changedFiles = diff
+      .split('\n')
+      .filter((line) => line.startsWith('+++ ') && !line.includes('/dev/null'));
+    const targetPath = parsePatchTarget(diff);
+    const targetFile = targetPath ? findProjectFile(activeProject, targetPath) : null;
+
+    if (changedFiles.length > 1) {
+      setError('Automatic patch apply currently supports one file at a time.');
+      return;
+    }
+
+    if (!diff || !targetFile?.handle.createWritable) {
+      setError('AEGIS could not find a supported unified diff for the active project.');
+      return;
+    }
+
+    try {
+      const nextContent = applySimpleUnifiedDiff(targetFile.content, diff);
+      const writable = await targetFile.handle.createWritable();
+      await writable.write(nextContent);
+      await writable.close();
+
+      const nextFiles = activeProject.files.map((file) =>
+        file.path === targetFile.path
+          ? { ...file, content: nextContent, size: new Blob([nextContent]).size }
+          : file,
+      );
+      const nextProject = {
+        ...activeProject,
+        files: nextFiles,
+        fileCount: nextFiles.length,
+        totalBytes: nextFiles.reduce((total, file) => total + file.size, 0),
+        snapshot: buildProjectSnapshot(activeProject.name, nextFiles),
+        updatedAt: new Date().toISOString(),
+      };
+
+      setCodeProjects((current) =>
+        current.map((project) => (project.id === nextProject.id ? nextProject : project)),
+      );
+      setProjectEditMessage(`Applied patch to ${targetFile.path}.`);
+      setStatus('Project patch applied');
+    } catch (patchError) {
+      setError(patchError instanceof Error ? patchError.message : 'Could not apply project patch.');
+      setStatus('Patch failed');
+    }
   }
 
   async function handleDeleteSession(session: EngineSessionSummary) {
@@ -1347,14 +1997,16 @@ export default function App() {
     }
 
     setSessionMenuOpenId(null);
-    const confirmed = globalThis.confirm(
-      `Delete session "${session.title}"?\n\nThis will permanently remove the saved conversation.`,
-    );
+    setSessionPendingDeletion(session);
+  }
 
-    if (!confirmed) {
+  async function confirmDeleteSession() {
+    const session = sessionPendingDeletion;
+    if (!session || deletingSessionIds.includes(session.session_id)) {
       return;
     }
 
+    setSessionPendingDeletion(null);
     setError(null);
     setStatus('Deleting session');
 
@@ -1772,6 +2424,176 @@ export default function App() {
     setSessionMenuOpenId(null);
   }
 
+  function openSettings(tab: SettingsTab = 'general') {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+    setSettingsMessage(null);
+  }
+
+  async function selectProvider(providerName: string) {
+    setSettingsMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/providers/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: providerName }),
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Engine returned HTTP ${response.status} while switching provider.`);
+      }
+
+      await loadSettingsData();
+      setSettingsMessage(`Inference provider switched to ${providerName}.`);
+    } catch (providerError) {
+      setSettingsMessage(
+        providerError instanceof Error ? providerError.message : 'Could not switch provider.',
+      );
+    }
+  }
+
+  async function selectModel(modelName: string) {
+    setSettingsMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/models/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: modelName }),
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Engine returned HTTP ${response.status} while switching model.`);
+      }
+
+      await loadSettingsData();
+      setSettingsMessage(`Active model switched to ${modelName}.`);
+    } catch (modelError) {
+      setSettingsMessage(modelError instanceof Error ? modelError.message : 'Could not switch model.');
+    }
+  }
+
+  async function downloadOllamaModel() {
+    const modelName = modelSearch.trim();
+    if (!modelName || downloadingModel) {
+      return;
+    }
+
+    setDownloadingModel(modelName);
+    setModelDownloadProgress(0);
+    setModelDownloadStatus('Starting download');
+    setSettingsMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/models/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: modelName }),
+      });
+
+      if (!response.ok || !response.body) {
+        const body = await response.text();
+        throw new Error(body || `Engine returned HTTP ${response.status} while downloading model.`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        pending += decoder.decode(value, { stream: true });
+        const parsed = extractSseEvents(pending);
+        pending = parsed.remaining;
+
+        for (const event of parsed.events) {
+          const data = sseEventData(event);
+          if (!data) {
+            continue;
+          }
+
+          const chunk = JSON.parse(data) as PullModelChunk;
+          if (chunk.error) {
+            throw new Error(chunk.error);
+          }
+
+          setModelDownloadStatus(chunk.status ?? 'Downloading');
+          const percent = modelDownloadPercent(chunk);
+          if (percent !== null) {
+            setModelDownloadProgress(percent);
+          }
+        }
+      }
+
+      setModelDownloadProgress(100);
+      setModelDownloadStatus('Download complete');
+      await loadSettingsData();
+      setSettingsMessage(`${modelName} is ready in Ollama.`);
+    } catch (downloadError) {
+      setModelDownloadStatus('Download failed');
+      setSettingsMessage(
+        downloadError instanceof Error ? downloadError.message : 'Could not download model.',
+      );
+    } finally {
+      setDownloadingModel(null);
+    }
+  }
+
+  async function saveProfileSettings() {
+    setSettingsMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: profileText }),
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Engine returned HTTP ${response.status} while saving profile.`);
+      }
+
+      const data = (await response.json()) as ProfileResponse;
+      setProfileText(data.contents);
+      setProfilePath(data.path);
+      setSettingsMessage('Personal profile saved locally.');
+    } catch (profileError) {
+      setSettingsMessage(
+        profileError instanceof Error ? profileError.message : 'Could not save profile.',
+      );
+    }
+  }
+
+  async function importProfileFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith('.txt') && !file.name.toLowerCase().endsWith('.md')) {
+      setSettingsMessage('Only .txt and .md profile files are supported.');
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      setProfileText(await file.text());
+      setSettingsMessage(`Imported ${file.name}. Save to apply it locally.`);
+    } catch {
+      setSettingsMessage('Could not read the selected profile file.');
+    } finally {
+      event.target.value = '';
+    }
+  }
+
   async function streamPrompt(
     prompt: string,
     nextMessages: Message[],
@@ -1852,6 +2674,9 @@ export default function App() {
           ),
           edit_from_turn_index: editFromTurnIndex,
           mode: chatMode,
+          response_style: responseStyle,
+          code_project_name: activeProject?.name,
+          code_project_context: activeProject?.snapshot,
         }),
       });
 
@@ -2098,6 +2923,25 @@ export default function App() {
         >
           {isDark ? <Sun size={17} /> : <Moon size={17} />}
         </button>
+        <button
+          aria-label="Open settings"
+          className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${settingsOpen
+              ? isDark
+                ? 'bg-zinc-900 text-emerald-300'
+                : 'bg-stone-200 text-emerald-700'
+              : isDark
+                ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+                : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
+            }`}
+          onClick={(event) => {
+            event.stopPropagation();
+            openSettings();
+          }}
+          title="Settings"
+          type="button"
+        >
+          <Settings size={17} />
+        </button>
       </nav>
 
       <aside
@@ -2109,23 +2953,8 @@ export default function App() {
           className={`flex h-full w-64 shrink-0 flex-col py-4 pl-2 pr-4 transition-opacity duration-150 ease-out ${sidebarOpen ? 'opacity-100 delay-100' : 'opacity-0'
             }`}
         >
-          <div className="mb-6 flex items-start justify-between gap-4">
-            <div>
-              <div className="aegis-wordmark">AEGIS</div>
-            </div>
-            <div
-              className={`space-y-1 text-right font-mono text-[11px] ${isDark ? 'text-zinc-100' : 'text-slate-900'
-                }`}
-            >
-              <div className="flex items-center justify-end gap-1.5">
-                <Cpu size={12} />
-                <span>{systemStats.cpu}%</span>
-              </div>
-              <div className="flex items-center justify-end gap-1.5">
-                <HardDrive size={12} />
-                <span>{systemStats.ram}%</span>
-              </div>
-            </div>
+          <div className="mb-6">
+            <div className="aegis-wordmark">AEGIS</div>
           </div>
 
           <button
@@ -2138,14 +2967,136 @@ export default function App() {
             <span>NEW CONVERSATION</span>
           </button>
 
-          <div
-            className={`mb-2 text-xs font-semibold uppercase tracking-wide ${isDark ? 'text-zinc-500' : 'text-slate-500'
-              }`}
-          >
-            Sessions
+          <div className="mb-3">
+            <div className="mb-2 flex items-center justify-between">
+              <button
+                className={`flex min-w-0 items-center gap-1.5 text-[14px] font-semibold transition ${
+                  isDark ? 'text-zinc-400 hover:text-zinc-100' : 'text-slate-600 hover:text-slate-950'
+                }`}
+                onClick={() => setProjectsOpen((current) => !current)}
+                type="button"
+              >
+                <ChevronDown
+                  className={`shrink-0 transition-transform ${projectsOpen ? '' : '-rotate-90'}`}
+                  size={15}
+                />
+                <span>Projects</span>
+              </button>
+              <button
+                aria-label="Open project folder"
+                className={`rounded-lg p-1.5 transition ${
+                  isDark
+                    ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                    : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                }`}
+                disabled={scanningProject}
+                onClick={() => void handleAddProject()}
+                title="Open project folder"
+                type="button"
+              >
+                <FolderPlus size={16} />
+              </button>
+            </div>
+
+            {projectsOpen && (
+              <div className="space-y-1">
+                {codeProjects.length === 0 ? (
+                  <button
+                    className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition ${
+                      isDark
+                        ? 'border-zinc-800 text-zinc-500 hover:bg-zinc-900'
+                        : 'border-stone-300 text-slate-500 hover:bg-stone-100'
+                    }`}
+                    disabled={scanningProject}
+                    onClick={() => void handleAddProject()}
+                    type="button"
+                  >
+                    <FolderOpen size={15} />
+                    {scanningProject ? 'Scanning folder...' : 'Open project folder'}
+                  </button>
+                ) : (
+                  codeProjects.map((project) => {
+                    const isActiveProject = activeProjectId === project.id;
+                    return (
+                      <div
+                        className={`group flex items-center gap-2 rounded-lg px-2.5 py-2 transition ${
+                          isActiveProject
+                            ? isDark
+                              ? 'bg-zinc-900 text-zinc-50 shadow-[0_3px_12px_rgba(255,255,255,0.10)]'
+                              : 'bg-white text-slate-950 shadow-[0_8px_20px_rgba(120,113,108,0.12)]'
+                            : isDark
+                              ? 'text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-100'
+                              : 'text-slate-600 hover:bg-white hover:text-slate-950'
+                        }`}
+                        key={project.id}
+                      >
+                        <button
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          onClick={() => {
+                            setActiveProjectId(project.id);
+                            setChatMode('coder');
+                          }}
+                          type="button"
+                        >
+                          <FolderOpen
+                            className={isActiveProject ? 'text-emerald-400' : ''}
+                            size={16}
+                          />
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm">{project.name}</span>
+                            <span
+                              className={`block truncate text-[11px] ${
+                                isDark ? 'text-zinc-500' : 'text-slate-500'
+                              }`}
+                            >
+                              {project.fileCount} files · {Math.ceil(project.totalBytes / 1024)} KB
+                              {project.writable ? ' · editable' : ' · read-only'}
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          aria-label={`Remove ${project.name}`}
+                          className={`rounded-md p-1 opacity-0 transition group-hover:opacity-100 ${
+                            isDark
+                              ? 'text-zinc-500 hover:bg-zinc-800 hover:text-red-300'
+                              : 'text-slate-500 hover:bg-stone-100 hover:text-red-600'
+                          }`}
+                          onClick={() => removeProject(project.id)}
+                          type="button"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
           </div>
 
-          <div className="sessions-scroll -ml-1.5 -mr-3 min-h-0 flex-1 space-y-1 overflow-y-auto py-1.5 pl-2 pr-3">
+          <div
+            className="mb-2 flex items-center justify-between"
+          >
+            <button
+              className={`flex items-center gap-1.5 text-[14px] font-semibold transition ${
+                isDark ? 'text-zinc-400 hover:text-zinc-100' : 'text-slate-600 hover:text-slate-950'
+              }`}
+              onClick={() => setSessionsOpen((current) => !current)}
+              type="button"
+            >
+              <ChevronDown
+                className={`transition-transform ${sessionsOpen ? '' : '-rotate-90'}`}
+                size={15}
+              />
+              <span>Sessions</span>
+            </button>
+          </div>
+
+          <div
+            className={`sessions-scroll -ml-1.5 -mr-3 min-h-0 flex-1 space-y-1 overflow-y-auto py-1.5 pl-2 pr-3 ${
+              sessionsOpen ? '' : 'hidden'
+            }`}
+          >
             {sessions.length === 0 ? (
               <div
                 className={`rounded-lg border p-3 text-sm ${isDark ? 'border-zinc-800 text-zinc-500' : 'border-stone-300 text-slate-500'
@@ -2331,7 +3282,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="relative flex min-w-0 flex-1 flex-col">
         <header
           className={`flex h-16 shrink-0 items-center justify-between border-b px-6 ${isDark ? 'border-zinc-800' : 'border-stone-300'
             }`}
@@ -2583,6 +3534,32 @@ export default function App() {
                         </button>
                       </div>
                     )}
+                    {message.role === 'assistant' &&
+                      activeProject &&
+                      Boolean(extractUnifiedDiff(message.content)) && (
+                        <button
+                          className={`mt-2 inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                            activeProject.writable
+                              ? isDark
+                                ? 'border-emerald-700 text-emerald-200 hover:bg-emerald-950/40'
+                                : 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                              : isDark
+                                ? 'border-zinc-800 text-zinc-500'
+                                : 'border-stone-300 text-slate-500'
+                          }`}
+                          disabled={!activeProject.writable}
+                          onClick={() => void applyAssistantPatch(message.content)}
+                          title={
+                            activeProject.writable
+                              ? 'Apply the unified diff to the active project'
+                              : 'Grant project edit permission before applying patches'
+                          }
+                          type="button"
+                        >
+                          <FileCode size={14} />
+                          Apply suggested patch
+                        </button>
+                      )}
                   </div>
                   {message.role === 'user' && (
                     <div
@@ -2601,17 +3578,33 @@ export default function App() {
         </div>
 
         <footer
-          className={`relative shrink-0 px-4 pb-4 pt-5 ${isDark
-              ? 'bg-zinc-950/95 shadow-[0_-24px_42px_rgba(0,0,0,0.35)]'
-              : 'bg-stone-100/95 shadow-[0_-24px_42px_rgba(120,113,108,0.18)]'
-            }`}
+          className={`px-4 transition-all duration-500 ease-out ${
+            showCenteredComposer
+              ? 'pointer-events-none absolute inset-x-0 top-1/2 z-20 -translate-y-1/2 pb-0 pt-0'
+              : `relative shrink-0 pb-4 pt-5 ${
+                  isDark
+                    ? 'bg-zinc-950/95 shadow-[0_-24px_42px_rgba(0,0,0,0.35)]'
+                    : 'bg-stone-100/95 shadow-[0_-24px_42px_rgba(120,113,108,0.18)]'
+                }`
+          }`}
         >
-          <div
-            className={`pointer-events-none absolute inset-x-0 -top-8 h-8 ${isDark
-                ? 'bg-gradient-to-t from-zinc-950/95 to-transparent'
-                : 'bg-gradient-to-t from-stone-100/95 to-transparent'
+          {!showCenteredComposer && (
+            <div
+              className={`pointer-events-none absolute inset-x-0 -top-8 h-8 ${isDark
+                  ? 'bg-gradient-to-t from-zinc-950/95 to-transparent'
+                  : 'bg-gradient-to-t from-stone-100/95 to-transparent'
+                }`}
+            />
+          )}
+          {showCenteredComposer && (
+            <div
+              className={`welcome-message pointer-events-auto mx-auto mb-5 max-w-2xl text-center text-xl font-semibold ${
+                isDark ? 'text-zinc-100' : 'text-slate-900'
               }`}
-          />
+            >
+              {personalizeWelcomeMessage(activeWelcomeMessage, profileText)}
+            </div>
+          )}
           {showImportProgress && (
             <div
               className={`mx-auto mb-3 max-w-3xl rounded-lg border px-3 py-2 ${importPhase === 'error'
@@ -2662,7 +3655,50 @@ export default function App() {
               </span>
             </div>
           )}
-          <form className="mx-auto max-w-3xl" onSubmit={handleSubmit}>
+          {activeProject && (
+            <div
+              className={`mx-auto mb-3 flex max-w-3xl items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs ${
+                isDark
+                  ? 'border-sky-900/60 bg-sky-950/20 text-sky-200'
+                  : 'border-sky-200 bg-sky-50 text-sky-800'
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <FolderOpen size={14} />
+                <span className="truncate">
+                  Project context active: {activeProject.name} · {activeProject.fileCount} files ·{' '}
+                  {activeProject.writable ? 'edits require patch approval' : 'read-only'}
+                </span>
+              </span>
+              <button
+                aria-label="Detach project context"
+                className={`shrink-0 rounded-md p-1 transition ${
+                  isDark ? 'hover:bg-sky-900/40' : 'hover:bg-sky-100'
+                }`}
+                onClick={() => setActiveProjectId(null)}
+                type="button"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+          {projectEditMessage && (
+            <div
+              className={`mx-auto mb-3 max-w-3xl rounded-lg border px-3 py-2 text-xs ${
+                isDark
+                  ? 'border-zinc-800 bg-zinc-900/70 text-zinc-300'
+                  : 'border-stone-300 bg-white text-slate-600'
+              }`}
+            >
+              {projectEditMessage}
+            </div>
+          )}
+          <form
+            className={`pointer-events-auto mx-auto transition-all duration-500 ease-out ${
+              showCenteredComposer ? 'max-w-2xl' : 'max-w-3xl'
+            }`}
+            onSubmit={handleSubmit}
+          >
             <input
               accept=".pdf,.txt"
               className="hidden"
@@ -2674,14 +3710,20 @@ export default function App() {
               type="file"
             />
             <div
-              className={`rounded-xl border px-3 pb-2.5 pt-3 shadow-sm transition-colors ${
+              className={`border shadow-sm transition-all duration-500 ease-out ${
+                showCenteredComposer
+                  ? 'rounded-[1.75rem] px-4 pb-3 pt-3'
+                  : 'rounded-xl px-3 pb-2.5 pt-3'
+              } ${
                 isDark
                   ? 'border-zinc-800 bg-zinc-950/92 text-zinc-100 shadow-black/30'
                   : 'border-stone-300 bg-white text-slate-900 shadow-stone-300/30'
               }`}
             >
               <textarea
-                className={`max-h-44 min-h-[38px] w-full resize-none bg-transparent text-sm leading-6 outline-none ${
+                className={`w-full resize-none bg-transparent text-sm leading-6 outline-none ${
+                  showCenteredComposer ? 'max-h-28 min-h-[30px]' : 'max-h-44 min-h-[38px]'
+                } ${
                   isDark
                     ? 'placeholder:text-zinc-500'
                     : 'placeholder:text-slate-400'
@@ -2797,6 +3839,448 @@ export default function App() {
           </form>
         </footer>
       </main>
+
+      {projectPermissionRequestId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setProjectPermissionRequestId(null)}
+        >
+          <div
+            className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
+              isDark
+                ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                : 'border-stone-300 bg-white text-slate-900'
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center gap-2 text-lg font-semibold">
+              <FolderOpen size={18} />
+              Allow Project Edits?
+            </div>
+            <p className={`text-sm leading-6 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+              AEGIS has scanned this project for context. To edit files, it must request browser
+              write permission, and patches will still require your explicit approval before they
+              are applied.
+            </p>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                className={`rounded-lg border px-4 py-2 text-sm transition ${
+                  isDark
+                    ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                    : 'border-stone-300 text-slate-700 hover:bg-stone-100'
+                }`}
+                onClick={() => {
+                  setProjectPermissionRequestId(null);
+                  setProjectEditMessage('Project attached in read-only mode.');
+                }}
+                type="button"
+              >
+                Keep read-only
+              </button>
+              <button
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500"
+                onClick={() => void requestProjectWritePermission(projectPermissionRequestId)}
+                type="button"
+              >
+                Request edit access
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sessionPendingDeletion && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setSessionPendingDeletion(null)}
+        >
+          <div
+            className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
+              isDark
+                ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                : 'border-stone-300 bg-white text-slate-900'
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <div className="text-lg font-semibold">Delete Conversation</div>
+              <button
+                aria-label="Cancel deletion"
+                className={`rounded-md p-1 transition ${
+                  isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                }`}
+                onClick={() => setSessionPendingDeletion(null)}
+                type="button"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p className={`text-sm leading-6 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+              This will permanently delete "{sessionPendingDeletion.title}" and its saved
+              conversation history. This action cannot be undone.
+            </p>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                className={`rounded-lg border px-4 py-2 text-sm transition ${
+                  isDark
+                    ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                    : 'border-stone-300 text-slate-700 hover:bg-stone-100'
+                }`}
+                onClick={() => setSessionPendingDeletion(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-500"
+                onClick={() => void confirmDeleteSession()}
+                type="button"
+              >
+                Delete permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {settingsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setSettingsOpen(false)}
+        >
+          <div
+            className={`flex h-[64vh] min-h-[420px] w-full max-w-4xl overflow-hidden rounded-2xl border shadow-2xl ${
+              isDark
+                ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                : 'border-stone-300 bg-white text-slate-900'
+            }`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <aside
+              className={`w-48 shrink-0 border-r p-4 ${
+                isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-200 bg-stone-50'
+              }`}
+            >
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <Settings size={16} />
+                Settings
+              </div>
+              {[
+                ['general', 'General'],
+                ['inference', 'Inference'],
+                ['models', 'Models'],
+                ['personal', 'Personal'],
+              ].map(([value, label]) => (
+                <button
+                  className={`mb-1 flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition ${
+                    settingsTab === value
+                      ? 'bg-emerald-600 text-white'
+                      : isDark
+                        ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+                        : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
+                  }`}
+                  key={value}
+                  onClick={() => setSettingsTab(value as SettingsTab)}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </aside>
+
+            <section className="flex min-w-0 flex-1 flex-col">
+              <div
+                className={`flex h-14 shrink-0 items-center justify-between px-5 ${
+                  isDark ? 'border-zinc-800' : 'border-stone-200'
+                }`}
+              >
+                <div>
+                  <div className="text-sm font-semibold capitalize">{settingsTab}</div>
+                  <div className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                    {settingsLoading ? 'Loading settings...' : 'Local AEGIS preferences'}
+                  </div>
+                </div>
+                <button
+                  aria-label="Close settings"
+                  className={`rounded-md p-1 transition ${
+                    isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                  }`}
+                  onClick={() => setSettingsOpen(false)}
+                  type="button"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {settingsMessage && (
+                <div
+                  className={`mx-5 mb-2 rounded-lg border px-3 py-2 text-xs ${
+                    settingsMessage.toLowerCase().includes('could not') ||
+                    settingsMessage.toLowerCase().includes('failed') ||
+                    settingsMessage.toLowerCase().includes('only')
+                      ? isDark
+                        ? 'border-red-900/60 bg-red-950/30 text-red-200'
+                        : 'border-red-200 bg-red-50 text-red-700'
+                      : isDark
+                        ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
+                        : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  }`}
+                >
+                  {settingsMessage}
+                </div>
+              )}
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+                {settingsTab === 'general' && (
+                  <div className="space-y-5">
+                    <div>
+                      <label className="mb-2 block text-sm font-semibold" htmlFor="general-model">
+                        Active Model
+                      </label>
+                      <select
+                        className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${
+                          isDark
+                            ? 'border-zinc-800 bg-zinc-900 text-zinc-100'
+                            : 'border-stone-300 bg-white text-slate-900'
+                        }`}
+                        disabled={availableModels.length === 0 || Boolean(downloadingModel)}
+                        id="general-model"
+                        onChange={(event) => void selectModel(event.target.value)}
+                        value={availableModels.find((model) => model.active)?.name ?? ''}
+                      >
+                        <option value="" disabled>
+                          {availableModels.length === 0
+                            ? 'No installed models found'
+                            : 'Choose active model'}
+                        </option>
+                        {availableModels.map((model) => (
+                          <option key={model.name} value={model.name}>
+                            {model.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                        Switching warms the selected model before the engine commits to it.
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-sm font-semibold">Response Style</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {RESPONSE_STYLE_OPTIONS.map((option) => (
+                          <button
+                            className={`rounded-xl border p-3 text-left transition ${
+                              responseStyle === option.value
+                                ? isDark
+                                  ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100'
+                                  : 'border-emerald-500 bg-emerald-50 text-emerald-900'
+                                : isDark
+                                  ? 'border-zinc-800 hover:bg-zinc-900'
+                                  : 'border-stone-300 hover:bg-stone-50'
+                            }`}
+                            key={option.value}
+                            onClick={() => setResponseStyle(option.value)}
+                            type="button"
+                          >
+                            <div className="text-sm font-semibold">{option.label}</div>
+                            <div
+                              className={`mt-1 text-xs leading-5 ${
+                                isDark ? 'text-zinc-400' : 'text-slate-500'
+                              }`}
+                            >
+                              {option.description}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {settingsTab === 'inference' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="mb-2 block text-sm font-semibold" htmlFor="provider-select">
+                        Inference Provider
+                      </label>
+                      <select
+                        className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${
+                          isDark
+                            ? 'border-zinc-800 bg-zinc-900 text-zinc-100'
+                            : 'border-stone-300 bg-white text-slate-900'
+                        }`}
+                        disabled={availableProviders.length === 0}
+                        id="provider-select"
+                        onChange={(event) => void selectProvider(event.target.value)}
+                        value={activeProvider?.name ?? ''}
+                      >
+                        <option value="" disabled>
+                          {availableProviders.length === 0
+                            ? 'No providers available'
+                            : 'Choose provider'}
+                        </option>
+                        {availableProviders.map((provider) => (
+                          <option key={provider.name} value={provider.name}>
+                            {provider.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {activeProvider && (
+                      <div
+                        className={`rounded-xl border p-4 text-sm ${
+                          isDark
+                            ? 'border-zinc-800 bg-zinc-900/40 text-zinc-300'
+                            : 'border-stone-300 bg-stone-50 text-slate-600'
+                        }`}
+                      >
+                        {activeProvider.description}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {settingsTab === 'models' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="mb-2 block text-sm font-semibold" htmlFor="model-search">
+                        Search or Download Ollama Model
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          className={`min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${
+                            isDark
+                              ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
+                              : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
+                          }`}
+                          id="model-search"
+                          onChange={(event) => setModelSearch(event.target.value)}
+                          placeholder="llama3.2:3b"
+                          value={modelSearch}
+                        />
+                        <button
+                          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:opacity-60"
+                          disabled={!modelSearch.trim() || Boolean(downloadingModel)}
+                          onClick={() => void downloadOllamaModel()}
+                          type="button"
+                        >
+                          Download
+                        </button>
+                      </div>
+                    </div>
+
+                    {downloadingModel && (
+                      <div
+                        className={`rounded-xl border p-3 ${
+                          isDark
+                            ? 'border-zinc-800 bg-zinc-900/50'
+                            : 'border-stone-300 bg-stone-50'
+                        }`}
+                      >
+                        <div className="mb-2 flex items-center justify-between text-xs">
+                          <span className="truncate">{downloadingModel}: {modelDownloadStatus}</span>
+                          <span className="font-mono">{modelDownloadProgress}%</span>
+                        </div>
+                        <div className={`h-1.5 rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}>
+                          <div
+                            className="h-full rounded-full bg-emerald-500 transition-all duration-300"
+                            style={{ width: `${modelDownloadProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold">Installed Ollama Models</div>
+                      {filteredModels.length === 0 ? (
+                        <div className={`text-sm ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                          No installed models match this search.
+                        </div>
+                      ) : (
+                        filteredModels.map((model) => (
+                          <button
+                            className={`flex w-full items-center justify-between rounded-xl border p-3 text-left transition ${
+                              model.active
+                                ? isDark
+                                  ? 'border-emerald-500 bg-emerald-950/25'
+                                  : 'border-emerald-500 bg-emerald-50'
+                                : isDark
+                                  ? 'border-zinc-800 hover:bg-zinc-900'
+                                  : 'border-stone-300 hover:bg-stone-50'
+                            }`}
+                            key={model.name}
+                            onClick={() => void selectModel(model.name)}
+                            type="button"
+                          >
+                            <span>
+                              <span className="block font-mono text-sm">{model.name}</span>
+                              {model.description && (
+                                <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                                  {model.description}
+                                </span>
+                              )}
+                            </span>
+                            {model.active && <Check size={16} />}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {settingsTab === 'personal' && (
+                  <div className="space-y-3">
+                    <div>
+                      <div className="text-sm font-semibold">Local User Profile</div>
+                      <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                        {profilePath || 'Profile path will appear after the engine responds.'}
+                      </div>
+                    </div>
+                    <input
+                      accept=".txt,.md"
+                      className="hidden"
+                      onChange={(event) => void importProfileFile(event)}
+                      ref={profileImportInputRef}
+                      type="file"
+                    />
+                    <textarea
+                      className={`min-h-52 w-full resize-none rounded-xl border p-3 text-sm leading-6 outline-none focus:border-emerald-600 ${
+                        isDark
+                          ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
+                          : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
+                      }`}
+                      onChange={(event) => setProfileText(event.target.value)}
+                      placeholder="Add local preferences, identity notes, project context, or writing preferences."
+                      value={profileText}
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button
+                        className={`rounded-lg border px-4 py-2 text-sm transition ${
+                          isDark
+                            ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                            : 'border-stone-300 text-slate-700 hover:bg-stone-100'
+                        }`}
+                        onClick={() => profileImportInputRef.current?.click()}
+                        type="button"
+                      >
+                        Import .txt/.md
+                      </button>
+                      <button
+                        className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500"
+                        onClick={() => void saveProfileSettings()}
+                        type="button"
+                      >
+                        Save Profile
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        </div>
+      )}
 
       {calendarOpen && (
         <div
@@ -2925,14 +4409,14 @@ export default function App() {
 
       {/* PERFORMANCE METRICS SIDEBAR */}
       <aside
-        className={`flex shrink-0 flex-col border-l transition-all duration-300 ease-in-out ${isMetricsOpen ? 'w-80' : 'w-0 border-transparent p-0'
+        className={`flex shrink-0 flex-col border-l transition-all duration-300 ease-in-out ${isMetricsOpen ? 'w-72' : 'w-0 border-transparent p-0'
           } ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
       >
         <div
           className={`flex h-full flex-col overflow-hidden ${isMetricsOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
         >
           <div
-            className={`flex h-16 shrink-0 items-center justify-between border-b px-6 ${isDark ? 'border-zinc-800' : 'border-stone-300'}`}
+            className="flex h-16 shrink-0 items-center justify-between px-6"
           >
             <div className="text-sm font-semibold uppercase tracking-wider text-zinc-500">
               Live Metrics
