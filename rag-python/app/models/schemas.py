@@ -12,6 +12,10 @@ class QueryRequest(BaseModel):
     top_k: int = Field(3, description="Number of top results to return")
     session_id: str = Field(..., description="AEGIS session to retrieve documents from")
 
+class DeleteDocumentRequest(BaseModel):
+    session_id: str = Field(..., description="AEGIS session that owns this indexed document")
+    source: str = Field(..., description="Absolute source path of the indexed document")
+
 class StoreRequest(BaseModel):
     text: str = Field(..., description="The text to store in memory")
 

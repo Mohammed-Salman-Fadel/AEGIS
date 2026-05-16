@@ -16,6 +16,7 @@ pub const HELP_EXAMPLES: &str = "\
 Examples:
   aegis
   aegis install
+  aegis install --path D:\\AEGIS
   aegis chat \"What can you do?\"
   aegis load 1189578c-9c96-4b4c-8015-4d0673544a6a
   aegis repl

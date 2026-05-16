@@ -16,9 +16,12 @@ use crate::plan_parser::{PlanParser, StepResult};
 use crate::prompt_builder::PromptBuilder;
 use crate::provider_registry::ProviderRegistry;
 use crate::rag_client::RagClient;
+use crate::response_style;
 use crate::tool_registry::ToolRegistry;
 use crate::user_profile;
 use crate::workflow::registry::WorkflowRegistry;
+
+const MAX_CODE_PROJECT_CONTEXT_CHARS: usize = 180_000;
 
 /// The central orchestrator — coordinates every subsystem.
 /// This is the primary entry point for all incoming chat requests.
@@ -86,6 +89,21 @@ fn format_active_documents(attachments: &[String]) -> String {
         .join("\n")
 }
 
+fn truncate_code_project_context(context: &str) -> String {
+    let trimmed = context.trim();
+    if trimmed.len() <= MAX_CODE_PROJECT_CONTEXT_CHARS {
+        return trimmed.to_string();
+    }
+
+    let mut truncated = trimmed
+        .chars()
+        .take(MAX_CODE_PROJECT_CONTEXT_CHARS)
+        .collect::<String>();
+    truncated
+        .push_str("\n\n[AEGIS truncated the selected project context to fit the prompt budget.]");
+    truncated
+}
+
 fn is_code_scoped_request(message: &str) -> bool {
     let lower = message.to_lowercase();
     let has_code_reference = [
@@ -112,14 +130,7 @@ fn is_code_scoped_request(message: &str) -> bool {
     .any(|phrase| lower.contains(phrase));
 
     let asks_for_search = [
-        "where",
-        "how",
-        "find",
-        "show",
-        "explain",
-        "what",
-        "search",
-        "list",
+        "where", "how", "find", "show", "explain", "what", "search", "list",
     ]
     .iter()
     .any(|phrase| lower.contains(phrase));
@@ -192,15 +203,7 @@ fn is_research_scoped_request(message: &str) -> bool {
     .any(|phrase| lower.contains(phrase));
 
     let asks_for_search = [
-        "where",
-        "how",
-        "find",
-        "show",
-        "explain",
-        "what",
-        "search",
-        "list",
-        "get",
+        "where", "how", "find", "show", "explain", "what", "search", "list", "get",
     ]
     .iter()
     .any(|phrase| lower.contains(phrase));
@@ -419,10 +422,13 @@ impl Orchestrator {
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
         // First delete the documents from the RAG subsystem
         if let Err(e) = self.rag_client.delete_session(session_id).await {
-            warn!("Failed to delete RAG documents for session {}: {}", session_id, e);
+            warn!(
+                "Failed to delete RAG documents for session {}: {}",
+                session_id, e
+            );
             // We continue anyway so the session file is still removed
         }
-        
+
         self.memory_store.delete_session(session_id).await
     }
 
@@ -826,13 +832,22 @@ impl Orchestrator {
         // 1.5 Code Search: If the query is code-related, use Semble MCP
         // Optimization: In Coder mode, always try code search if classification passes or if we are forced
         let context_from_code = if mode == ChatMode::Coder || is_code_scoped_request(&req.message) {
-            tracing::info!("Query detected as code-related or in Coder mode: invoking Semble MCP tool");
+            tracing::info!(
+                "Query detected as code-related or in Coder mode: invoking Semble MCP tool"
+            );
             ctx.trace_summary("code_search", "invoking Semble");
-            match self.tool_registry.execute("code_search", &req.message).await {
+            match self
+                .tool_registry
+                .execute_code_search(&req.message, req.code_project_path.as_deref())
+                .await
+            {
                 Ok(context) => {
-                    tracing::info!("Code search successful, retrieved context length: {}", context.len());
+                    tracing::info!(
+                        "Code search successful, retrieved context length: {}",
+                        context.len()
+                    );
                     context
-                },
+                }
                 Err(e) => {
                     tracing::warn!("Code search tool execution failed: {}", e);
                     String::new()
@@ -842,16 +857,37 @@ impl Orchestrator {
             String::new()
         };
 
+        let context_from_project = req
+            .code_project_context
+            .as_deref()
+            .map(truncate_code_project_context)
+            .filter(|context| !context.is_empty())
+            .unwrap_or_default();
+
+        if !context_from_project.is_empty() {
+            ctx.trace_summary(
+                "project_context",
+                "injecting selected local code project snapshot",
+            );
+        }
+
         // 1.6 Zotero Search: If the query is research-related, use Zotero MCP
         // Optimization: In Academic mode, always try zotero search
-        let context_from_zotero = if mode == ChatMode::Academic || is_research_scoped_request(&req.message) {
-            tracing::info!("Query detected as research-related or in Academic mode: invoking Zotero MCP tool");
+        let context_from_zotero = if mode == ChatMode::Academic
+            || is_research_scoped_request(&req.message)
+        {
+            tracing::info!(
+                "Query detected as research-related or in Academic mode: invoking Zotero MCP tool"
+            );
             ctx.trace_summary("zotero_search", "invoking Zotero");
             match self.tool_registry.execute("zotero", &req.message).await {
                 Ok(context) => {
-                    tracing::info!("Zotero search successful, retrieved context length: {}", context.len());
+                    tracing::info!(
+                        "Zotero search successful, retrieved context length: {}",
+                        context.len()
+                    );
                     context
-                },
+                }
                 Err(e) => {
                     tracing::warn!("Zotero search tool execution failed: {}", e);
                     String::new()
@@ -862,13 +898,23 @@ impl Orchestrator {
         };
 
         // 2. Prompt Synthesis: Perform "Context Injection" if data is available
-        let synthesis_prompt = if !context_from_docs.is_empty() || !context_from_code.is_empty() || !context_from_zotero.is_empty() {
+        let synthesis_prompt = if !context_from_docs.is_empty()
+            || !context_from_code.is_empty()
+            || !context_from_project.is_empty()
+            || !context_from_zotero.is_empty()
+        {
             ctx.trace_summary("synthesis", "context found and injected into prompt");
             let active_documents = format_active_documents(&req.attachments);
             let system_persona = match mode {
-                ChatMode::Coder => "You are the AEGIS AI Coder. You specialize in analyzing local codebases, explaining logic, and providing high-quality implementation suggestions.",
-                ChatMode::Academic => "You are the AEGIS AI Researcher. You specialize in analyzing scientific papers, providing precise citations from the Zotero library, and maintaining a formal, evidence-based tone.",
-                ChatMode::General => "You are the AEGIS AI Assistant. You provide balanced and helpful assistance across various tasks.",
+                ChatMode::Coder => {
+                    "You are the AEGIS AI Coder. You specialize in analyzing local codebases, explaining logic, and providing high-quality implementation suggestions."
+                }
+                ChatMode::Academic => {
+                    "You are the AEGIS AI Researcher. You specialize in analyzing scientific papers, providing precise citations from the Zotero library, and maintaining a formal, evidence-based tone."
+                }
+                ChatMode::General => {
+                    "You are the AEGIS AI Assistant. You provide balanced and helpful assistance across various tasks."
+                }
             };
 
             let mut prompt = format!(
@@ -888,6 +934,21 @@ impl Orchestrator {
                 prompt.push_str(&format!(
                     "CODEBASE EXCERPTS (from Semble):\n{}\n\n",
                     context_from_code
+                ));
+            }
+
+            if !context_from_project.is_empty() {
+                let project_name = req
+                    .code_project_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("selected local project");
+                prompt.push_str(&format!(
+                    "SELECTED LOCAL CODE PROJECT: {project_name}\n\
+                    Use this project snapshot as read-only workspace context. When the user asks for edits, explain the exact file-level changes or provide a patch; do not claim files were modified unless a write tool confirms it.\n\n\
+                    PROJECT SNAPSHOT:\n{}\n\n",
+                    context_from_project
                 ));
             }
 
@@ -922,6 +983,8 @@ impl Orchestrator {
             }
         };
         let synthesis_prompt = user_profile::personalize_prompt(&synthesis_prompt);
+        let synthesis_prompt =
+            response_style::apply_response_style(&synthesis_prompt, req.response_style.as_deref());
 
         // 3. Inference: Call the local LLM and stream tokens back to the client
         let final_answer = self

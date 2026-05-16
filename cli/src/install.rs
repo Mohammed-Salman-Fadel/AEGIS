@@ -5,12 +5,18 @@
 //! Does not own: actual package downloads, backend startup, or doctor validation logic.
 //! Next TODOs: map each step to real subprocess plans and persist install progress once the workflow is approved.
 
+use std::path::PathBuf;
+
 use crate::ui::Ui;
 use crate::workspace::Workspace;
 
 #[derive(Debug, Clone)]
 pub struct InstallPlan {
     pub summary: String,
+    pub workspace_root: PathBuf,
+    pub default_install_root: PathBuf,
+    pub install_root: PathBuf,
+    pub install_root_source: String,
     pub steps: Vec<InstallStep>,
 }
 
@@ -22,13 +28,21 @@ pub struct InstallStep {
     pub verification_hint: String,
 }
 
-pub fn build_install_plan(workspace: &Workspace) -> InstallPlan {
+pub fn build_install_plan(
+    workspace: &Workspace,
+    install_root: PathBuf,
+    install_root_source: impl Into<String>,
+) -> InstallPlan {
     let root = workspace.root.display().to_string();
 
     InstallPlan {
         summary: format!(
             "Scaffold-only install plan for {root}. Windows is the primary target for the first real implementation."
         ),
+        workspace_root: workspace.root.clone(),
+        default_install_root: workspace.default_install_root.clone(),
+        install_root,
+        install_root_source: install_root_source.into(),
         // The install plan is intentionally data-first so `commands.rs` can render it now and
         // `runner.rs` can execute the same stages later without duplicating the order.
         steps: vec![
@@ -100,6 +114,20 @@ pub fn build_install_plan(workspace: &Workspace) -> InstallPlan {
 pub fn print_install_plan(ui: &Ui, plan: &InstallPlan) {
     println!("{}", ui.header("Install Scaffold"));
     println!("{}", plan.summary);
+    println!();
+    println!(
+        "Workspace path            : {}",
+        plan.workspace_root.display()
+    );
+    println!(
+        "Default install path      : {}",
+        plan.default_install_root.display()
+    );
+    println!(
+        "Selected install path     : {}",
+        plan.install_root.display()
+    );
+    println!("Selected path source      : {}", plan.install_root_source);
     println!(
         "{}",
         ui.muted("This command intentionally documents the staged installer instead of performing the real setup today.")
@@ -111,4 +139,32 @@ pub fn print_install_plan(ui: &Ui, plan: &InstallPlan) {
         println!("   {}", step.description);
         println!("   Verify: {}", step.verification_hint);
     }
+}
+
+pub fn persist_install_root(ui: &Ui, install_root: &std::path::Path) -> Result<(), String> {
+    let preference_path =
+        Workspace::save_install_root_preference(install_root).map_err(|error| {
+            format!(
+                "Could not save install path preference `{}`: {error}",
+                install_root.display()
+            )
+        })?;
+
+    println!();
+    println!(
+        "{}",
+        ui.success(&format!(
+            "Installation path preference saved: {}",
+            install_root.display()
+        ))
+    );
+    println!(
+        "{}",
+        ui.muted(&format!(
+            "Future CLI runs will read this from `{}` unless AEGIS_INSTALL_ROOT is set.",
+            preference_path.display()
+        ))
+    );
+
+    Ok(())
 }

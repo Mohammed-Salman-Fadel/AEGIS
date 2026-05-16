@@ -710,6 +710,31 @@ impl EngineClient {
         Ok(response.model)
     }
 
+    pub fn current_model_quick(&self) -> AppResult<String> {
+        let request_path = format!("{}/models/current", self.base_url);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_millis(500))
+            .build()
+            .map_err(|error| format!("Could not create quick model probe client: {error}"))?;
+        let response = client
+            .get(&request_path)
+            .send()
+            .map_err(|error| format!("Could not fetch the active model from engine: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Engine current model request failed with HTTP {}.",
+                response.status()
+            ));
+        }
+
+        let response = response
+            .json::<CurrentModelResponse>()
+            .map_err(|error| format!("Could not parse current model response: {error}"))?;
+
+        Ok(response.model)
+    }
+
     pub fn select_model(&self, name: &str) -> AppResult<ActionStatus> {
         let request_path = format!("{}/models/select", self.base_url);
         let response = reqwest::blocking::Client::new()
@@ -723,6 +748,12 @@ impl EngineClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
+            if status == reqwest::StatusCode::BAD_GATEWAY {
+                return Err(format!(
+                    "The engine could not warm `{name}` on this device, so the active model was not changed. {}",
+                    body.trim()
+                ));
+            }
             return Err(format!(
                 "Engine model switch request failed with HTTP {}. {}",
                 status,

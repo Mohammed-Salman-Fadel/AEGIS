@@ -1,4 +1,10 @@
 @import "tailwindcss";
+@import url("https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400&display=swap");
+
+* {
+  font-family: "Roboto Slab", "Rockwell", Georgia, serif;
+  font-weight: 400;
+}
 
 @keyframes fadeInSession {
   from {
@@ -55,16 +61,10 @@
 }
 
 .aegis-wordmark {
-  font-family: "Google Sans", "Product Sans", "Segoe UI Variable Display", "Aptos Display", sans-serif;
   font-size: 1.28rem;
-  font-weight: 650;
   letter-spacing: 0.12em;
   line-height: 1;
   text-transform: uppercase;
-}
-
-.session-title-text {
-  font-family: "Google Sans", "Product Sans", "Segoe UI Variable Text", "Aptos", sans-serif;
 }
 
 .sessions-scroll {

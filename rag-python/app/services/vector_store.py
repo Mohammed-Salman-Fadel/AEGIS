@@ -169,6 +169,37 @@ class VectorStore:
             self._write_json_records(new_records)
             return deleted_count
 
+    def delete_document(self, session_id: str, source: str) -> int:
+        """
+        Delete all chunks for a single source document in a specific session.
+        """
+        session_id = session_id.strip()
+        source = str(pathlib.Path(source).resolve()) if source.strip() else ""
+        if not session_id or not source:
+            return 0
+
+        if self._use_chroma:
+            where = {"$and": [{"session_id": session_id}, {"source": source}]}
+            existing = self.collection.get(where=where)
+            ids = existing.get("ids", []) if existing else []
+            if ids:
+                self.collection.delete(ids=ids)
+            return len(ids)
+
+        with self._lock:
+            records = self._read_json_records()
+            new_records = [
+                record
+                for record in records
+                if not (
+                    record.get("metadata", {}).get("session_id") == session_id
+                    and record.get("metadata", {}).get("source") == source
+                )
+            ]
+            deleted_count = len(records) - len(new_records)
+            self._write_json_records(new_records)
+            return deleted_count
+
     def _json_upsert(
         self,
         documents: List[str],
