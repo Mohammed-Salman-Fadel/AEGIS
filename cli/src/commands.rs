@@ -130,13 +130,44 @@ fn handle_clear(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult<()> {
-    let plan = install::build_install_plan(&ctx.workspace);
+    let (install_root, install_root_source) = if let Some(path) = args.path.as_deref() {
+        (
+            crate::workspace::Workspace::normalize_install_root(path),
+            "--path".to_string(),
+        )
+    } else if std::env::var_os("AEGIS_INSTALL_ROOT").is_some() {
+        (
+            ctx.workspace.install_root.clone(),
+            "AEGIS_INSTALL_ROOT".to_string(),
+        )
+    } else if ctx.workspace.install_root != ctx.workspace.default_install_root {
+        (
+            ctx.workspace.install_root.clone(),
+            "saved preference".to_string(),
+        )
+    } else {
+        (ctx.workspace.install_root.clone(), "default".to_string())
+    };
+
+    let plan = install::build_install_plan(
+        &ctx.workspace,
+        install_root.clone(),
+        install_root_source.clone(),
+    );
     install::print_install_plan(&ctx.ui, &plan);
     println!();
 
     if args.yes && !args.plan_only {
+        if args.path.is_some() {
+            install::persist_install_root(&ctx.ui, &install_root)?;
+            println!();
+        }
         println!("{}", ctx.ui.warning("TODO: map each install step to runner.rs subprocess plans before `--yes` performs system changes."));
     } else {
+        if args.path.is_some() && !args.plan_only {
+            install::persist_install_root(&ctx.ui, &install_root)?;
+            println!();
+        }
         println!(
             "{}",
             ctx.ui

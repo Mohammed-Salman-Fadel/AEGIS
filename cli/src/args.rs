@@ -4,10 +4,21 @@
 //! Owns: positional arguments and reusable flag groups for scaffold commands.
 //! Does not own: top-level command routing, validation side effects, or backend calls.
 //! Next TODOs: add richer prompt/session flags once the engine contract and config format are finalized.
+use std::path::PathBuf;
+
 use clap::Args;
 
 #[derive(Debug, Clone, Args)]
 pub struct InstallArgs {
+    #[arg(
+        long,
+        alias = "install-root",
+        alias = "root",
+        value_name = "path",
+        help = "Install AEGIS into this directory instead of the shown default path"
+    )]
+    pub path: Option<PathBuf>,
+
     #[arg(
         long,
         help = "Show the staged installation plan without attempting any actions"

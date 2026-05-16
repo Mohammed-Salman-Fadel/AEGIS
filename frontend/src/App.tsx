@@ -19,7 +19,9 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Pause,
   Pin,
+  Play,
   Send,
   Settings,
   Sun,
@@ -32,7 +34,9 @@ import {
 
 type Role = 'user' | 'assistant';
 type ThemeMode = 'dark' | 'light';
+type MarkdownHeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 type MarkdownBlock =
+  | { type: 'heading'; level: MarkdownHeadingLevel; text: string }
   | { type: 'paragraph'; text: string }
   | { type: 'ordered'; items: string[] }
   | { type: 'unordered'; items: string[] }
@@ -41,6 +45,14 @@ type MarkdownBlock =
 type ChatMode = 'general' | 'coder' | 'academic';
 type SettingsTab = 'general' | 'inference' | 'models' | 'personal';
 type ResponseStyle = 'default' | 'friendly' | 'concise' | 'elaborate' | 'technical';
+type ModelDownloadState = 'idle' | 'downloading' | 'paused';
+
+interface CatalogModel {
+  name: string;
+  provider: string;
+  tags: string[];
+  description: string;
+}
 
 interface Message {
   role: Role;
@@ -307,6 +319,455 @@ const RESPONSE_STYLE_OPTIONS: Array<{ value: ResponseStyle; label: string; descr
     value: 'technical',
     label: 'Technical',
     description: 'Precise engineering-oriented responses with implementation detail.',
+  },
+];
+
+const MODEL_PROVIDER_TAGS = [
+  'All',
+  'Llama',
+  'Qwen',
+  'DeepSeek',
+  'Mistral',
+  'Gemma',
+  'Phi',
+  'Code',
+  'Reasoning',
+  'Vision',
+  'Embedding',
+];
+
+const OLLAMA_MODEL_CATALOG: CatalogModel[] = [
+  {
+    name: 'llama3.2:1b',
+    provider: 'Llama',
+    tags: ['General'],
+    description: 'Lightweight Llama 3.2 model for very fast local responses.',
+  },
+  {
+    name: 'llama3.2:3b',
+    provider: 'Llama',
+    tags: ['General'],
+    description: 'Fast general-purpose local model for everyday chat.',
+  },
+  {
+    name: 'llama3.1:8b',
+    provider: 'Llama',
+    tags: ['General'],
+    description: 'Balanced Llama 3.1 model for local chat and analysis.',
+  },
+  {
+    name: 'llama3.1:70b',
+    provider: 'Llama',
+    tags: ['General'],
+    description: 'Large Llama 3.1 model for stronger reasoning on high-memory hardware.',
+  },
+  {
+    name: 'llama3.1:405b',
+    provider: 'Llama',
+    tags: ['General'],
+    description: 'Frontier-scale Llama 3.1 model for very large local or hosted setups.',
+  },
+  {
+    name: 'llama3:8b',
+    provider: 'Llama',
+    tags: ['General'],
+    description: 'Llama 3 general model with broad local support.',
+  },
+  {
+    name: 'llama3:70b',
+    provider: 'Llama',
+    tags: ['General'],
+    description: 'Large Llama 3 model for stronger generation quality.',
+  },
+  {
+    name: 'codellama:7b',
+    provider: 'Llama',
+    tags: ['Code'],
+    description: 'Code-focused Llama model for lightweight programming assistance.',
+  },
+  {
+    name: 'codellama:13b',
+    provider: 'Llama',
+    tags: ['Code'],
+    description: 'Mid-size Code Llama model for code understanding and generation.',
+  },
+  {
+    name: 'codellama:34b',
+    provider: 'Llama',
+    tags: ['Code'],
+    description: 'Larger Code Llama model for deeper codebase work.',
+  },
+  {
+    name: 'codellama:70b',
+    provider: 'Llama',
+    tags: ['Code'],
+    description: 'Large Code Llama model for high-quality coding workflows.',
+  },
+  {
+    name: 'llava:7b',
+    provider: 'Llama',
+    tags: ['Vision'],
+    description: 'Vision-capable model for image-aware local workflows.',
+  },
+  {
+    name: 'llava:13b',
+    provider: 'Llama',
+    tags: ['Vision'],
+    description: 'Larger LLaVA model for image-aware local workflows.',
+  },
+  {
+    name: 'qwen3:0.6b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Very small Qwen 3 model for quick local responses.',
+  },
+  {
+    name: 'qwen3:1.7b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Compact Qwen 3 model for low-resource local use.',
+  },
+  {
+    name: 'qwen3:4b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Balanced compact Qwen 3 model.',
+  },
+  {
+    name: 'qwen3:8b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'General Qwen 3 model with stronger local reasoning.',
+  },
+  {
+    name: 'qwen3:14b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Mid-size Qwen 3 model for higher-quality responses.',
+  },
+  {
+    name: 'qwen3:30b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Large Qwen 3 model for capable local reasoning.',
+  },
+  {
+    name: 'qwen3:32b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Large Qwen 3 model for advanced local workloads.',
+  },
+  {
+    name: 'qwen3:235b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Very large Qwen 3 model for high-memory environments.',
+  },
+  {
+    name: 'qwen2.5:0.5b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Tiny Qwen 2.5 model for very low-resource devices.',
+  },
+  {
+    name: 'qwen2.5:1.5b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Small Qwen 2.5 model for fast local use.',
+  },
+  {
+    name: 'qwen2.5:3b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Compact multilingual reasoning model.',
+  },
+  {
+    name: 'qwen2.5:7b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Balanced reasoning and writing model.',
+  },
+  {
+    name: 'qwen2.5:14b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Mid-size Qwen 2.5 model for stronger multilingual reasoning.',
+  },
+  {
+    name: 'qwen2.5:32b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Large Qwen 2.5 model for advanced local workloads.',
+  },
+  {
+    name: 'qwen2.5:72b',
+    provider: 'Qwen',
+    tags: ['General'],
+    description: 'Large Qwen 2.5 model for high-memory machines.',
+  },
+  {
+    name: 'qwen2.5-coder:0.5b',
+    provider: 'Qwen',
+    tags: ['Code'],
+    description: 'Tiny Qwen coder model for lightweight coding assistance.',
+  },
+  {
+    name: 'qwen2.5-coder:1.5b',
+    provider: 'Qwen',
+    tags: ['Code'],
+    description: 'Small Qwen coder model for fast code tasks.',
+  },
+  {
+    name: 'qwen2.5-coder:3b',
+    provider: 'Qwen',
+    tags: ['Code'],
+    description: 'Compact coding model for local development workflows.',
+  },
+  {
+    name: 'qwen2.5-coder:7b',
+    provider: 'Qwen',
+    tags: ['Code'],
+    description: 'Coding-focused model for project and patch workflows.',
+  },
+  {
+    name: 'qwen2.5-coder:14b',
+    provider: 'Qwen',
+    tags: ['Code'],
+    description: 'Mid-size Qwen coder model for stronger code generation.',
+  },
+  {
+    name: 'qwen2.5-coder:32b',
+    provider: 'Qwen',
+    tags: ['Code'],
+    description: 'Large Qwen coder model for advanced coding tasks.',
+  },
+  {
+    name: 'qwen2.5vl:3b',
+    provider: 'Qwen',
+    tags: ['Vision'],
+    description: 'Compact Qwen vision-language model.',
+  },
+  {
+    name: 'qwen2.5vl:7b',
+    provider: 'Qwen',
+    tags: ['Vision'],
+    description: 'Balanced Qwen vision-language model.',
+  },
+  {
+    name: 'qwen2.5vl:32b',
+    provider: 'Qwen',
+    tags: ['Vision'],
+    description: 'Large Qwen vision-language model.',
+  },
+  {
+    name: 'qwen2.5vl:72b',
+    provider: 'Qwen',
+    tags: ['Vision'],
+    description: 'Very large Qwen vision-language model.',
+  },
+  {
+    name: 'deepseek-r1:1.5b',
+    provider: 'DeepSeek',
+    tags: ['Reasoning'],
+    description: 'Small DeepSeek R1 reasoning model.',
+  },
+  {
+    name: 'deepseek-r1:7b',
+    provider: 'DeepSeek',
+    tags: ['Reasoning'],
+    description: 'Reasoning-oriented model for harder analytical prompts.',
+  },
+  {
+    name: 'deepseek-r1:8b',
+    provider: 'DeepSeek',
+    tags: ['Reasoning'],
+    description: 'DeepSeek R1 distilled reasoning model.',
+  },
+  {
+    name: 'deepseek-r1:14b',
+    provider: 'DeepSeek',
+    tags: ['Reasoning'],
+    description: 'Mid-size DeepSeek R1 reasoning model.',
+  },
+  {
+    name: 'deepseek-r1:32b',
+    provider: 'DeepSeek',
+    tags: ['Reasoning'],
+    description: 'Large DeepSeek R1 reasoning model.',
+  },
+  {
+    name: 'deepseek-r1:70b',
+    provider: 'DeepSeek',
+    tags: ['Reasoning'],
+    description: 'Large DeepSeek R1 model for high-memory reasoning workloads.',
+  },
+  {
+    name: 'deepseek-r1:671b',
+    provider: 'DeepSeek',
+    tags: ['Reasoning'],
+    description: 'Very large DeepSeek R1 model for specialized high-memory setups.',
+  },
+  {
+    name: 'deepseek-coder:1.3b',
+    provider: 'DeepSeek',
+    tags: ['Code'],
+    description: 'Small DeepSeek coder model.',
+  },
+  {
+    name: 'deepseek-coder:6.7b',
+    provider: 'DeepSeek',
+    tags: ['Code'],
+    description: 'Balanced DeepSeek coder model.',
+  },
+  {
+    name: 'deepseek-coder:33b',
+    provider: 'DeepSeek',
+    tags: ['Code'],
+    description: 'Large DeepSeek coder model.',
+  },
+  {
+    name: 'deepseek-coder-v2:16b',
+    provider: 'DeepSeek',
+    tags: ['Code'],
+    description: 'Larger coding model for codebase questions.',
+  },
+  {
+    name: 'deepseek-coder-v2:236b',
+    provider: 'DeepSeek',
+    tags: ['Code'],
+    description: 'Very large DeepSeek coder model for high-memory setups.',
+  },
+  {
+    name: 'deepseek-v2:16b',
+    provider: 'DeepSeek',
+    tags: ['General'],
+    description: 'DeepSeek V2 general-purpose model.',
+  },
+  {
+    name: 'deepseek-v2:236b',
+    provider: 'DeepSeek',
+    tags: ['General'],
+    description: 'Very large DeepSeek V2 model.',
+  },
+  {
+    name: 'mistral:7b',
+    provider: 'Mistral',
+    tags: ['General'],
+    description: 'Efficient general-purpose model with concise outputs.',
+  },
+  {
+    name: 'mistral-nemo:12b',
+    provider: 'Mistral',
+    tags: ['General'],
+    description: 'Mistral Nemo model for multilingual local workloads.',
+  },
+  {
+    name: 'mixtral:8x7b',
+    provider: 'Mistral',
+    tags: ['General'],
+    description: 'Mixture-of-experts Mistral model for stronger generation.',
+  },
+  {
+    name: 'mixtral:8x22b',
+    provider: 'Mistral',
+    tags: ['General'],
+    description: 'Large Mixtral mixture-of-experts model.',
+  },
+  {
+    name: 'codestral:22b',
+    provider: 'Mistral',
+    tags: ['Code'],
+    description: 'Mistral coding model for software development tasks.',
+  },
+  {
+    name: 'gemma3:1b',
+    provider: 'Gemma',
+    tags: ['General'],
+    description: 'Very lightweight Gemma 3 model.',
+  },
+  {
+    name: 'gemma3:4b',
+    provider: 'Gemma',
+    tags: ['General'],
+    description: 'Compact Gemma 3 model.',
+  },
+  {
+    name: 'gemma3:12b',
+    provider: 'Gemma',
+    tags: ['General'],
+    description: 'Mid-size Gemma 3 model.',
+  },
+  {
+    name: 'gemma3:27b',
+    provider: 'Gemma',
+    tags: ['General'],
+    description: 'Large Gemma 3 model.',
+  },
+  {
+    name: 'gemma2:2b',
+    provider: 'Gemma',
+    tags: ['General'],
+    description: 'Very lightweight model for quick local responses.',
+  },
+  {
+    name: 'gemma2:9b',
+    provider: 'Gemma',
+    tags: ['General'],
+    description: 'Higher-quality Gemma model for writing and reasoning.',
+  },
+  {
+    name: 'gemma2:27b',
+    provider: 'Gemma',
+    tags: ['General'],
+    description: 'Large Gemma 2 model for higher-quality responses.',
+  },
+  {
+    name: 'codegemma:2b',
+    provider: 'Gemma',
+    tags: ['Code'],
+    description: 'Small Gemma coding model.',
+  },
+  {
+    name: 'codegemma:7b',
+    provider: 'Gemma',
+    tags: ['Code'],
+    description: 'Gemma coding model for local development tasks.',
+  },
+  {
+    name: 'phi3:mini',
+    provider: 'Phi',
+    tags: ['General'],
+    description: 'Small model for low-resource devices.',
+  },
+  {
+    name: 'phi3:medium',
+    provider: 'Phi',
+    tags: ['General'],
+    description: 'Mid-size Phi 3 model.',
+  },
+  {
+    name: 'phi4',
+    provider: 'Phi',
+    tags: ['General'],
+    description: 'Phi 4 model for capable local reasoning and writing.',
+  },
+  {
+    name: 'phi4-mini',
+    provider: 'Phi',
+    tags: ['General'],
+    description: 'Compact Phi 4 model for efficient local use.',
+  },
+  {
+    name: 'nomic-embed-text',
+    provider: 'Embedding',
+    tags: ['Embedding'],
+    description: 'Text embedding model for retrieval and semantic search workflows.',
+  },
+  {
+    name: 'mxbai-embed-large',
+    provider: 'Embedding',
+    tags: ['Embedding'],
+    description: 'Large embedding model for semantic retrieval.',
   },
 ];
 
@@ -755,15 +1216,27 @@ function mergeIndexedDocuments(
   return Array.from(merged.values());
 }
 
-function normalizeAssistantMarkdown(content: string) {
+function normalizeAssistantMarkdownProse(content: string) {
   return content
     .replace(/\r\n/g, '\n')
     .replace(/\(([^()\n]+?)\s+[-*+]\s+([^()\n]+?)\)/g, '($1 and $2)')
+    .replace(/(^|\n)\s{0,3}(#{1,6})([^\s#])/g, '$1$2 $3')
+    .replace(/([:.!?])\s*(#{1,6}\s+[A-Za-z0-9])/g, '$1\n$2')
     .replace(/([:.!?])\s*(\d+\.\s+)/g, '$1\n$2')
     .replace(/([:.!?])\s*([*+-]\s+)/g, '$1\n$2')
     .replace(/([A-Za-z0-9)])\s+(\d+\.\s+)/g, '$1\n$2')
     .replace(/([^\n])(\d+\.\s+\*\*)/g, '$1\n$2')
     .replace(/\n{3,}/g, '\n\n');
+}
+
+function normalizeAssistantMarkdown(content: string) {
+  return content
+    .replace(/\r\n/g, '\n')
+    .split(/(```[\s\S]*?```)/g)
+    .map((segment) =>
+      segment.startsWith('```') ? segment : normalizeAssistantMarkdownProse(segment),
+    )
+    .join('');
 }
 
 function extractSseEvents(buffer: string) {
@@ -860,6 +1333,17 @@ function parseMarkdownBlocks(content: string): MarkdownBlock[] {
 
     if (!line) {
       flushParagraph();
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      blocks.push({
+        type: 'heading',
+        level: headingMatch[1].length as MarkdownHeadingLevel,
+        text: headingMatch[2].trim(),
+      });
       continue;
     }
 
@@ -1151,12 +1635,41 @@ function CodeBlock({ language, text }: { language: string; text: string }) {
   );
 }
 
+function MarkdownHeading({ level, text }: { level: MarkdownHeadingLevel; text: string }) {
+  const className =
+    level === 1
+      ? 'mt-1 text-[1.08rem] font-normal leading-7 tracking-[-0.01em] first:mt-0'
+      : level === 2
+        ? 'mt-3 text-[1.02rem] font-normal leading-7 tracking-[-0.01em] first:mt-0'
+        : 'mt-3 text-[0.96rem] font-normal leading-6 tracking-[-0.005em] first:mt-0';
+
+  if (level === 1) {
+    return <h3 className={className}>{renderInlineMarkdown(text)}</h3>;
+  }
+
+  if (level === 2) {
+    return <h4 className={className}>{renderInlineMarkdown(text)}</h4>;
+  }
+
+  return <h5 className={className}>{renderInlineMarkdown(text)}</h5>;
+}
+
 function AssistantMarkdown({ content }: { content: string }) {
   const blocks = parseMarkdownBlocks(content || '...');
 
   return (
     <div className="space-y-3">
       {blocks.map((block, blockIndex) => {
+        if (block.type === 'heading') {
+          return (
+            <MarkdownHeading
+              key={`heading-${blockIndex}`}
+              level={block.level}
+              text={block.text}
+            />
+          );
+        }
+
         if (block.type === 'ordered') {
           return (
             <ol className="list-decimal space-y-1 pl-5" key={`ol-${blockIndex}`}>
@@ -1394,7 +1907,10 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState<ModelResponse[]>([]);
   const [availableProviders, setAvailableProviders] = useState<ProviderResponse[]>([]);
   const [modelSearch, setModelSearch] = useState('');
+  const [selectedModelProviderTag, setSelectedModelProviderTag] = useState('All');
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [pausedModelDownload, setPausedModelDownload] = useState<string | null>(null);
+  const [modelDownloadState, setModelDownloadState] = useState<ModelDownloadState>('idle');
   const [modelDownloadProgress, setModelDownloadProgress] = useState(0);
   const [modelDownloadStatus, setModelDownloadStatus] = useState('');
   const [responseStyle, setResponseStyle] = useState<ResponseStyle>(loadStoredResponseStyle);
@@ -1445,6 +1961,8 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const profileImportInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const modelDownloadAbortRef = useRef<AbortController | null>(null);
+  const modelDownloadAbortReasonRef = useRef<'pause' | 'cancel' | null>(null);
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   const streamingMessagesBySessionRef = useRef<Record<string, Message[]>>({});
   const isDark = theme === 'dark';
@@ -1462,9 +1980,20 @@ export default function App() {
   const errorDismissible = error ? !isFatalUiError(error) : false;
   const tokenMeterLabel = formatTokenMeter(contextUsage);
   const showCenteredComposer = !activeSessionId && messages.length === 0;
-  const filteredModels = availableModels.filter((model) =>
-    model.name.toLowerCase().includes(modelSearch.trim().toLowerCase()),
-  );
+  const filteredCatalogModels = OLLAMA_MODEL_CATALOG.filter((model) => {
+    const search = modelSearch.trim().toLowerCase();
+    const matchesSearch =
+      !search ||
+      model.name.toLowerCase().includes(search) ||
+      model.provider.toLowerCase().includes(search) ||
+      model.tags.some((tag) => tag.toLowerCase().includes(search));
+    const matchesProvider =
+      selectedModelProviderTag === 'All' ||
+      model.provider === selectedModelProviderTag ||
+      model.tags.includes(selectedModelProviderTag);
+
+    return matchesSearch && matchesProvider;
+  });
   const activeProvider = availableProviders.find((provider) => provider.active);
 
   const activeSession = useMemo(
@@ -2476,13 +3005,19 @@ export default function App() {
     }
   }
 
-  async function downloadOllamaModel() {
-    const modelName = modelSearch.trim();
-    if (!modelName || downloadingModel) {
+  async function downloadOllamaModel(modelNameOverride?: string) {
+    const modelName = (modelNameOverride ?? modelSearch).trim();
+    if (!modelName || modelDownloadState === 'downloading') {
       return;
     }
 
+    const controller = new AbortController();
+    modelDownloadAbortRef.current = controller;
+    modelDownloadAbortReasonRef.current = null;
+    setModelSearch(modelName);
     setDownloadingModel(modelName);
+    setPausedModelDownload(null);
+    setModelDownloadState('downloading');
     setModelDownloadProgress(0);
     setModelDownloadStatus('Starting download');
     setSettingsMessage(null);
@@ -2492,6 +3027,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: modelName }),
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -2537,13 +3073,69 @@ export default function App() {
       await loadSettingsData();
       setSettingsMessage(`${modelName} is ready in Ollama.`);
     } catch (downloadError) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
       setModelDownloadStatus('Download failed');
       setSettingsMessage(
         downloadError instanceof Error ? downloadError.message : 'Could not download model.',
       );
     } finally {
-      setDownloadingModel(null);
+      const abortReason = modelDownloadAbortReasonRef.current;
+      modelDownloadAbortRef.current = null;
+      modelDownloadAbortReasonRef.current = null;
+
+      if (abortReason === 'pause') {
+        setPausedModelDownload(modelName);
+        setDownloadingModel(null);
+        setModelDownloadState('paused');
+        setModelDownloadStatus('Paused');
+      } else if (abortReason === 'cancel') {
+        setPausedModelDownload(null);
+        setDownloadingModel(null);
+        setModelDownloadState('idle');
+        setModelDownloadProgress(0);
+        setModelDownloadStatus('');
+      } else {
+        setPausedModelDownload(null);
+        setDownloadingModel(null);
+        setModelDownloadState('idle');
+      }
     }
+  }
+
+  function pauseModelDownload() {
+    if (!downloadingModel || modelDownloadState !== 'downloading') {
+      return;
+    }
+
+    modelDownloadAbortReasonRef.current = 'pause';
+    setModelDownloadStatus('Pausing');
+    modelDownloadAbortRef.current?.abort();
+  }
+
+  function cancelModelDownload() {
+    if (!downloadingModel && !pausedModelDownload) {
+      return;
+    }
+
+    modelDownloadAbortReasonRef.current = 'cancel';
+    modelDownloadAbortRef.current?.abort();
+    setPausedModelDownload(null);
+    setDownloadingModel(null);
+    setModelDownloadState('idle');
+    setModelDownloadProgress(0);
+    setModelDownloadStatus('');
+    setSettingsMessage('Model download cancelled.');
+  }
+
+  function resumeModelDownload() {
+    if (!pausedModelDownload) {
+      return;
+    }
+
+    void downloadOllamaModel(pausedModelDownload);
   }
 
   async function saveProfileSettings() {
@@ -4156,12 +4748,12 @@ export default function App() {
                           }`}
                           id="model-search"
                           onChange={(event) => setModelSearch(event.target.value)}
-                          placeholder="llama3.2:3b"
+                          placeholder="Search catalog or enter an exact model tag"
                           value={modelSearch}
                         />
                         <button
                           className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:opacity-60"
-                          disabled={!modelSearch.trim() || Boolean(downloadingModel)}
+                          disabled={!modelSearch.trim() || modelDownloadState === 'downloading'}
                           onClick={() => void downloadOllamaModel()}
                           type="button"
                         >
@@ -4170,7 +4762,81 @@ export default function App() {
                       </div>
                     </div>
 
-                    {downloadingModel && (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {MODEL_PROVIDER_TAGS.map((tag) => (
+                          <button
+                            className={`rounded-full border px-3 py-1.5 text-xs transition ${
+                              selectedModelProviderTag === tag
+                                ? 'border-emerald-500 bg-emerald-600 text-white'
+                                : isDark
+                                  ? 'border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+                                  : 'border-stone-300 text-slate-600 hover:bg-stone-100 hover:text-slate-950'
+                            }`}
+                            key={tag}
+                            onClick={() => setSelectedModelProviderTag(tag)}
+                            type="button"
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div
+                        className={`max-h-56 space-y-2 overflow-y-auto rounded-xl border p-2 ${
+                          isDark
+                            ? 'border-zinc-800 bg-zinc-950/40'
+                            : 'border-stone-300 bg-stone-50'
+                        }`}
+                      >
+                        {filteredCatalogModels.length === 0 ? (
+                          <div className={`p-3 text-sm ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                            No catalog models match this filter.
+                          </div>
+                        ) : (
+                          filteredCatalogModels.map((model) => (
+                            <button
+                              className={`flex w-full items-start justify-between gap-3 rounded-lg p-3 text-left transition ${
+                                modelSearch.trim() === model.name
+                                  ? isDark
+                                    ? 'bg-emerald-950/30 text-emerald-100'
+                                    : 'bg-emerald-50 text-emerald-900'
+                                  : isDark
+                                    ? 'hover:bg-zinc-900'
+                                    : 'hover:bg-white'
+                              }`}
+                              key={model.name}
+                              onClick={() => setModelSearch(model.name)}
+                              type="button"
+                            >
+                              <span className="min-w-0">
+                                <span className="block truncate font-mono text-sm">{model.name}</span>
+                                <span className={`mt-1 block text-xs leading-5 ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                                  {model.description}
+                                </span>
+                                <span className="mt-2 flex flex-wrap gap-1.5">
+                                  {[model.provider, ...model.tags].map((tag) => (
+                                    <span
+                                      className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                        isDark
+                                          ? 'bg-zinc-800 text-zinc-400'
+                                          : 'bg-stone-200 text-slate-600'
+                                      }`}
+                                      key={`${model.name}-${tag}`}
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </span>
+                              </span>
+                              <Download className="mt-0.5 shrink-0 opacity-60" size={15} />
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {(downloadingModel || pausedModelDownload) && (
                       <div
                         className={`rounded-xl border p-3 ${
                           isDark
@@ -4179,7 +4845,9 @@ export default function App() {
                         }`}
                       >
                         <div className="mb-2 flex items-center justify-between text-xs">
-                          <span className="truncate">{downloadingModel}: {modelDownloadStatus}</span>
+                          <span className="truncate">
+                            {downloadingModel ?? pausedModelDownload}: {modelDownloadStatus}
+                          </span>
                           <span className="font-mono">{modelDownloadProgress}%</span>
                         </div>
                         <div className={`h-1.5 rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}>
@@ -4188,43 +4856,75 @@ export default function App() {
                             style={{ width: `${modelDownloadProgress}%` }}
                           />
                         </div>
+                        <div className="mt-3 flex justify-end gap-2">
+                          {modelDownloadState === 'downloading' ? (
+                            <button
+                              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition ${
+                                isDark
+                                  ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                                  : 'border-stone-300 text-slate-700 hover:bg-stone-100'
+                              }`}
+                              onClick={pauseModelDownload}
+                              type="button"
+                            >
+                              <Pause size={13} />
+                              Pause
+                            </button>
+                          ) : (
+                            <button
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white transition hover:bg-emerald-500"
+                              onClick={resumeModelDownload}
+                              type="button"
+                            >
+                              <Play size={13} />
+                              Resume
+                            </button>
+                          )}
+                          <button
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition ${
+                              isDark
+                                ? 'border-red-900/70 text-red-300 hover:bg-red-950/30'
+                                : 'border-red-200 text-red-700 hover:bg-red-50'
+                            }`}
+                            onClick={cancelModelDownload}
+                            type="button"
+                          >
+                            <X size={13} />
+                            Cancel
+                          </button>
+                        </div>
                       </div>
                     )}
 
-                    <div className="space-y-2">
-                      <div className="text-sm font-semibold">Installed Ollama Models</div>
-                      {filteredModels.length === 0 ? (
-                        <div className={`text-sm ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-                          No installed models match this search.
-                        </div>
-                      ) : (
-                        filteredModels.map((model) => (
-                          <button
-                            className={`flex w-full items-center justify-between rounded-xl border p-3 text-left transition ${
-                              model.active
-                                ? isDark
-                                  ? 'border-emerald-500 bg-emerald-950/25'
-                                  : 'border-emerald-500 bg-emerald-50'
-                                : isDark
-                                  ? 'border-zinc-800 hover:bg-zinc-900'
-                                  : 'border-stone-300 hover:bg-stone-50'
-                            }`}
-                            key={model.name}
-                            onClick={() => void selectModel(model.name)}
-                            type="button"
-                          >
-                            <span>
-                              <span className="block font-mono text-sm">{model.name}</span>
-                              {model.description && (
-                                <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-                                  {model.description}
-                                </span>
-                              )}
-                            </span>
-                            {model.active && <Check size={16} />}
-                          </button>
-                        ))
-                      )}
+                    <div>
+                      <label className="mb-2 block text-sm font-semibold" htmlFor="installed-model-select">
+                        Installed Ollama Models
+                      </label>
+                      <select
+                        className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${
+                          isDark
+                            ? 'border-zinc-800 bg-zinc-900 text-zinc-100'
+                            : 'border-stone-300 bg-white text-slate-900'
+                        }`}
+                        disabled={availableModels.length === 0 || modelDownloadState === 'downloading'}
+                        id="installed-model-select"
+                        onChange={(event) => void selectModel(event.target.value)}
+                        value={availableModels.find((model) => model.active)?.name ?? ''}
+                      >
+                        <option value="" disabled>
+                          {availableModels.length === 0
+                            ? 'No installed models found'
+                            : 'Choose installed model'}
+                        </option>
+                        {availableModels.map((model) => (
+                          <option key={model.name} value={model.name}>
+                            {model.active ? `${model.name} (active)` : model.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                        Selecting an installed model warms it before making it active.
+                      </div>
                     </div>
                   </div>
                 )}

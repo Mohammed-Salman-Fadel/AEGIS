@@ -27,6 +27,8 @@ pub struct ChatRequest {
     #[serde(default)]
     pub code_project_name: Option<String>,
     #[serde(default)]
+    pub code_project_path: Option<String>,
+    #[serde(default)]
     pub code_project_context: Option<String>,
 }
 

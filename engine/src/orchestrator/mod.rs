@@ -838,7 +838,7 @@ impl Orchestrator {
             ctx.trace_summary("code_search", "invoking Semble");
             match self
                 .tool_registry
-                .execute("code_search", &req.message)
+                .execute_code_search(&req.message, req.code_project_path.as_deref())
                 .await
             {
                 Ok(context) => {

@@ -76,6 +76,7 @@ async fn handle_chat_ws(
                 mode,
                 response_style: None,
                 code_project_name: None,
+                code_project_path: None,
                 code_project_context: None,
             };
 
