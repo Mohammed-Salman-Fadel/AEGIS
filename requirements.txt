@@ -11,3 +11,10 @@ sentence-transformers==5.4.1
 # Agentic MCP Tools
 semble[mcp]
 zotero-mcp-server
+
+# Voice Support
+faster-whisper==1.0.3
+kokoro-onnx==0.1.7
+onnxruntime==1.20.1
+soundfile==0.13.0
+python-multipart==0.0.9

@@ -305,6 +305,63 @@ fn is_supported_ingest_file(file_name: &str) -> bool {
     lower.ends_with(".pdf") || lower.ends_with(".txt")
 }
 
+async fn handle_voice_transcribe(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut audio_data = None;
+
+    while let Some(field) = multipart.next_field().await.map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Could not read multipart voice data: {error}"),
+        )
+    })? {
+        if field.name() == Some("file") {
+            audio_data = Some(field.bytes().await.map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Could not read audio bytes: {error}"),
+                )
+            })?);
+            break;
+        }
+    }
+
+    let audio_data = audio_data.ok_or_else(|| (StatusCode::BAD_REQUEST, "No audio file provided.".to_string()))?;
+
+    let text = state
+        .orchestrator
+        .rag_client
+        .transcribe(audio_data.to_vec())
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+
+    Ok(Json(json!({ "text": text })))
+}
+
+async fn handle_voice_synthesize(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<impl axum::response::IntoResponse, (StatusCode, String)> {
+    let text = params.get("text").cloned().unwrap_or_default();
+    if text.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "No text provided".to_string()));
+    }
+
+    let audio_bytes = state
+        .orchestrator
+        .rag_client
+        .synthesize(text)
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "audio/wav")],
+        audio_bytes,
+    ))
+}
+
 pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
@@ -347,6 +404,8 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/index/progress", get(handle_progress_ws))
         .route("/chat/stream", get(handle_chat_ws))
+        .route("/voice/transcribe", post(handle_voice_transcribe))
+        .route("/voice/synthesize", get(handle_voice_synthesize))
         .route(
             "/sessions",
             get(handlers::sessions::list_sessions).post(handlers::sessions::create_session),

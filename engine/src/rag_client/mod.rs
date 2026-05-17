@@ -1,6 +1,7 @@
 use reqwest::Client;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub struct RagClient {
     client: Client,
@@ -165,5 +166,40 @@ impl RagClient {
         }
 
         Ok(())
+    }
+
+    pub async fn transcribe(&self, audio_bytes: Vec<u8>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let form = reqwest::multipart::Form::new()
+            .part("file", reqwest::multipart::Part::bytes(audio_bytes).file_name("voice.wav"));
+
+        let response = self.client
+            .post(format!("{}/transcribe", self.base_url))
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let err = response.text().await?;
+            return Err(format!("RAG transcription failed: {}", err).into());
+        }
+
+        let data: Value = response.json().await?;
+        Ok(data["text"].as_str().unwrap_or("").to_string())
+    }
+
+    pub async fn synthesize(&self, text: String) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let response = self.client
+            .get(format!("{}/synthesize", self.base_url))
+            .query(&[("text", &text)])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let err = response.text().await?;
+            return Err(format!("RAG synthesis failed: {}", err).into());
+        }
+
+        let bytes = response.bytes().await?;
+        Ok(bytes.to_vec())
     }
 }

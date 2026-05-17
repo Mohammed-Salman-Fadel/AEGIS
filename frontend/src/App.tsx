@@ -13,6 +13,7 @@ import {
   GraduationCap,
   HardDrive,
   MessageSquare,
+  Mic,
   MoreHorizontal,
   Moon,
   PanelLeftClose,
@@ -23,9 +24,13 @@ import {
   Trash2,
   Upload,
   User,
+  Volume2,
+  VolumeX,
   Wrench,
   X,
 } from 'lucide-react';
+import { VoiceOrb } from './components/VoiceOrb';
+import { useAudioRecorder } from './hooks/useAudioRecorder';
 
 type Role = 'user' | 'assistant';
 type ThemeMode = 'dark' | 'light';
@@ -201,9 +206,8 @@ function formatTokenMeter(usage: ContextUsage) {
 function ThinkingIndicator({ isDark }: { isDark: boolean }) {
   return (
     <div
-      className={`flex items-center gap-2 text-xs font-medium ${
-        isDark ? 'text-zinc-400' : 'text-slate-500'
-      }`}
+      className={`flex items-center gap-2 text-xs font-medium ${isDark ? 'text-zinc-400' : 'text-slate-500'
+        }`}
     >
       <span>Thinking</span>
       <span className="flex items-center gap-1" aria-hidden="true">
@@ -708,6 +712,22 @@ function renderHighlightedCodeLine(line: string, lineIndex: number) {
   return parts.length > 0 ? parts : '\u00A0';
 }
 
+function sanitizeTextForTts(rawText: string): string {
+  // 1. Remove code blocks entirely (```...```)
+  let cleanText = rawText.replace(/```[\s\S]*?```/g, '');
+  
+  // 2. Remove inline code (`code`)
+  cleanText = cleanText.replace(/`([^`]+)`/g, '$1');
+  
+  // 3. Remove other markdown structures (bold, italic, headers, bullet symbols)
+  cleanText = cleanText.replace(/[*#_~>+\-]/g, '');
+  
+  // 4. Remove excessive spacing or newlines
+  cleanText = cleanText.replace(/\s+/g, ' ').trim();
+  
+  return cleanText;
+}
+
 async function copyTextToClipboard(text: string) {
   try {
     await navigator.clipboard.writeText(text);
@@ -998,6 +1018,15 @@ export default function App() {
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(
     loadStoredPinnedSessionIds,
   );
+
+  // VOICE STATE
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isTtsEnabled, setIsTtsEnabled] = useState(true);
+  const [speakingMessageIndex, setSpeakingMessageIndex] = useState<number | null>(null);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const { isRecording, analyser, startRecording, stopRecording } = useAudioRecorder();
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState<string | null>(null);
   const [dismissedResourceWarning, setDismissedResourceWarning] = useState<string | null>(null);
@@ -1065,6 +1094,92 @@ export default function App() {
     () => new Set(pinnedSessionIds),
     [pinnedSessionIds],
   );
+  const speakAssistantResponse = useCallback(async (text: string, force = false, messageIndex?: number) => {
+    if (!isTtsEnabled && !force) return;
+    
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current = null;
+      setIsSpeaking(false);
+      setSpeakingMessageIndex(null);
+    }
+
+    if (messageIndex !== undefined && speakingMessageIndex === messageIndex) {
+      return;
+    }
+    
+    const cleanText = sanitizeTextForTts(text);
+    if (!cleanText) return;
+
+    try {
+      if (messageIndex !== undefined) {
+        setSpeakingMessageIndex(messageIndex);
+      }
+      setIsSpeaking(true);
+      
+      const response = await fetch(`${API_BASE}/voice/synthesize?text=${encodeURIComponent(cleanText)}`);
+      if (!response.ok) throw new Error('Synthesis failed');
+      
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      activeAudioRef.current = audio;
+      
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setSpeakingMessageIndex(null);
+        URL.revokeObjectURL(audioUrl);
+        activeAudioRef.current = null;
+      };
+      
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        setSpeakingMessageIndex(null);
+        URL.revokeObjectURL(audioUrl);
+        activeAudioRef.current = null;
+      };
+      
+      audio.play();
+    } catch (err) {
+      console.error('TTS error:', err);
+      setIsSpeaking(false);
+      setSpeakingMessageIndex(null);
+    }
+  }, [isTtsEnabled, speakingMessageIndex]);
+
+  const handleStopDictation = async () => {
+    setIsTranscribing(true);
+    try {
+      const audioBlob = await stopRecording();
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'voice.wav');
+
+      const response = await fetch(`${API_BASE}/voice/transcribe`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error('Transcription failed');
+      const data = await response.json();
+
+      if (data.text && data.text.trim()) {
+        const prompt = data.text.trim();
+        setInput('');
+        const submittedAt = new Date().toISOString();
+        await streamPrompt(prompt, [
+          ...messages,
+          { role: 'user', content: prompt, timestamp: submittedAt },
+          { role: 'assistant', content: '' },
+        ]);
+      }
+    } catch (err) {
+      console.error('Dictation error:', err);
+      setError('Could not transcribe audio. Is the RAG service running?');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
   const sortedSessions = useMemo(() => {
     const originalOrder = new Map(
       sessions.map((session, index) => [session.session_id, index]),
@@ -1968,6 +2083,11 @@ export default function App() {
 
       setStatus('Complete');
       await loadSessions();
+
+      // VOICE MODE: Read aloud
+      if (isTtsEnabled && accumulatedResponse) {
+        speakAssistantResponse(accumulatedResponse, false, messages.length - 1);
+      }
       try {
         setContextUsage(await fetchContextUsage(sessionId));
       } catch {
@@ -2070,8 +2190,8 @@ export default function App() {
           aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
           aria-pressed={sidebarOpen}
           className={`mt-4 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark
-              ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
-              : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
+            ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+            : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
             }`}
           onClick={(event) => {
             event.stopPropagation();
@@ -2085,8 +2205,8 @@ export default function App() {
         <button
           aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
           className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark
-              ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
-              : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
+            ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+            : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
             }`}
           onClick={(event) => {
             event.stopPropagation();
@@ -2192,8 +2312,8 @@ export default function App() {
                         <input
                           autoFocus
                           className={`session-title-text min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-[13px] outline-none ${isDark
-                              ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
-                              : 'border-emerald-500 bg-white text-slate-900'
+                            ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
+                            : 'border-emerald-500 bg-white text-slate-900'
                             }`}
                           onBlur={() => {
                             void submitRenamingSession(session);
@@ -2231,9 +2351,8 @@ export default function App() {
                               {session.title}
                             </span>
                             <span
-                              className={`truncate text-[11px] leading-4 ${
-                                isDark ? 'text-zinc-500' : 'text-slate-500'
-                              }`}
+                              className={`truncate text-[11px] leading-4 ${isDark ? 'text-zinc-500' : 'text-slate-500'
+                                }`}
                             >
                               {lastAccessedLabel}
                             </span>
@@ -2255,8 +2374,8 @@ export default function App() {
                         aria-expanded={sessionMenuOpenId === session.session_id}
                         aria-label={`Open actions for ${session.title}`}
                         className={`rounded-lg p-1.5 transition disabled:opacity-50 ${isDark
-                            ? 'text-zinc-400 hover:bg-zinc-700/80 hover:text-zinc-100'
-                            : 'text-slate-500 hover:bg-stone-100 hover:text-slate-900'
+                          ? 'text-zinc-400 hover:bg-zinc-700/80 hover:text-zinc-100'
+                          : 'text-slate-500 hover:bg-stone-100 hover:text-slate-900'
                           }`}
                         disabled={isStreaming || isDeleting}
                         onClick={(event) => {
@@ -2347,8 +2466,8 @@ export default function App() {
           <div className="flex items-center gap-1 rounded-xl border border-zinc-800/50 bg-zinc-900/30 p-1 shadow-inner backdrop-blur-sm">
             <button
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'general'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
-                  : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                 }`}
               onClick={() => setChatMode('general')}
               type="button"
@@ -2358,8 +2477,8 @@ export default function App() {
             </button>
             <button
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'coder'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
-                  : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                 }`}
               onClick={() => setChatMode('coder')}
               type="button"
@@ -2368,11 +2487,10 @@ export default function App() {
               Coder
             </button>
             <button
-              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                chatMode === 'academic'
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'academic'
                   ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
                   : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
-              }`}
+                }`}
               onClick={() => setChatMode('academic')}
               type="button"
             >
@@ -2384,10 +2502,10 @@ export default function App() {
           <div className="flex items-center gap-3">
             <button
               className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${isMetricsOpen
-                  ? 'border-emerald-600 bg-emerald-950/30 text-emerald-400'
-                  : isDark
-                    ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
-                    : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
+                ? 'border-emerald-600 bg-emerald-950/30 text-emerald-400'
+                : isDark
+                  ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                  : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
                 }`}
               onClick={() => setIsMetricsOpen((current) => !current)}
               type="button"
@@ -2397,8 +2515,8 @@ export default function App() {
             </button>
             <div
               className={`rounded-lg border px-3 py-1 text-xs ${isDark
-                  ? 'border-zinc-800 text-zinc-400'
-                  : 'border-stone-300 bg-white text-slate-500'
+                ? 'border-zinc-800 text-zinc-400'
+                : 'border-stone-300 bg-white text-slate-500'
                 }`}
             >
               {status}
@@ -2409,16 +2527,16 @@ export default function App() {
         {visibleResourceWarning && (
           <div
             className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm font-medium ${isDark
-                ? 'border-amber-900/60 bg-amber-950/30 text-amber-200'
-                : 'border-amber-200 bg-amber-50 text-amber-800'
+              ? 'border-amber-900/60 bg-amber-950/30 text-amber-200'
+              : 'border-amber-200 bg-amber-50 text-amber-800'
               }`}
           >
             <span className="min-w-0 flex-1">Warning: {visibleResourceWarning}</span>
             <button
               aria-label="Dismiss resource warning"
               className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark
-                  ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100'
-                  : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'
+                ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100'
+                : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'
                 }`}
               onClick={() => setDismissedResourceWarning(visibleResourceWarning)}
               title="Dismiss warning"
@@ -2432,8 +2550,8 @@ export default function App() {
         {error && (
           <div
             className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm ${isDark
-                ? 'border-red-900/60 bg-red-950/30 text-red-200'
-                : 'border-red-200 bg-red-50 text-red-700'
+              ? 'border-red-900/60 bg-red-950/30 text-red-200'
+              : 'border-red-200 bg-red-50 text-red-700'
               }`}
             role="alert"
           >
@@ -2442,8 +2560,8 @@ export default function App() {
               <button
                 aria-label="Dismiss error"
                 className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark
-                    ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100'
-                    : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'
+                  ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100'
+                  : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'
                   }`}
                 onClick={() => setError(null)}
                 title="Dismiss error"
@@ -2458,8 +2576,8 @@ export default function App() {
         <div
           ref={scrollRef}
           className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 ${isDark
-              ? 'bg-zinc-950'
-              : 'bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.75),_rgba(245,245,244,0)_42%)]'
+            ? 'bg-zinc-950'
+            : 'bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.75),_rgba(245,245,244,0)_42%)]'
             }`}
         >
           <div className="mx-auto flex max-w-4xl flex-col gap-4">
@@ -2472,8 +2590,8 @@ export default function App() {
                   {message.role === 'assistant' && (
                     <div
                       className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isDark
-                          ? 'bg-zinc-800 text-zinc-200 shadow-sm shadow-white/5'
-                          : 'bg-white text-slate-700 shadow-sm shadow-stone-300/70 ring-1 ring-stone-200'
+                        ? 'bg-zinc-800 text-zinc-200 shadow-sm shadow-white/5'
+                        : 'bg-white text-slate-700 shadow-sm shadow-stone-300/70 ring-1 ring-stone-200'
                         }`}
                     >
                       <Bot size={16} />
@@ -2486,15 +2604,15 @@ export default function App() {
                     {editingMessageIndex === index && message.role === 'user' ? (
                       <div
                         className={`w-[min(32rem,78vw)] rounded-lg border p-2.5 shadow-sm ${isDark
-                            ? 'border-emerald-700 bg-zinc-900'
-                            : 'border-emerald-500 bg-white'
+                          ? 'border-emerald-700 bg-zinc-900'
+                          : 'border-emerald-500 bg-white'
                           }`}
                       >
                         <textarea
                           autoFocus
                           className={`mb-2 max-h-56 min-h-11 w-full resize-none overflow-hidden rounded-md border px-3 py-2.5 text-sm leading-5 outline-none focus:border-emerald-600 ${isDark
-                              ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
-                              : 'border-stone-300 bg-white text-slate-900'
+                            ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                            : 'border-stone-300 bg-white text-slate-900'
                             }`}
                           onChange={(event) => {
                             setEditingMessageText(event.target.value);
@@ -2511,8 +2629,8 @@ export default function App() {
                         <div className="flex justify-end gap-2">
                           <button
                             className={`rounded-md border px-3 py-1.5 text-xs ${isDark
-                                ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-800'
-                                : 'border-stone-300 text-slate-700 hover:bg-stone-100'
+                              ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+                              : 'border-stone-300 text-slate-700 hover:bg-stone-100'
                               }`}
                             onClick={cancelEditingMessage}
                             type="button"
@@ -2532,12 +2650,12 @@ export default function App() {
                     ) : (
                       <div
                         className={`rounded-lg px-4 py-3 text-sm leading-6 shadow-sm ${message.role === 'user'
-                            ? isDark
-                              ? 'bg-emerald-600 text-white shadow-[0_8px_22px_rgba(255,255,255,0.07)]'
-                              : 'bg-emerald-600 text-white shadow-[0_10px_24px_rgba(16,185,129,0.24)]'
-                            : isDark
-                              ? 'border border-zinc-800 bg-zinc-900 text-zinc-200 shadow-[0_8px_22px_rgba(255,255,255,0.065)]'
-                              : 'border border-stone-200 bg-white/95 text-slate-800 shadow-[0_10px_26px_rgba(120,113,108,0.20)]'
+                          ? isDark
+                            ? 'bg-emerald-600 text-white shadow-[0_8px_22px_rgba(255,255,255,0.07)]'
+                            : 'bg-emerald-600 text-white shadow-[0_10px_24px_rgba(16,185,129,0.24)]'
+                          : isDark
+                            ? 'border border-zinc-800 bg-zinc-900 text-zinc-200 shadow-[0_8px_22px_rgba(255,255,255,0.065)]'
+                            : 'border border-stone-200 bg-white/95 text-slate-800 shadow-[0_10px_26px_rgba(120,113,108,0.20)]'
                           }`}
                       >
                         {message.role === 'assistant' ? (
@@ -2551,13 +2669,57 @@ export default function App() {
                         )}
                       </div>
                     )}
+                    {message.role === 'assistant' && message.content && (
+                      <div className="mt-1 flex items-center gap-1 opacity-60 hover:opacity-100 focus-within:opacity-100 transition-all duration-150">
+                        <button
+                          aria-label={speakingMessageIndex === index ? 'Stop reading' : 'Read aloud'}
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
+                            ? speakingMessageIndex === index
+                              ? 'text-emerald-400 bg-zinc-900'
+                              : 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                            : speakingMessageIndex === index
+                              ? 'text-emerald-600 bg-stone-200'
+                              : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            }`}
+                          onClick={() => {
+                            void speakAssistantResponse(message.content, true, index);
+                          }}
+                          title={speakingMessageIndex === index ? 'Stop reading' : 'Read aloud'}
+                          type="button"
+                        >
+                          {speakingMessageIndex === index ? (
+                            <VolumeX size={13} className="animate-pulse" />
+                          ) : (
+                            <Volume2 size={13} />
+                          )}
+                        </button>
+                        <button
+                          aria-label="Copy response"
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
+                            ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                            : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            }`}
+                          onClick={() => {
+                            void copyTextToClipboard(message.content);
+                            setCopiedMessageIndex(index);
+                            window.setTimeout(() => {
+                              setCopiedMessageIndex((current) => (current === index ? null : current));
+                            }, 1400);
+                          }}
+                          title={copiedMessageIndex === index ? 'Copied' : 'Copy response'}
+                          type="button"
+                        >
+                          {copiedMessageIndex === index ? <Check size={13} /> : <Copy size={13} />}
+                        </button>
+                      </div>
+                    )}
                     {message.role === 'user' && editingMessageIndex !== index && (
-                      <div className="mt-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                      <div className="mt-1 flex items-center gap-1 opacity-60 hover:opacity-100 focus-within:opacity-100 transition-all duration-150">
                         <button
                           aria-label="Edit message"
                           className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
-                              ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
-                              : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                            : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
                             }`}
                           disabled={isStreaming}
                           onClick={() => beginEditingMessage(index, message.content)}
@@ -2569,8 +2731,8 @@ export default function App() {
                         <button
                           aria-label="Copy message"
                           className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
-                              ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
-                              : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                            : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
                             }`}
                           onClick={() => {
                             void copyUserMessage(index, message.content);
@@ -2586,8 +2748,8 @@ export default function App() {
                   {message.role === 'user' && (
                     <div
                       className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${isDark
-                          ? 'bg-emerald-700 text-white shadow-white/5'
-                          : 'bg-emerald-50 text-emerald-700 shadow-emerald-100 ring-1 ring-emerald-200'
+                        ? 'bg-emerald-700 text-white shadow-white/5'
+                        : 'bg-emerald-50 text-emerald-700 shadow-emerald-100 ring-1 ring-emerald-200'
                         }`}
                     >
                       <User size={16} />
@@ -2601,25 +2763,25 @@ export default function App() {
 
         <footer
           className={`relative shrink-0 px-4 pb-4 pt-5 ${isDark
-              ? 'bg-zinc-950/95 shadow-[0_-24px_42px_rgba(0,0,0,0.35)]'
-              : 'bg-stone-100/95 shadow-[0_-24px_42px_rgba(120,113,108,0.18)]'
+            ? 'bg-zinc-950/95 shadow-[0_-24px_42px_rgba(0,0,0,0.35)]'
+            : 'bg-stone-100/95 shadow-[0_-24px_42px_rgba(120,113,108,0.18)]'
             }`}
         >
           <div
             className={`pointer-events-none absolute inset-x-0 -top-8 h-8 ${isDark
-                ? 'bg-gradient-to-t from-zinc-950/95 to-transparent'
-                : 'bg-gradient-to-t from-stone-100/95 to-transparent'
+              ? 'bg-gradient-to-t from-zinc-950/95 to-transparent'
+              : 'bg-gradient-to-t from-stone-100/95 to-transparent'
               }`}
           />
           {showImportProgress && (
             <div
               className={`mx-auto mb-3 max-w-3xl rounded-lg border px-3 py-2 ${importPhase === 'error'
-                  ? isDark
-                    ? 'border-red-900/70 bg-red-950/20 text-red-200'
-                    : 'border-red-200 bg-red-50 text-red-800'
-                  : isDark
-                    ? 'border-zinc-800 bg-zinc-900/80 text-zinc-200'
-                    : 'border-stone-300 bg-white text-slate-700'
+                ? isDark
+                  ? 'border-red-900/70 bg-red-950/20 text-red-200'
+                  : 'border-red-200 bg-red-50 text-red-800'
+                : isDark
+                  ? 'border-zinc-800 bg-zinc-900/80 text-zinc-200'
+                  : 'border-stone-300 bg-white text-slate-700'
                 }`}
             >
               <div className="mb-2 flex items-center justify-between gap-3 text-xs">
@@ -2637,10 +2799,10 @@ export default function App() {
               >
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${importPhase === 'error'
-                      ? 'bg-red-500'
-                      : importPhase === 'complete'
-                        ? 'bg-emerald-500'
-                        : 'bg-emerald-400'
+                    ? 'bg-red-500'
+                    : importPhase === 'complete'
+                      ? 'bg-emerald-500'
+                      : 'bg-emerald-400'
                     } ${importPhase === 'indexing' ? 'animate-pulse' : ''}`}
                   style={{ width: `${importProgress}%` }}
                 />
@@ -2650,8 +2812,8 @@ export default function App() {
           {indexedDocuments.length > 0 && (
             <div
               className={`mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border px-3 py-2 text-xs ${isDark
-                  ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
-                  : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-800'
                 }`}
             >
               <Upload size={14} />
@@ -2673,18 +2835,16 @@ export default function App() {
               type="file"
             />
             <div
-              className={`rounded-xl border px-3 pb-2.5 pt-3 shadow-sm transition-colors ${
-                isDark
+              className={`rounded-xl border px-3 pb-2.5 pt-3 shadow-sm transition-colors ${isDark
                   ? 'border-zinc-800 bg-zinc-950/92 text-zinc-100 shadow-black/30'
                   : 'border-stone-300 bg-white text-slate-900 shadow-stone-300/30'
-              }`}
+                }`}
             >
               <textarea
-                className={`max-h-44 min-h-[38px] w-full resize-none bg-transparent text-sm leading-6 outline-none ${
-                  isDark
+                className={`max-h-44 min-h-[38px] w-full resize-none bg-transparent text-sm leading-6 outline-none ${isDark
                     ? 'placeholder:text-zinc-500'
                     : 'placeholder:text-slate-400'
-                }`}
+                  }`}
                 disabled={isStreaming}
                 onChange={(event) => setInput(event.target.value)}
                 onInput={(event) => fitTextareaToContent(event.currentTarget)}
@@ -2704,17 +2864,15 @@ export default function App() {
                 <div className="relative">
                   <button
                     aria-expanded={toolsOpen}
-                    className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition-all duration-200 ${
-                      isStreaming ? 'cursor-not-allowed opacity-60' : ''
-                    } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${
-                      toolsOpen
+                    className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition-all duration-200 ${isStreaming ? 'cursor-not-allowed opacity-60' : ''
+                      } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${toolsOpen
                         ? isDark
                           ? 'border border-emerald-500/40 bg-zinc-800 text-emerald-200 shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
                           : 'border border-emerald-400/70 bg-emerald-50 text-emerald-800 shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
                         : isDark
                           ? 'border border-transparent text-zinc-500 hover:border-emerald-500/30 hover:bg-zinc-800 hover:text-emerald-200 hover:shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
                           : 'border border-transparent text-slate-500 hover:border-emerald-400/60 hover:bg-emerald-50 hover:text-emerald-800 hover:shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
-                    }`}
+                      }`}
                     disabled={isStreaming}
                     onClick={() => setToolsOpen((current) => !current)}
                     type="button"
@@ -2731,16 +2889,14 @@ export default function App() {
                   </button>
                   {toolsOpen && (
                     <div
-                      className={`absolute bottom-full left-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${
-                        isDark
+                      className={`absolute bottom-full left-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${isDark
                           ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                           : 'border-stone-300 bg-white text-slate-900'
-                      }`}
+                        }`}
                     >
                       <button
-                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                          }`}
                         disabled={isStreaming || isUploading}
                         onClick={handleImportToolClick}
                         type="button"
@@ -2749,9 +2905,8 @@ export default function App() {
                         Import
                       </button>
                       <button
-                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                          }`}
                         onClick={openCalendarTool}
                         type="button"
                       >
@@ -2759,9 +2914,8 @@ export default function App() {
                         Calendar
                       </button>
                       <button
-                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                          }`}
                         disabled={messages.length === 0}
                         onClick={exportChatAsPdf}
                         type="button"
@@ -2775,13 +2929,25 @@ export default function App() {
 
                 <div className="flex items-center gap-3">
                   <span
-                    className={`font-mono text-[11px] ${
-                      isDark ? 'text-zinc-600' : 'text-slate-400'
-                    }`}
+                    className={`font-mono text-[11px] ${isDark ? 'text-zinc-600' : 'text-slate-400'
+                      }`}
                     title={`${contextUsage.model || 'Active model'} context usage from the last completed inference`}
                   >
                     {tokenMeterLabel}
                   </span>
+                  <button
+                    className={`inline-flex h-9 w-9 items-center justify-center rounded-lg transition-all duration-200 ${isVoiceMode
+                        ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20'
+                        : isDark
+                          ? 'text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400'
+                          : 'text-slate-500 hover:bg-stone-100 hover:text-emerald-600'
+                      }`}
+                    onClick={() => setIsVoiceMode(true)}
+                    type="button"
+                    title="Voice Mode"
+                  >
+                    <Mic size={19} />
+                  </button>
                   <button
                     className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-emerald-500 disabled:opacity-60"
                     disabled={isStreaming || !input.trim() || isUploading}
@@ -2795,6 +2961,89 @@ export default function App() {
             </div>
           </form>
         </footer>
+
+        {/* VOICE MODE OVERLAY */}
+        {isVoiceMode && (
+          <div className={`fixed inset-0 z-50 flex flex-col items-center justify-center p-6 backdrop-blur-xl transition-all duration-500 ${isDark ? 'bg-zinc-950/80' : 'bg-white/80'
+            }`}>
+            <button
+              onClick={() => setIsVoiceMode(false)}
+              className={`absolute top-6 right-6 p-2 rounded-full transition ${isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-400 hover:bg-stone-100 hover:text-slate-800'
+                }`}
+            >
+              <X size={24} />
+            </button>
+
+            <VoiceOrb
+              isListening={isRecording}
+              isSpeaking={isSpeaking}
+              isProcessing={isTranscribing || isStreaming}
+              analyser={analyser}
+              isDark={isDark}
+            />
+
+            {/* Real-time speech and query display */}
+            {(() => {
+              const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+              const lastAssistantMessage = [...messages].reverse().find((m) => m.role === 'assistant');
+              
+              return (
+                <div className="mt-4 flex flex-col items-center gap-4 max-w-2xl px-4 text-center">
+                  {lastUserMessage && (
+                    <p className={`text-sm italic font-medium px-4 py-2 rounded-lg max-w-lg ${
+                      isDark ? 'text-zinc-300 bg-zinc-900/40' : 'text-slate-700 bg-stone-100/40'
+                    }`}>
+                      "{lastUserMessage.content}"
+                    </p>
+                  )}
+                  {lastAssistantMessage && lastAssistantMessage.content && (
+                    <div className={`w-full max-h-48 overflow-y-auto rounded-xl p-4 text-left text-sm border shadow-inner ${
+                      isDark 
+                        ? 'bg-zinc-900/60 border-zinc-800 text-zinc-200' 
+                        : 'bg-stone-50/60 border-stone-200 text-slate-800'
+                    }`}>
+                      <p className="whitespace-pre-wrap leading-relaxed">
+                        {lastAssistantMessage.content}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="mt-8 flex flex-col items-center gap-6">
+              <button
+                onClick={() => {
+                  if (isRecording) {
+                    void handleStopDictation();
+                  } else {
+                    void startRecording();
+                  }
+                }}
+                className={`group relative flex h-20 w-20 items-center justify-center rounded-full transition-all duration-300 ${isRecording
+                    ? 'bg-red-500 shadow-[0_0_40px_rgba(239,68,68,0.4)] scale-110'
+                    : 'bg-emerald-600 shadow-[0_0_30px_rgba(16,185,129,0.3)] hover:scale-105'
+                  }`}
+              >
+                {isRecording ? <X size={32} className="text-white" /> : <Mic size={32} className="text-white" />}
+                {isRecording && (
+                  <span className="absolute inset-0 animate-ping rounded-full bg-red-500/40" />
+                )}
+              </button>
+
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setIsTtsEnabled(!isTtsEnabled)}
+                  className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-medium transition ${isDark ? 'bg-zinc-900 text-zinc-400 hover:text-zinc-200' : 'bg-stone-100 text-slate-500 hover:text-slate-800'
+                    }`}
+                >
+                  {isTtsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                  {isTtsEnabled ? 'Speech On' : 'Speech Off'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {calendarOpen && (
@@ -2803,11 +3052,10 @@ export default function App() {
           onClick={() => setCalendarOpen(false)}
         >
           <div
-            className={`w-full max-w-lg rounded-xl border p-6 shadow-2xl ${
-              isDark
+            className={`w-full max-w-lg rounded-xl border p-6 shadow-2xl ${isDark
                 ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                 : 'border-stone-300 bg-white text-slate-900'
-            }`}
+              }`}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-4 flex items-center justify-between">
@@ -2816,9 +3064,8 @@ export default function App() {
                 Create Calendar Event
               </div>
               <button
-                className={`rounded-md p-1 ${
-                  isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                }`}
+                className={`rounded-md p-1 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                  }`}
                 onClick={() => setCalendarOpen(false)}
                 type="button"
               >
@@ -2831,11 +3078,10 @@ export default function App() {
                 Local Outlook calendar
               </label>
               <select
-                className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${
-                  isDark
+                className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark
                     ? 'border-zinc-800 bg-zinc-900 text-zinc-100'
                     : 'border-stone-300 bg-white text-slate-900'
-                }`}
+                  }`}
                 disabled={
                   creatingCalendarEvent ||
                   loadingOutlookCalendars ||
@@ -2860,11 +3106,10 @@ export default function App() {
               <p className="text-xs opacity-60">AEGIS uses local Outlook only.</p>
               {calendarMessage && !calendarResult && (
                 <div
-                  className={`rounded-lg border px-3 py-2 text-xs ${
-                    isDark
+                  className={`rounded-lg border px-3 py-2 text-xs ${isDark
                       ? 'border-emerald-800 bg-emerald-950/40 text-emerald-200'
                       : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                  }`}
+                    }`}
                 >
                   {calendarMessage}
                 </div>
@@ -2872,11 +3117,10 @@ export default function App() {
             </div>
 
             <textarea
-              className={`mb-4 w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${
-                isDark
+              className={`mb-4 w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${isDark
                   ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
                   : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
-              }`}
+                }`}
               disabled={creatingCalendarEvent}
               onChange={(event) => setCalendarPrompt(event.target.value)}
               placeholder='e.g. "Meeting with Jasser tomorrow at 3pm for 1 hour"'
@@ -2896,11 +3140,10 @@ export default function App() {
 
             {(calendarMessage || calendarResult) && (
               <div
-                className={`mt-4 rounded-lg border p-4 text-sm ${
-                  isDark
+                className={`mt-4 rounded-lg border p-4 text-sm ${isDark
                     ? 'border-emerald-800 bg-emerald-950/40 text-emerald-200'
                     : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                }`}
+                  }`}
               >
                 {calendarMessage && <div className="mb-2 font-semibold">{calendarMessage}</div>}
                 {calendarResult && (
@@ -2963,10 +3206,10 @@ export default function App() {
                 >
                   <div
                     className={`h-full transition-all duration-500 ${systemStats.cpu > 85
-                        ? 'bg-red-500'
-                        : systemStats.cpu > 60
-                          ? 'bg-amber-500'
-                          : 'bg-emerald-500'
+                      ? 'bg-red-500'
+                      : systemStats.cpu > 60
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-500'
                       }`}
                     style={{ width: `${systemStats.cpu}%` }}
                   />
@@ -2984,10 +3227,10 @@ export default function App() {
                 >
                   <div
                     className={`h-full transition-all duration-500 ${systemStats.ram > 85
-                        ? 'bg-red-500'
-                        : systemStats.ram > 60
-                          ? 'bg-amber-500'
-                          : 'bg-emerald-500'
+                      ? 'bg-red-500'
+                      : systemStats.ram > 60
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-500'
                       }`}
                     style={{ width: `${systemStats.ram}%` }}
                   />
@@ -3066,7 +3309,7 @@ export default function App() {
                     />
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-2 gap-3">
                   <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
                     <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Chunks</div>

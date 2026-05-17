@@ -11,7 +11,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["multipart", "ws"] }
 
 # HTTP client (inference backends + RAG client)
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 
 once_cell = "1"
 
