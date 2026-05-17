@@ -998,6 +998,20 @@ function loadStoredVoiceLowRamMode(): boolean {
   }
 }
 
+const VOICE_TTS_ENABLED_STORAGE_KEY = 'aegis-voice-tts-enabled';
+
+function loadStoredTtsEnabled(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    const stored = window.localStorage.getItem(VOICE_TTS_ENABLED_STORAGE_KEY);
+    return stored ? JSON.parse(stored) === true : false;
+  } catch {
+    return false;
+  }
+}
+
 const RAG_ENABLED_STORAGE_KEY = 'aegis-rag-enabled';
 const RAG_TOP_K_STORAGE_KEY = 'aegis-rag-top-k';
 const RAG_THRESHOLD_STORAGE_KEY = 'aegis-rag-threshold';
@@ -1985,7 +1999,7 @@ export default function App() {
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isTtsEnabled, setIsTtsEnabled] = useState(true);
+  const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(loadStoredTtsEnabled);
   const [isVoiceLowRamMode, setIsVoiceLowRamMode] = useState<boolean>(loadStoredVoiceLowRamMode);
   const [isRagEnabled, setIsRagEnabled] = useState<boolean>(loadStoredRagEnabled);
   const [ragTopK, setRagTopK] = useState<number>(loadStoredRagTopK);
@@ -2462,6 +2476,13 @@ export default function App() {
     setRagSimilarityThreshold(val);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(RAG_THRESHOLD_STORAGE_KEY, JSON.stringify(val));
+    }
+  }, []);
+
+  const changeTtsEnabled = useCallback((enabled: boolean) => {
+    setIsTtsEnabled(enabled);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(VOICE_TTS_ENABLED_STORAGE_KEY, JSON.stringify(enabled));
     }
   }, []);
 
@@ -5189,7 +5210,7 @@ export default function App() {
                           <input
                             type="checkbox"
                             checked={isTtsEnabled}
-                            onChange={(event) => setIsTtsEnabled(event.target.checked)}
+                            onChange={(event) => changeTtsEnabled(event.target.checked)}
                             className="mt-1 h-4 w-4 shrink-0 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                           />
                         </label>
