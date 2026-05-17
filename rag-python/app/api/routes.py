@@ -5,7 +5,7 @@ import signal
 
 from ..models.schemas import (
     StatusResponse, ErrorResponse, IndexRequest, IndexResponse, 
-    QueryRequest, QueryResponse, StoreRequest, DeleteResponse
+    QueryRequest, QueryResponse, StoreRequest, DeleteResponse, DeleteDocumentRequest
 )
 from ..core.lifecycle import state
 from ..core.config import MAX_TOP_K
@@ -61,6 +61,14 @@ def delete_documents(session_id: str):
         return {"status": "deleted", "deleted_count": count}
     except Exception as e:
         raise HTTPException(status_code=500, detail={"error": f"Deletion failed: {str(e)}"})
+
+@router.post("/delete-document", response_model=DeleteResponse, dependencies=[Depends(check_initialized)])
+def delete_document(request: DeleteDocumentRequest):
+    try:
+        count = state.vector_store.delete_document(request.session_id, request.source)
+        return {"status": "deleted", "deleted_count": count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": f"Document deletion failed: {str(e)}"})
 
 # TODO: The memory /store endpoint is temporarily hidden for the demo.
 # We will integrate this feature with the Rust engine in the next milestone.

@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub root: PathBuf,
+    pub install_root: PathBuf,
+    pub default_install_root: PathBuf,
     pub cli_dir: PathBuf,
     pub engine_dir: PathBuf,
     pub frontend_dir: PathBuf,
@@ -48,6 +50,8 @@ impl Workspace {
                     .map(Path::to_path_buf)
                     .unwrap_or(manifest_dir.clone())
             });
+        let default_install_root = Self::default_install_root();
+        let install_root = Self::configured_install_root(&default_install_root);
 
         let cli_dir = Self::resolve_existing(&root, &["src/cli", "cli"])
             .unwrap_or_else(|| root.join("src").join("cli"));
@@ -62,12 +66,81 @@ impl Workspace {
 
         Self {
             root,
+            install_root,
+            default_install_root,
             cli_dir,
             engine_dir,
             frontend_dir,
             installer_dir,
             rag_dir,
         }
+    }
+
+    pub fn default_install_root() -> PathBuf {
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            return PathBuf::from(local_app_data).join("AEGIS");
+        }
+
+        if cfg!(windows) {
+            if let Some(user_profile) = env::var_os("USERPROFILE") {
+                return PathBuf::from(user_profile)
+                    .join("AppData")
+                    .join("Local")
+                    .join("AEGIS");
+            }
+        }
+
+        if let Some(home) = env::var_os("HOME") {
+            return PathBuf::from(home).join(".aegis");
+        }
+
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".aegis")
+    }
+
+    pub fn normalize_install_root(path: &Path) -> PathBuf {
+        if path.is_absolute() {
+            return path.to_path_buf();
+        }
+
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+
+    pub fn save_install_root_preference(path: &Path) -> std::io::Result<PathBuf> {
+        let preference_path = Self::install_root_preference_path();
+
+        if let Some(parent) = preference_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&preference_path, path.display().to_string())?;
+        Ok(preference_path)
+    }
+
+    pub fn install_root_preference_path() -> PathBuf {
+        Self::default_install_root().join("install-root.txt")
+    }
+
+    fn configured_install_root(default_install_root: &Path) -> PathBuf {
+        if let Some(root) = env::var_os("AEGIS_INSTALL_ROOT")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            return Self::normalize_install_root(&root);
+        }
+
+        let preference_path = Self::install_root_preference_path();
+        if let Ok(raw) = fs::read_to_string(preference_path) {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return Self::normalize_install_root(Path::new(trimmed));
+            }
+        }
+
+        default_install_root.to_path_buf()
     }
 
     fn locate_root(start: &Path) -> Option<PathBuf> {

@@ -1,10 +1,11 @@
 use crate::mcp_client::McpClient;
 use anyhow::Result;
 use serde_json::json;
-use tokio::sync::Mutex;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub struct ToolRegistry {
+    python_path: String,
     semble_mcp: Arc<Mutex<McpClient>>,
     zotero_mcp: Arc<Mutex<McpClient>>,
 }
@@ -12,49 +13,51 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     pub fn new(python_path: &str, semble_path: &str) -> Self {
         // Initialize Semble MCP
-        let client = McpClient::new(python_path, vec![
-            "-c",
-            "from semble.cli import main; main()",
-            semble_path,
-        ]);
+        let client = McpClient::new(
+            python_path,
+            vec!["-c", "from semble.cli import main; main()", semble_path],
+        );
 
         // Initialize Zotero MCP
         // We run it as a module via the unified python environment
-        let zotero_client = McpClient::new(python_path, vec![
-            "-m",
-            "zotero_mcp.cli",
-            "serve",
-        ]);
+        let zotero_client = McpClient::new(python_path, vec!["-m", "zotero_mcp.cli", "serve"]);
 
         Self {
+            python_path: python_path.to_string(),
             semble_mcp: Arc::new(Mutex::new(client)),
             zotero_mcp: Arc::new(Mutex::new(zotero_client)),
         }
     }
 
+    pub async fn execute_code_search(
+        &self,
+        input: &str,
+        project_path: Option<&str>,
+    ) -> Result<String> {
+        let args = json!({ "query": input });
+        let result = if let Some(project_path) = project_path
+            .map(str::trim)
+            .filter(|project_path| !project_path.is_empty())
+        {
+            let mut client = McpClient::new(
+                &self.python_path,
+                vec!["-c", "from semble.cli import main; main()", project_path],
+            );
+            client.call_tool("search", args).await?
+        } else {
+            let mut client = self.semble_mcp.lock().await;
+            client.call_tool("search", args).await?
+        };
+
+        format_mcp_text_content(result)
+    }
+
     pub async fn execute(&self, tool: &str, input: &str) -> Result<String> {
         match tool {
-            "code_search" | "semble" => {
-                let mut client = self.semble_mcp.lock().await;
-                let args = json!({ "query": input });
-                let result = client.call_tool("search", args).await?;
-                
-                // Format the output for the LLM
-                if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
-                    let mut formatted = String::new();
-                    for snippet in content {
-                        if let Some(text) = snippet.get("text").and_then(|t| t.as_str()) {
-                            formatted.push_str(&format!("---\n{}\n", text));
-                        }
-                    }
-                    Ok(formatted)
-                } else {
-                    Ok(result.to_string())
-                }
-            }
+            "code_search" | "semble" => self.execute_code_search(input, None).await,
             "zotero" | "citation" | "research" => {
                 let mut client = self.zotero_mcp.lock().await;
-                
+
                 // Determine which tool to call based on keywords in the input
                 let tool_name = if input.to_lowercase().contains("recent") {
                     "zotero_get_recent"
@@ -68,13 +71,17 @@ impl ToolRegistry {
                 } else {
                     json!({ "query": input, "limit": 10 })
                 };
-                
+
                 // Try calling the tool. Some versions use 'search_items', others 'zotero_search_items'
                 let result = match client.call_tool(tool_name, args.clone()).await {
                     Ok(res) => res,
                     Err(_) => {
                         // Fallback to a simpler name if the prefixed one fails
-                        let fallback = if tool_name == "zotero_get_recent" { "get_recent" } else { "search_items" };
+                        let fallback = if tool_name == "zotero_get_recent" {
+                            "get_recent"
+                        } else {
+                            "search_items"
+                        };
                         client.call_tool(fallback, args).await?
                     }
                 };
@@ -101,5 +108,19 @@ impl ToolRegistry {
             }
             _ => anyhow::bail!("Unsupported tool: {}", tool),
         }
+    }
+}
+
+fn format_mcp_text_content(result: serde_json::Value) -> Result<String> {
+    if let Some(content) = result.get("content").and_then(|content| content.as_array()) {
+        let mut formatted = String::new();
+        for snippet in content {
+            if let Some(text) = snippet.get("text").and_then(|text| text.as_str()) {
+                formatted.push_str(&format!("---\n{}\n", text));
+            }
+        }
+        Ok(formatted)
+    } else {
+        Ok(result.to_string())
     }
 }

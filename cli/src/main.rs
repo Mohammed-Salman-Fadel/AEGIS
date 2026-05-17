@@ -37,6 +37,14 @@ pub(crate) struct AppContext {
     pub engine: EngineClient,
 }
 
+impl AppContext {
+    pub(crate) fn print_banner(&self) {
+        let active_model = self.engine.current_model_quick().ok();
+        self.ui
+            .print_banner(&banner::render_with_model(active_model.as_deref()));
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let ctx = AppContext {
@@ -64,7 +72,7 @@ fn main() {
     // The banner stays a presentation concern. Main decides whether it appears,
     // then hands off all command behavior to `commands.rs`.
     if banner::should_render_banner(cli.command.as_ref()) {
-        ctx.ui.print_banner(banner::AEGIS_ASCII_ART);
+        ctx.print_banner();
     }
 
     if let Err(error) = commands::dispatch(&ctx, cli.command) {

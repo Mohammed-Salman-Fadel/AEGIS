@@ -81,7 +81,9 @@ impl McpClient {
         let _resp = loop {
             let mut line = String::new();
             let n = reader.read_line(&mut line).await?;
-            if n == 0 { anyhow::bail!("EOF during MCP initialization"); }
+            if n == 0 {
+                anyhow::bail!("EOF during MCP initialization");
+            }
             if let Ok(val) = serde_json::from_str::<McpResponse>(&line) {
                 if let Some(error) = val.error {
                     anyhow::bail!("MCP initialization error: {:?}", error);
@@ -89,7 +91,7 @@ impl McpClient {
                 break val;
             }
         };
-        
+
         // Send initialized notification
         let notified = json!({
             "jsonrpc": "2.0",
@@ -105,9 +107,13 @@ impl McpClient {
         Ok(())
     }
 
-    pub async fn call_tool(&mut self, tool_name: &str, arguments: serde_json::Value) -> Result<serde_json::Value> {
+    pub async fn call_tool(
+        &mut self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value> {
         self.ensure_started().await?;
-        
+
         let req_id = rand::random::<u64>();
         let request = json!({
             "jsonrpc": "2.0",
@@ -130,7 +136,9 @@ impl McpClient {
         let resp_json = loop {
             let mut line = String::new();
             let n = reader.read_line(&mut line).await?;
-            if n == 0 { anyhow::bail!("EOF while waiting for MCP response"); }
+            if n == 0 {
+                anyhow::bail!("EOF while waiting for MCP response");
+            }
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
                 if val.get("id").and_then(|id| id.as_u64()) == Some(req_id) {
                     break val;
@@ -141,12 +149,14 @@ impl McpClient {
             }
             tracing::debug!("Skipping non-JSON output from MCP: {}", line.trim());
         };
-        
+
         let response: McpResponse = serde_json::from_value(resp_json)?;
         if let Some(error) = response.error {
             anyhow::bail!("MCP tool call failed: {:?}", error);
         }
 
-        response.result.ok_or_else(|| anyhow::anyhow!("Empty MCP response"))
+        response
+            .result
+            .ok_or_else(|| anyhow::anyhow!("Empty MCP response"))
     }
 }

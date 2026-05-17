@@ -15,6 +15,7 @@ mod process_manager;
 mod prompt_builder;
 mod provider_registry;
 mod rag_client;
+mod response_style;
 mod tool_registry;
 mod user_profile;
 mod workflow;

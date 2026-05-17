@@ -22,6 +22,14 @@ pub struct ChatRequest {
     #[serde(default)]
     pub edit_from_turn_index: Option<usize>,
     pub mode: Option<String>,
+    #[serde(default)]
+    pub response_style: Option<String>,
+    #[serde(default)]
+    pub code_project_name: Option<String>,
+    #[serde(default)]
+    pub code_project_path: Option<String>,
+    #[serde(default)]
+    pub code_project_context: Option<String>,
 }
 
 /// Handler for POST /chat

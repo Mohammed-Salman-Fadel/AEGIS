@@ -8,13 +8,13 @@ use axum::{
         ws::{Message, WebSocketUpgrade},
     },
     http::{HeaderValue, Method, StatusCode},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use futures::{sink::SinkExt, stream::StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
 use sysinfo::System;
@@ -74,6 +74,10 @@ async fn handle_chat_ws(
                 attachments: vec![],
                 edit_from_turn_index: None,
                 mode,
+                response_style: None,
+                code_project_name: None,
+                code_project_path: None,
+                code_project_context: None,
             };
 
             let orchestrator = state.orchestrator.clone();
@@ -135,14 +139,23 @@ struct PendingUpload {
     data: axum::body::Bytes,
 }
 
+#[derive(Deserialize)]
+struct DeleteIngestedDocumentRequest {
+    session_id: String,
+    stored_path: String,
+}
+
+#[derive(Serialize)]
+struct DeleteIngestedDocumentResponse {
+    status: &'static str,
+    deleted_chunks: usize,
+}
+
 async fn handle_pdf_ingest(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Json<IngestResponse>, (StatusCode, String)> {
-    let ingest_dir = std::env::current_dir()
-        .unwrap_or_default()
-        .join("data")
-        .join("ingest");
+    let ingest_dir = ingest_storage_dir();
     tokio::fs::create_dir_all(&ingest_dir)
         .await
         .map_err(|error| {
@@ -288,6 +301,41 @@ async fn handle_pdf_ingest(
     }))
 }
 
+async fn handle_ingest_document_delete(
+    State(state): State<AppState>,
+    Json(request): Json<DeleteIngestedDocumentRequest>,
+) -> Result<Json<DeleteIngestedDocumentResponse>, (StatusCode, String)> {
+    let session_id = request.session_id.trim().to_string();
+    let stored_path = request.stored_path.trim().to_string();
+
+    if session_id.is_empty() || stored_path.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Both session_id and stored_path are required to remove an indexed document."
+                .to_string(),
+        ));
+    }
+
+    let deleted_chunks = state
+        .orchestrator
+        .rag_client
+        .delete_document(&session_id, &stored_path)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Could not remove document chunks from RAG memory: {error}"),
+            )
+        })?;
+
+    remove_stored_ingest_file(&stored_path).await?;
+
+    Ok(Json(DeleteIngestedDocumentResponse {
+        status: "deleted",
+        deleted_chunks,
+    }))
+}
+
 fn safe_upload_file_name(raw_file_name: Option<&str>) -> Option<String> {
     let raw_file_name = raw_file_name?.trim();
     if raw_file_name.is_empty() {
@@ -303,6 +351,37 @@ fn safe_upload_file_name(raw_file_name: Option<&str>) -> Option<String> {
 fn is_supported_ingest_file(file_name: &str) -> bool {
     let lower = file_name.to_lowercase();
     lower.ends_with(".pdf") || lower.ends_with(".txt")
+}
+
+fn ingest_storage_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_default()
+        .join("data")
+        .join("ingest")
+}
+
+async fn remove_stored_ingest_file(stored_path: &str) -> Result<(), (StatusCode, String)> {
+    let path = Path::new(stored_path);
+    let Ok(canonical_path) = tokio::fs::canonicalize(path).await else {
+        return Ok(());
+    };
+
+    let Ok(canonical_ingest_dir) = tokio::fs::canonicalize(ingest_storage_dir()).await else {
+        return Ok(());
+    };
+
+    if !canonical_path.starts_with(canonical_ingest_dir) {
+        return Ok(());
+    }
+
+    match tokio::fs::remove_file(&canonical_path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Removed document chunks, but could not delete stored upload file: {error}"),
+        )),
+    }
 }
 
 async fn handle_voice_transcribe(
@@ -365,7 +444,13 @@ async fn handle_voice_synthesize(
 pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers(tower_http::cors::Any);
 
     Router::new()
@@ -381,8 +466,14 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::providers::select_provider),
         )
         .route("/models", get(handlers::models::list_models))
+        .route("/models/ollama", get(handlers::models::list_ollama_models))
         .route("/models/current", get(handlers::models::current_model))
         .route("/models/select", post(handlers::models::select_model))
+        .route("/models/pull", post(handlers::models::pull_ollama_model))
+        .route(
+            "/profile",
+            get(handlers::profile::get_profile).put(handlers::profile::save_profile),
+        )
         .route("/context/usage", get(handlers::context::usage))
         .route("/calendar/event", post(handlers::calendar::create_event))
         .route(
@@ -402,6 +493,7 @@ pub fn create_router(state: AppState) -> Router {
             "/ingest",
             post(handle_pdf_ingest).layer(DefaultBodyLimit::max(MAX_INGEST_UPLOAD_BYTES)),
         )
+        .route("/ingest/document", delete(handle_ingest_document_delete))
         .route("/index/progress", get(handle_progress_ws))
         .route("/chat/stream", get(handle_chat_ws))
         .route("/voice/transcribe", post(handle_voice_transcribe))
