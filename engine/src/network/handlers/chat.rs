@@ -30,6 +30,14 @@ pub struct ChatRequest {
     pub code_project_path: Option<String>,
     #[serde(default)]
     pub code_project_context: Option<String>,
+    
+    // RAG Settings
+    #[serde(default)]
+    pub rag_enabled: Option<bool>,
+    #[serde(default)]
+    pub rag_top_k: Option<usize>,
+    #[serde(default)]
+    pub rag_similarity_threshold: Option<f64>,
 }
 
 /// Handler for POST /chat

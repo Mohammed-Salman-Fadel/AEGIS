@@ -106,3 +106,14 @@ async def synthesize_voice(text: str):
         return Response(content=audio_data, media_type="audio/wav")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/voice/config")
+def configure_voice(keep_cached: bool):
+    """Configures whether voice models remain cached in memory"""
+    try:
+        voice_service.keep_cached = keep_cached
+        if not keep_cached:
+            voice_service.unload_models()
+        return {"status": "ok", "keep_cached": keep_cached}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

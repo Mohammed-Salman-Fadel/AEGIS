@@ -12,6 +12,7 @@ class VoiceService:
         self.stt_model = None
         self.tts_model = None
         self.model_size = "tiny" # Best for speed/CPU
+        self.keep_cached = True  # If False, models are unloaded after each query
         
         # Paths for Kokoro
         # Note: We look in rag-python/models/kokoro
@@ -51,6 +52,14 @@ class VoiceService:
                 return False
         return True
 
+    def unload_models(self):
+        """Unloads Whisper and Kokoro models from memory to free RAM"""
+        import gc
+        logger.info("Unloading voice models from memory to free RAM...")
+        self.stt_model = None
+        self.tts_model = None
+        gc.collect()
+ 
     def transcribe(self, audio_bytes: bytes):
         """Transcribes audio bytes to text"""
         self.load_stt()
@@ -66,7 +75,9 @@ class VoiceService:
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-
+            if not self.keep_cached:
+                self.unload_models()
+ 
     def synthesize(self, text: str):
         """Synthesizes text to speech using Kokoro and returns the WAV bytes"""
         if not self.load_tts():
@@ -84,5 +95,8 @@ class VoiceService:
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
             return None
-
+        finally:
+            if not self.keep_cached:
+                self.unload_models()
+ 
 voice_service = VoiceService()

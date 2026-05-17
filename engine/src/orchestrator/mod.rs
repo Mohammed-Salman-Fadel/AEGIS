@@ -564,8 +564,8 @@ impl Orchestrator {
             }
             _ => format!("main topic summary title {}", document_names.join(" ")),
         };
-        let document_excerpts = match self.rag_client.retrieve(&query, 4, session_id).await {
-            Ok(outcome) => outcome.chunks,
+        let document_excerpts = match self.rag_client.retrieve(&query, 4, 0.0, session_id).await {
+            Ok(outcome) => outcome.chunks.into_iter().map(|c| c.text).collect(),
             Err(error) => {
                 warn!(
                     session_id,
@@ -799,15 +799,19 @@ impl Orchestrator {
             return Ok(final_answer);
         }
 
+        let rag_enabled = req.rag_enabled.unwrap_or(true);
+        let rag_top_k = req.rag_top_k.unwrap_or(5);
+        let rag_threshold = req.rag_similarity_threshold.unwrap_or(0.0);
+
         // 1. RAG is strictly session-scoped. If this turn has no current-session
-        // attachments, do not query the global RAG store at all.
-        let (relevant_chunks, rag_metrics) = if req.attachments.is_empty() {
-            ctx.trace_summary("rag", "no current-session document attachments");
+        // attachments, or RAG is disabled, do not query the global RAG store at all.
+        let (relevant_chunks, rag_metrics) = if req.attachments.is_empty() || !rag_enabled {
+            ctx.trace_summary("rag", "no current-session document attachments or RAG disabled");
             (Vec::new(), None)
         } else {
             match self
                 .rag_client
-                .retrieve(&ctx.original_query, 5, &working_session_id)
+                .retrieve(&ctx.original_query, rag_top_k, rag_threshold, &working_session_id)
                 .await
             {
                 Ok(outcome) => (outcome.chunks, Some(outcome.metrics)),
@@ -825,7 +829,42 @@ impl Orchestrator {
             }
         }
 
-        let context_from_docs = relevant_chunks.join("\n---\n");
+        let mut unique_sources = Vec::new();
+        let mut context_parts = Vec::new();
+
+        for chunk in &relevant_chunks {
+            let filename = std::path::Path::new(&chunk.source)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&chunk.source)
+                .to_string();
+
+            let citation = if let Some(page) = chunk.page {
+                format!("{} (Page {})", filename, page)
+            } else {
+                filename.clone()
+            };
+
+            if !unique_sources.contains(&citation) {
+                unique_sources.push(citation.clone());
+            }
+
+            let meta = if let Some(page) = chunk.page {
+                format!("[Source: {}, Page: {}]", filename, page)
+            } else {
+                format!("[Source: {}]", filename)
+            };
+
+            context_parts.push(format!("{}\n\"\"\"\n{}\n\"\"\"", meta, chunk.text));
+        }
+
+        if !relevant_chunks.is_empty() {
+            if let Ok(json) = serde_json::to_string(&relevant_chunks) {
+                let _ = tx.send(format!("[RAG_SOURCES] {json}")).await;
+            }
+        }
+
+        let context_from_docs = context_parts.join("\n\n---\n\n");
 
         let mode = ChatMode::from(req.mode.clone());
 
@@ -1043,11 +1082,11 @@ impl Orchestrator {
                 "rag" | "search" | "document" => {
                     let outcome = self
                         .rag_client
-                        .retrieve(&step.input, 5, &ctx.session_id)
+                        .retrieve(&step.input, 5, 0.0, &ctx.session_id)
                         .await;
 
                     match outcome {
-                        Ok(o) if !o.chunks.is_empty() => o.chunks.join("\n---\n"),
+                        Ok(o) if !o.chunks.is_empty() => o.chunks.into_iter().map(|c| c.text).collect::<Vec<_>>().join("\n---\n"),
                         _ => "No relevant information was found in the document.".to_string(),
                     }
                 }
