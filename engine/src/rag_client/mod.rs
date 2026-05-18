@@ -1,6 +1,7 @@
 use anyhow::Context;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub struct RagClient {
     client: Client,
@@ -26,16 +27,15 @@ struct DeleteDocumentRequest {
     source: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct SearchResult {
     text: String,
-    #[allow(dead_code)]
     source: String,
-    #[allow(dead_code)]
+    page: Option<i32>,
     score: f64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RagMetrics {
     pub retrieval_time_ms: f64,
     pub avg_similarity: f64,
@@ -60,8 +60,16 @@ struct QueryResponse {
     metrics: RagMetrics,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RetrievalChunk {
+    pub text: String,
+    pub source: String,
+    pub page: Option<i32>,
+    pub score: f64,
+}
+
 pub struct RetrievalOutcome {
-    pub chunks: Vec<String>,
+    pub chunks: Vec<RetrievalChunk>,
     pub metrics: RagMetrics,
 }
 
@@ -128,6 +136,7 @@ impl RagClient {
         &self,
         query: &str,
         limit: usize,
+        threshold: f64,
         session_id: &str,
     ) -> anyhow::Result<RetrievalOutcome> {
         self.init().await?; // Ensure it is initialized before querying
@@ -149,8 +158,20 @@ impl RagClient {
         }
 
         let result: QueryResponse = resp.json().await?;
+        let filtered_chunks = result
+            .results
+            .into_iter()
+            .filter(|r| r.score >= threshold)
+            .map(|r| RetrievalChunk {
+                text: r.text,
+                source: r.source,
+                page: r.page,
+                score: r.score,
+            })
+            .collect();
+
         Ok(RetrievalOutcome {
-            chunks: result.results.into_iter().map(|r| r.text).collect(),
+            chunks: filtered_chunks,
             metrics: result.metrics,
         })
     }
@@ -201,5 +222,55 @@ impl RagClient {
             .and_then(|count| count.as_i64())
             .filter(|count| *count > 0)
             .unwrap_or(0) as usize)
+    }
+
+    pub async fn transcribe(&self, audio_bytes: Vec<u8>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let form = reqwest::multipart::Form::new()
+            .part("file", reqwest::multipart::Part::bytes(audio_bytes).file_name("voice.wav"));
+
+        let response = self.client
+            .post(format!("{}/transcribe", self.base_url))
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let err = response.text().await?;
+            return Err(format!("RAG transcription failed: {}", err).into());
+        }
+
+        let data: Value = response.json().await?;
+        Ok(data["text"].as_str().unwrap_or("").to_string())
+    }
+
+    pub async fn synthesize(&self, text: String) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let response = self.client
+            .get(format!("{}/synthesize", self.base_url))
+            .query(&[("text", &text)])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let err = response.text().await?;
+            return Err(format!("RAG synthesis failed: {}", err).into());
+        }
+
+        let bytes = response.bytes().await?;
+        Ok(bytes.to_vec())
+    }
+
+    pub async fn configure_voice(&self, keep_cached: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let response = self.client
+            .post(format!("{}/voice/config", self.base_url))
+            .query(&[("keep_cached", &keep_cached.to_string())])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let err = response.text().await?;
+            return Err(format!("RAG voice config failed: {}", err).into());
+        }
+
+        Ok(())
     }
 }

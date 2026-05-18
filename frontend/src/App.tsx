@@ -15,6 +15,7 @@ import {
   FolderPlus,
   GraduationCap,
   MessageSquare,
+  Mic,
   MoreHorizontal,
   Moon,
   PanelLeftClose,
@@ -28,9 +29,15 @@ import {
   Trash2,
   Upload,
   User,
+  Volume2,
+  VolumeX,
   Wrench,
   X,
+  BookOpen,
+  FileText,
 } from 'lucide-react';
+import { VoiceOrb } from './components/VoiceOrb';
+import { useAudioRecorder } from './hooks/useAudioRecorder';
 
 type Role = 'user' | 'assistant';
 type ThemeMode = 'dark' | 'light';
@@ -43,7 +50,7 @@ type MarkdownBlock =
   | { type: 'code'; text: string; language: string };
 
 type ChatMode = 'general' | 'coder' | 'academic';
-type SettingsTab = 'general' | 'inference' | 'models' | 'personal';
+type SettingsTab = 'general' | 'inference' | 'models' | 'personal' | 'voice' | 'rag';
 type ResponseStyle = 'default' | 'friendly' | 'concise' | 'elaborate' | 'technical';
 type ModelDownloadState = 'idle' | 'downloading' | 'paused';
 
@@ -54,11 +61,19 @@ interface CatalogModel {
   description: string;
 }
 
+interface RetrievalChunk {
+  text: string;
+  source: string;
+  page?: number;
+  score: number;
+}
+
 interface Message {
   role: Role;
   content: string;
   edited?: boolean;
   timestamp?: string;
+  sources?: RetrievalChunk[];
 }
 
 interface EngineSessionSummary {
@@ -835,9 +850,8 @@ function formatTokenMeter(usage: ContextUsage) {
 function ThinkingIndicator({ isDark }: { isDark: boolean }) {
   return (
     <div
-      className={`flex items-center gap-2 text-xs font-medium ${
-        isDark ? 'text-zinc-400' : 'text-slate-500'
-      }`}
+      className={`flex items-center gap-2 text-xs font-medium ${isDark ? 'text-zinc-400' : 'text-slate-500'
+        }`}
     >
       <span>Thinking</span>
       <span className="flex items-center gap-1" aria-hidden="true">
@@ -849,11 +863,24 @@ function ThinkingIndicator({ isDark }: { isDark: boolean }) {
   );
 }
 
-function turnsToMessages(turns: EngineTurn[]): Message[] {
-  return turns.flatMap((turn) => [
-    { role: 'user' as const, content: turn.query, edited: turn.edited, timestamp: turn.created_at },
-    { role: 'assistant' as const, content: turn.response, timestamp: turn.created_at },
-  ]);
+function turnsToMessages(turns: EngineTurn[], sessionId: string): Message[] {
+  return turns.flatMap((turn, turnIdx) => {
+    const assistantIdx = turnIdx * 2 + 1;
+    let sources: RetrievalChunk[] | undefined = undefined;
+    const saved = localStorage.getItem(`aegis-sources-${sessionId}-${assistantIdx}`);
+    if (saved) {
+      try {
+        sources = JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved sources:', e);
+      }
+    }
+
+    return [
+      { role: 'user' as const, content: turn.query, edited: turn.edited, timestamp: turn.created_at },
+      { role: 'assistant' as const, content: turn.response, timestamp: turn.created_at, sources },
+    ];
+  });
 }
 
 function cleanOutlookCalendarName(name: string) {
@@ -955,6 +982,68 @@ function formatExportTimestamp(timestamp?: string) {
 
 function speakerLabel(role: Role) {
   return role === 'user' ? 'User' : 'AEGIS';
+}
+
+const VOICE_LOW_RAM_MODE_STORAGE_KEY = 'aegis-voice-low-ram-mode';
+
+function loadStoredVoiceLowRamMode(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    const stored = window.localStorage.getItem(VOICE_LOW_RAM_MODE_STORAGE_KEY);
+    return stored ? JSON.parse(stored) === true : false;
+  } catch {
+    return false;
+  }
+}
+
+const VOICE_TTS_ENABLED_STORAGE_KEY = 'aegis-voice-tts-enabled';
+
+function loadStoredTtsEnabled(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    const stored = window.localStorage.getItem(VOICE_TTS_ENABLED_STORAGE_KEY);
+    return stored ? JSON.parse(stored) === true : false;
+  } catch {
+    return false;
+  }
+}
+
+const RAG_ENABLED_STORAGE_KEY = 'aegis-rag-enabled';
+const RAG_TOP_K_STORAGE_KEY = 'aegis-rag-top-k';
+const RAG_THRESHOLD_STORAGE_KEY = 'aegis-rag-threshold';
+
+function loadStoredRagEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const stored = window.localStorage.getItem(RAG_ENABLED_STORAGE_KEY);
+    return stored ? JSON.parse(stored) === true : true;
+  } catch {
+    return true;
+  }
+}
+
+function loadStoredRagTopK(): number {
+  if (typeof window === 'undefined') return 5;
+  try {
+    const stored = window.localStorage.getItem(RAG_TOP_K_STORAGE_KEY);
+    return stored ? Math.max(1, Math.min(10, Number(JSON.parse(stored)))) : 5;
+  } catch {
+    return 5;
+  }
+}
+
+function loadStoredRagThreshold(): number {
+  if (typeof window === 'undefined') return 0.0;
+  try {
+    const stored = window.localStorage.getItem(RAG_THRESHOLD_STORAGE_KEY);
+    return stored ? Math.max(0.0, Math.min(1.0, Number(JSON.parse(stored)))) : 0.0;
+  } catch {
+    return 0.0;
+  }
 }
 
 function loadStoredIndexedDocumentsBySession() {
@@ -1570,6 +1659,22 @@ function renderHighlightedCodeLine(line: string, lineIndex: number) {
   return parts.length > 0 ? parts : '\u00A0';
 }
 
+function sanitizeTextForTts(rawText: string): string {
+  // 1. Remove code blocks entirely (```...```)
+  let cleanText = rawText.replace(/```[\s\S]*?```/g, '');
+  
+  // 2. Remove inline code (`code`)
+  cleanText = cleanText.replace(/`([^`]+)`/g, '$1');
+  
+  // 3. Remove other markdown structures (bold, italic, headers, bullet symbols)
+  cleanText = cleanText.replace(/[*#_~>+\-]/g, '');
+  
+  // 4. Remove excessive spacing or newlines
+  cleanText = cleanText.replace(/\s+/g, ' ').trim();
+  
+  return cleanText;
+}
+
 async function copyTextToClipboard(text: string) {
   try {
     await navigator.clipboard.writeText(text);
@@ -1889,6 +1994,23 @@ export default function App() {
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(
     loadStoredPinnedSessionIds,
   );
+
+  // VOICE STATE
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(loadStoredTtsEnabled);
+  const [isVoiceLowRamMode, setIsVoiceLowRamMode] = useState<boolean>(loadStoredVoiceLowRamMode);
+  const [isRagEnabled, setIsRagEnabled] = useState<boolean>(loadStoredRagEnabled);
+  const [ragTopK, setRagTopK] = useState<number>(loadStoredRagTopK);
+  const [ragSimilarityThreshold, setRagSimilarityThreshold] = useState<number>(loadStoredRagThreshold);
+  const [selectedMessageSources, setSelectedMessageSources] = useState<RetrievalChunk[] | null>(null);
+  const [selectedMessageSourcesIndex, setSelectedMessageSourcesIndex] = useState<number | null>(null);
+  const [metricsTab, setMetricsTab] = useState<'metrics' | 'sources'>('metrics');
+  const [speakingMessageIndex, setSpeakingMessageIndex] = useState<number | null>(null);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const { isRecording, analyser, startRecording, stopRecording } = useAudioRecorder();
+
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [sessionsOpen, setSessionsOpen] = useState(true);
   const [codeProjects, setCodeProjects] = useState<CodeProject[]>([]);
@@ -2008,6 +2130,92 @@ export default function App() {
     () => new Set(pinnedSessionIds),
     [pinnedSessionIds],
   );
+  const speakAssistantResponse = useCallback(async (text: string, force = false, messageIndex?: number) => {
+    if (!isTtsEnabled && !force) return;
+    
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current = null;
+      setIsSpeaking(false);
+      setSpeakingMessageIndex(null);
+    }
+
+    if (messageIndex !== undefined && speakingMessageIndex === messageIndex) {
+      return;
+    }
+    
+    const cleanText = sanitizeTextForTts(text);
+    if (!cleanText) return;
+
+    try {
+      if (messageIndex !== undefined) {
+        setSpeakingMessageIndex(messageIndex);
+      }
+      setIsSpeaking(true);
+      
+      const response = await fetch(`${API_BASE}/voice/synthesize?text=${encodeURIComponent(cleanText)}`);
+      if (!response.ok) throw new Error('Synthesis failed');
+      
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      activeAudioRef.current = audio;
+      
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setSpeakingMessageIndex(null);
+        URL.revokeObjectURL(audioUrl);
+        activeAudioRef.current = null;
+      };
+      
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        setSpeakingMessageIndex(null);
+        URL.revokeObjectURL(audioUrl);
+        activeAudioRef.current = null;
+      };
+      
+      audio.play();
+    } catch (err) {
+      console.error('TTS error:', err);
+      setIsSpeaking(false);
+      setSpeakingMessageIndex(null);
+    }
+  }, [isTtsEnabled, speakingMessageIndex]);
+
+  const handleStopDictation = async () => {
+    setIsTranscribing(true);
+    try {
+      const audioBlob = await stopRecording();
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'voice.wav');
+
+      const response = await fetch(`${API_BASE}/voice/transcribe`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error('Transcription failed');
+      const data = await response.json();
+
+      if (data.text && data.text.trim()) {
+        const prompt = data.text.trim();
+        setInput('');
+        const submittedAt = new Date().toISOString();
+        await streamPrompt(prompt, [
+          ...messages,
+          { role: 'user', content: prompt, timestamp: submittedAt },
+          { role: 'assistant', content: '' },
+        ]);
+      }
+    } catch (err) {
+      console.error('Dictation error:', err);
+      setError('Could not transcribe audio. Is the RAG service running?');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
   const sortedSessions = useMemo(() => {
     const originalOrder = new Map(
       sessions.map((session, index) => [session.session_id, index]),
@@ -2087,7 +2295,7 @@ export default function App() {
     const session = (await response.json()) as EngineSession;
     activeSessionIdRef.current = session.session_id;
     setActiveSessionId(session.session_id);
-    setMessages(turnsToMessages(session.history.turns));
+    setMessages(turnsToMessages(session.history.turns, session.session_id));
     setStatus('Ready');
   }, []);
 
@@ -2234,6 +2442,67 @@ export default function App() {
     };
   }, [activeSessionId, contextUsage.context_window]);
 
+  const toggleVoiceLowRamMode = useCallback(async (enabled: boolean) => {
+    setIsVoiceLowRamMode(enabled);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(VOICE_LOW_RAM_MODE_STORAGE_KEY, JSON.stringify(enabled));
+    }
+    try {
+      await fetch(`${API_BASE}/voice/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keep_cached: !enabled }),
+      });
+    } catch {
+      // Ignored
+    }
+  }, []);
+
+  const toggleRagEnabled = useCallback((enabled: boolean) => {
+    setIsRagEnabled(enabled);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(RAG_ENABLED_STORAGE_KEY, JSON.stringify(enabled));
+    }
+  }, []);
+
+  const changeRagTopK = useCallback((val: number) => {
+    setRagTopK(val);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(RAG_TOP_K_STORAGE_KEY, JSON.stringify(val));
+    }
+  }, []);
+
+  const changeRagThreshold = useCallback((val: number) => {
+    setRagSimilarityThreshold(val);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(RAG_THRESHOLD_STORAGE_KEY, JSON.stringify(val));
+    }
+  }, []);
+
+  const changeTtsEnabled = useCallback((enabled: boolean) => {
+    setIsTtsEnabled(enabled);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(VOICE_TTS_ENABLED_STORAGE_KEY, JSON.stringify(enabled));
+    }
+  }, []);
+
+  useEffect(() => {
+    const syncVoiceConfig = async () => {
+      try {
+        await fetch(`${API_BASE}/voice/config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keep_cached: !isVoiceLowRamMode }),
+        });
+      } catch {
+        // Ignored
+      }
+    };
+    
+    const timer = setTimeout(syncVoiceConfig, 3000);
+    return () => clearTimeout(timer);
+  }, [isVoiceLowRamMode]);
+
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
@@ -2334,6 +2603,9 @@ export default function App() {
     }
 
     setSessionMenuOpenId(null);
+    setSelectedMessageSources(null);
+    setSelectedMessageSourcesIndex(null);
+    setMetricsTab('metrics');
 
     if (streamingSessionId === sessionId) {
       const streamingMessages = streamingMessagesBySession[sessionId];
@@ -2363,6 +2635,9 @@ export default function App() {
     activeSessionIdRef.current = null;
     setActiveSessionId(null);
     setMessages([]);
+    setSelectedMessageSources(null);
+    setSelectedMessageSourcesIndex(null);
+    setMetricsTab('metrics');
     setInput('');
     setError(null);
     setEditingMessageIndex(null);
@@ -2934,7 +3209,7 @@ export default function App() {
       downloadConversationPdf({
         title: session.title || sessionSummary.title || 'AEGIS Chat Export',
         sessionId: session.session_id,
-        messages: turnsToMessages(session.history.turns),
+        messages: turnsToMessages(session.history.turns, session.session_id),
         indexedDocuments: indexedDocumentsBySession[session.session_id] ?? [],
       });
       setStatus('Export ready');
@@ -3207,6 +3482,13 @@ export default function App() {
         streamingMessagesBySessionRef.current[sessionId] ?? seedMessages,
       );
 
+      // Automatically persist sources to localStorage so they survive page refreshes!
+      updatedMessages.forEach((msg, idx) => {
+        if (msg.role === 'assistant' && msg.sources && msg.sources.length > 0) {
+          localStorage.setItem(`aegis-sources-${sessionId}-${idx}`, JSON.stringify(msg.sources));
+        }
+      });
+
       streamingMessagesBySessionRef.current = {
         ...streamingMessagesBySessionRef.current,
         [sessionId]: updatedMessages,
@@ -3269,6 +3551,9 @@ export default function App() {
           response_style: responseStyle,
           code_project_name: activeProject?.name,
           code_project_context: activeProject?.snapshot,
+          rag_enabled: isRagEnabled,
+          rag_top_k: ragTopK,
+          rag_similarity_threshold: ragSimilarityThreshold,
         }),
       });
 
@@ -3309,6 +3594,26 @@ export default function App() {
               }));
             } catch (e) {
               console.error('Failed to parse RAG metrics:', e);
+            }
+            continue;
+          }
+
+          if (data.startsWith('[RAG_SOURCES] ')) {
+            try {
+              const parsedSources = JSON.parse(data.replace('[RAG_SOURCES] ', '')) as RetrievalChunk[];
+              updateTargetMessages((current) => {
+                const next = [...current];
+                const last = next[next.length - 1];
+                if (last?.role === 'assistant') {
+                  next[next.length - 1] = {
+                    ...last,
+                    sources: parsedSources,
+                  };
+                }
+                return next;
+              });
+            } catch (e) {
+              console.error('Failed to parse RAG sources:', e);
             }
             continue;
           }
@@ -3386,6 +3691,11 @@ export default function App() {
 
       setStatus('Complete');
       await loadSessions();
+
+      // VOICE MODE: Read aloud
+      if (isTtsEnabled && accumulatedResponse) {
+        speakAssistantResponse(accumulatedResponse, false, messages.length - 1);
+      }
       try {
         setContextUsage(await fetchContextUsage(sessionId));
       } catch {
@@ -3488,8 +3798,8 @@ export default function App() {
           aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
           aria-pressed={sidebarOpen}
           className={`mt-4 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark
-              ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
-              : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
+            ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+            : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
             }`}
           onClick={(event) => {
             event.stopPropagation();
@@ -3503,8 +3813,8 @@ export default function App() {
         <button
           aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
           className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark
-              ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
-              : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
+            ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+            : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
             }`}
           onClick={(event) => {
             event.stopPropagation();
@@ -3736,8 +4046,8 @@ export default function App() {
                         <input
                           autoFocus
                           className={`session-title-text min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-[13px] outline-none ${isDark
-                              ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
-                              : 'border-emerald-500 bg-white text-slate-900'
+                            ? 'border-emerald-700 bg-zinc-950 text-zinc-100'
+                            : 'border-emerald-500 bg-white text-slate-900'
                             }`}
                           onBlur={() => {
                             void submitRenamingSession(session);
@@ -3775,9 +4085,8 @@ export default function App() {
                               {session.title}
                             </span>
                             <span
-                              className={`truncate text-[11px] leading-4 ${
-                                isDark ? 'text-zinc-500' : 'text-slate-500'
-                              }`}
+                              className={`truncate text-[11px] leading-4 ${isDark ? 'text-zinc-500' : 'text-slate-500'
+                                }`}
                             >
                               {lastAccessedLabel}
                             </span>
@@ -3799,8 +4108,8 @@ export default function App() {
                         aria-expanded={sessionMenuOpenId === session.session_id}
                         aria-label={`Open actions for ${session.title}`}
                         className={`rounded-lg p-1.5 transition disabled:opacity-50 ${isDark
-                            ? 'text-zinc-400 hover:bg-zinc-700/80 hover:text-zinc-100'
-                            : 'text-slate-500 hover:bg-stone-100 hover:text-slate-900'
+                          ? 'text-zinc-400 hover:bg-zinc-700/80 hover:text-zinc-100'
+                          : 'text-slate-500 hover:bg-stone-100 hover:text-slate-900'
                           }`}
                         disabled={isStreaming || isDeleting}
                         onClick={(event) => {
@@ -3891,8 +4200,8 @@ export default function App() {
           <div className="flex items-center gap-1 rounded-xl border border-zinc-800/50 bg-zinc-900/30 p-1 shadow-inner backdrop-blur-sm">
             <button
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'general'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
-                  : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                 }`}
               onClick={() => setChatMode('general')}
               type="button"
@@ -3902,8 +4211,8 @@ export default function App() {
             </button>
             <button
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'coder'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
-                  : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                 }`}
               onClick={() => setChatMode('coder')}
               type="button"
@@ -3912,11 +4221,10 @@ export default function App() {
               Coder
             </button>
             <button
-              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                chatMode === 'academic'
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'academic'
                   ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
                   : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
-              }`}
+                }`}
               onClick={() => setChatMode('academic')}
               type="button"
             >
@@ -3928,10 +4236,10 @@ export default function App() {
           <div className="flex items-center gap-3">
             <button
               className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${isMetricsOpen
-                  ? 'border-emerald-600 bg-emerald-950/30 text-emerald-400'
-                  : isDark
-                    ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
-                    : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
+                ? 'border-emerald-600 bg-emerald-950/30 text-emerald-400'
+                : isDark
+                  ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                  : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
                 }`}
               onClick={() => setIsMetricsOpen((current) => !current)}
               type="button"
@@ -3941,8 +4249,8 @@ export default function App() {
             </button>
             <div
               className={`rounded-lg border px-3 py-1 text-xs ${isDark
-                  ? 'border-zinc-800 text-zinc-400'
-                  : 'border-stone-300 bg-white text-slate-500'
+                ? 'border-zinc-800 text-zinc-400'
+                : 'border-stone-300 bg-white text-slate-500'
                 }`}
             >
               {status}
@@ -3953,16 +4261,16 @@ export default function App() {
         {visibleResourceWarning && (
           <div
             className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm font-medium ${isDark
-                ? 'border-amber-900/60 bg-amber-950/30 text-amber-200'
-                : 'border-amber-200 bg-amber-50 text-amber-800'
+              ? 'border-amber-900/60 bg-amber-950/30 text-amber-200'
+              : 'border-amber-200 bg-amber-50 text-amber-800'
               }`}
           >
             <span className="min-w-0 flex-1">Warning: {visibleResourceWarning}</span>
             <button
               aria-label="Dismiss resource warning"
               className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark
-                  ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100'
-                  : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'
+                ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100'
+                : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'
                 }`}
               onClick={() => setDismissedResourceWarning(visibleResourceWarning)}
               title="Dismiss warning"
@@ -3976,8 +4284,8 @@ export default function App() {
         {error && (
           <div
             className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm ${isDark
-                ? 'border-red-900/60 bg-red-950/30 text-red-200'
-                : 'border-red-200 bg-red-50 text-red-700'
+              ? 'border-red-900/60 bg-red-950/30 text-red-200'
+              : 'border-red-200 bg-red-50 text-red-700'
               }`}
             role="alert"
           >
@@ -3986,8 +4294,8 @@ export default function App() {
               <button
                 aria-label="Dismiss error"
                 className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark
-                    ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100'
-                    : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'
+                  ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100'
+                  : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'
                   }`}
                 onClick={() => setError(null)}
                 title="Dismiss error"
@@ -4002,8 +4310,8 @@ export default function App() {
         <div
           ref={scrollRef}
           className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 ${isDark
-              ? 'bg-zinc-950'
-              : 'bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.75),_rgba(245,245,244,0)_42%)]'
+            ? 'bg-zinc-950'
+            : 'bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.75),_rgba(245,245,244,0)_42%)]'
             }`}
         >
           <div className="mx-auto flex max-w-4xl flex-col gap-4">
@@ -4016,8 +4324,8 @@ export default function App() {
                   {message.role === 'assistant' && (
                     <div
                       className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isDark
-                          ? 'bg-zinc-800 text-zinc-200 shadow-sm shadow-white/5'
-                          : 'bg-white text-slate-700 shadow-sm shadow-stone-300/70 ring-1 ring-stone-200'
+                        ? 'bg-zinc-800 text-zinc-200 shadow-sm shadow-white/5'
+                        : 'bg-white text-slate-700 shadow-sm shadow-stone-300/70 ring-1 ring-stone-200'
                         }`}
                     >
                       <Bot size={16} />
@@ -4030,15 +4338,15 @@ export default function App() {
                     {editingMessageIndex === index && message.role === 'user' ? (
                       <div
                         className={`w-[min(32rem,78vw)] rounded-lg border p-2.5 shadow-sm ${isDark
-                            ? 'border-emerald-700 bg-zinc-900'
-                            : 'border-emerald-500 bg-white'
+                          ? 'border-emerald-700 bg-zinc-900'
+                          : 'border-emerald-500 bg-white'
                           }`}
                       >
                         <textarea
                           autoFocus
                           className={`mb-2 max-h-56 min-h-11 w-full resize-none overflow-hidden rounded-md border px-3 py-2.5 text-sm leading-5 outline-none focus:border-emerald-600 ${isDark
-                              ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
-                              : 'border-stone-300 bg-white text-slate-900'
+                            ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
+                            : 'border-stone-300 bg-white text-slate-900'
                             }`}
                           onChange={(event) => {
                             setEditingMessageText(event.target.value);
@@ -4055,8 +4363,8 @@ export default function App() {
                         <div className="flex justify-end gap-2">
                           <button
                             className={`rounded-md border px-3 py-1.5 text-xs ${isDark
-                                ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-800'
-                                : 'border-stone-300 text-slate-700 hover:bg-stone-100'
+                              ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-800'
+                              : 'border-stone-300 text-slate-700 hover:bg-stone-100'
                               }`}
                             onClick={cancelEditingMessage}
                             type="button"
@@ -4076,12 +4384,12 @@ export default function App() {
                     ) : (
                       <div
                         className={`rounded-lg px-4 py-3 text-sm leading-6 shadow-sm ${message.role === 'user'
-                            ? isDark
-                              ? 'bg-emerald-600 text-white shadow-[0_8px_22px_rgba(255,255,255,0.07)]'
-                              : 'bg-emerald-600 text-white shadow-[0_10px_24px_rgba(16,185,129,0.24)]'
-                            : isDark
-                              ? 'border border-zinc-800 bg-zinc-900 text-zinc-200 shadow-[0_8px_22px_rgba(255,255,255,0.065)]'
-                              : 'border border-stone-200 bg-white/95 text-slate-800 shadow-[0_10px_26px_rgba(120,113,108,0.20)]'
+                          ? isDark
+                            ? 'bg-emerald-600 text-white shadow-[0_8px_22px_rgba(255,255,255,0.07)]'
+                            : 'bg-emerald-600 text-white shadow-[0_10px_24px_rgba(16,185,129,0.24)]'
+                          : isDark
+                            ? 'border border-zinc-800 bg-zinc-900 text-zinc-200 shadow-[0_8px_22px_rgba(255,255,255,0.065)]'
+                            : 'border border-stone-200 bg-white/95 text-slate-800 shadow-[0_10px_26px_rgba(120,113,108,0.20)]'
                           }`}
                       >
                         {message.role === 'assistant' ? (
@@ -4095,13 +4403,87 @@ export default function App() {
                         )}
                       </div>
                     )}
+                    {message.role === 'assistant' && message.content && (
+                      <div className="mt-1 flex items-center gap-1 opacity-60 hover:opacity-100 focus-within:opacity-100 transition-all duration-150">
+                        {message.sources && message.sources.length > 0 && (
+                          <button
+                            aria-label="Inspect retrieved sources"
+                            className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${
+                              selectedMessageSourcesIndex === index
+                                ? isDark
+                                  ? 'text-emerald-400 bg-zinc-900 border border-emerald-500/20'
+                                  : 'text-emerald-600 bg-stone-200 border border-emerald-300/30'
+                                : isDark
+                                  ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                                  : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            }`}
+                            onClick={() => {
+                              if (selectedMessageSourcesIndex === index) {
+                                setSelectedMessageSources(null);
+                                setSelectedMessageSourcesIndex(null);
+                                setMetricsTab('metrics');
+                              } else {
+                                setSelectedMessageSourcesIndex(index);
+                                setSelectedMessageSources(message.sources || null);
+                                setMetricsTab('sources');
+                                setIsMetricsOpen(true);
+                              }
+                            }}
+                            title={`Inspect ${message.sources.length} retrieved sources`}
+                            type="button"
+                          >
+                            <BookOpen size={13} className={selectedMessageSourcesIndex === index ? 'animate-pulse' : ''} />
+                          </button>
+                        )}
+                        <button
+                          aria-label={speakingMessageIndex === index ? 'Stop reading' : 'Read aloud'}
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
+                            ? speakingMessageIndex === index
+                              ? 'text-emerald-400 bg-zinc-900'
+                              : 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                            : speakingMessageIndex === index
+                              ? 'text-emerald-600 bg-stone-200'
+                              : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            }`}
+                          onClick={() => {
+                            void speakAssistantResponse(message.content, true, index);
+                          }}
+                          title={speakingMessageIndex === index ? 'Stop reading' : 'Read aloud'}
+                          type="button"
+                        >
+                          {speakingMessageIndex === index ? (
+                            <VolumeX size={13} className="animate-pulse" />
+                          ) : (
+                            <Volume2 size={13} />
+                          )}
+                        </button>
+                        <button
+                          aria-label="Copy response"
+                          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
+                            ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                            : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            }`}
+                          onClick={() => {
+                            void copyTextToClipboard(message.content);
+                            setCopiedMessageIndex(index);
+                            window.setTimeout(() => {
+                              setCopiedMessageIndex((current) => (current === index ? null : current));
+                            }, 1400);
+                          }}
+                          title={copiedMessageIndex === index ? 'Copied' : 'Copy response'}
+                          type="button"
+                        >
+                          {copiedMessageIndex === index ? <Check size={13} /> : <Copy size={13} />}
+                        </button>
+                      </div>
+                    )}
                     {message.role === 'user' && editingMessageIndex !== index && (
-                      <div className="mt-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                      <div className="mt-1 flex items-center gap-1 opacity-60 hover:opacity-100 focus-within:opacity-100 transition-all duration-150">
                         <button
                           aria-label="Edit message"
                           className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
-                              ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
-                              : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                            : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
                             }`}
                           disabled={isStreaming}
                           onClick={() => beginEditingMessage(index, message.content)}
@@ -4113,8 +4495,8 @@ export default function App() {
                         <button
                           aria-label="Copy message"
                           className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition ${isDark
-                              ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
-                              : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
+                            ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300'
+                            : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'
                             }`}
                           onClick={() => {
                             void copyUserMessage(index, message.content);
@@ -4152,12 +4534,13 @@ export default function App() {
                           Apply suggested patch
                         </button>
                       )}
+
                   </div>
                   {message.role === 'user' && (
                     <div
                       className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${isDark
-                          ? 'bg-emerald-700 text-white shadow-white/5'
-                          : 'bg-emerald-50 text-emerald-700 shadow-emerald-100 ring-1 ring-emerald-200'
+                        ? 'bg-emerald-700 text-white shadow-white/5'
+                        : 'bg-emerald-50 text-emerald-700 shadow-emerald-100 ring-1 ring-emerald-200'
                         }`}
                     >
                       <User size={16} />
@@ -4200,12 +4583,12 @@ export default function App() {
           {showImportProgress && (
             <div
               className={`mx-auto mb-3 max-w-3xl rounded-lg border px-3 py-2 ${importPhase === 'error'
-                  ? isDark
-                    ? 'border-red-900/70 bg-red-950/20 text-red-200'
-                    : 'border-red-200 bg-red-50 text-red-800'
-                  : isDark
-                    ? 'border-zinc-800 bg-zinc-900/80 text-zinc-200'
-                    : 'border-stone-300 bg-white text-slate-700'
+                ? isDark
+                  ? 'border-red-900/70 bg-red-950/20 text-red-200'
+                  : 'border-red-200 bg-red-50 text-red-800'
+                : isDark
+                  ? 'border-zinc-800 bg-zinc-900/80 text-zinc-200'
+                  : 'border-stone-300 bg-white text-slate-700'
                 }`}
             >
               <div className="mb-2 flex items-center justify-between gap-3 text-xs">
@@ -4223,10 +4606,10 @@ export default function App() {
               >
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${importPhase === 'error'
-                      ? 'bg-red-500'
-                      : importPhase === 'complete'
-                        ? 'bg-emerald-500'
-                        : 'bg-emerald-400'
+                    ? 'bg-red-500'
+                    : importPhase === 'complete'
+                      ? 'bg-emerald-500'
+                      : 'bg-emerald-400'
                     } ${importPhase === 'indexing' ? 'animate-pulse' : ''}`}
                   style={{ width: `${importProgress}%` }}
                 />
@@ -4236,8 +4619,8 @@ export default function App() {
           {indexedDocuments.length > 0 && (
             <div
               className={`mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border px-3 py-2 text-xs ${isDark
-                  ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
-                  : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-800'
                 }`}
             >
               <Upload size={14} />
@@ -4310,7 +4693,7 @@ export default function App() {
                 isDark
                   ? 'border-zinc-800 bg-zinc-950/92 text-zinc-100 shadow-black/30'
                   : 'border-stone-300 bg-white text-slate-900 shadow-stone-300/30'
-              }`}
+                }`}
             >
               <textarea
                 className={`w-full resize-none bg-transparent text-sm leading-6 outline-none ${
@@ -4319,7 +4702,7 @@ export default function App() {
                   isDark
                     ? 'placeholder:text-zinc-500'
                     : 'placeholder:text-slate-400'
-                }`}
+                  }`}
                 disabled={isStreaming}
                 onChange={(event) => setInput(event.target.value)}
                 onInput={(event) => fitTextareaToContent(event.currentTarget)}
@@ -4339,17 +4722,15 @@ export default function App() {
                 <div className="relative">
                   <button
                     aria-expanded={toolsOpen}
-                    className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition-all duration-200 ${
-                      isStreaming ? 'cursor-not-allowed opacity-60' : ''
-                    } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${
-                      toolsOpen
+                    className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition-all duration-200 ${isStreaming ? 'cursor-not-allowed opacity-60' : ''
+                      } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${toolsOpen
                         ? isDark
                           ? 'border border-emerald-500/40 bg-zinc-800 text-emerald-200 shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
                           : 'border border-emerald-400/70 bg-emerald-50 text-emerald-800 shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
                         : isDark
                           ? 'border border-transparent text-zinc-500 hover:border-emerald-500/30 hover:bg-zinc-800 hover:text-emerald-200 hover:shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
                           : 'border border-transparent text-slate-500 hover:border-emerald-400/60 hover:bg-emerald-50 hover:text-emerald-800 hover:shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
-                    }`}
+                      }`}
                     disabled={isStreaming}
                     onClick={() => setToolsOpen((current) => !current)}
                     type="button"
@@ -4366,16 +4747,14 @@ export default function App() {
                   </button>
                   {toolsOpen && (
                     <div
-                      className={`absolute bottom-full left-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${
-                        isDark
+                      className={`absolute bottom-full left-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${isDark
                           ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                           : 'border-stone-300 bg-white text-slate-900'
-                      }`}
+                        }`}
                     >
                       <button
-                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                          }`}
                         disabled={isStreaming || isUploading}
                         onClick={handleImportToolClick}
                         type="button"
@@ -4384,9 +4763,8 @@ export default function App() {
                         Import
                       </button>
                       <button
-                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                          }`}
                         onClick={openCalendarTool}
                         type="button"
                       >
@@ -4394,9 +4772,8 @@ export default function App() {
                         Calendar
                       </button>
                       <button
-                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${
-                          isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                        }`}
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                          }`}
                         disabled={messages.length === 0}
                         onClick={exportChatAsPdf}
                         type="button"
@@ -4410,13 +4787,25 @@ export default function App() {
 
                 <div className="flex items-center gap-3">
                   <span
-                    className={`font-mono text-[11px] ${
-                      isDark ? 'text-zinc-600' : 'text-slate-400'
-                    }`}
+                    className={`font-mono text-[11px] ${isDark ? 'text-zinc-600' : 'text-slate-400'
+                      }`}
                     title={`${contextUsage.model || 'Active model'} context usage from the last completed inference`}
                   >
                     {tokenMeterLabel}
                   </span>
+                  <button
+                    className={`inline-flex h-9 w-9 items-center justify-center rounded-lg transition-all duration-200 ${isVoiceMode
+                        ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20'
+                        : isDark
+                          ? 'text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400'
+                          : 'text-slate-500 hover:bg-stone-100 hover:text-emerald-600'
+                      }`}
+                    onClick={() => setIsVoiceMode(true)}
+                    type="button"
+                    title="Voice Mode"
+                  >
+                    <Mic size={19} />
+                  </button>
                   <button
                     className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-emerald-500 disabled:opacity-60"
                     disabled={isStreaming || !input.trim() || isUploading}
@@ -4430,6 +4819,89 @@ export default function App() {
             </div>
           </form>
         </footer>
+
+        {/* VOICE MODE OVERLAY */}
+        {isVoiceMode && (
+          <div className={`fixed inset-0 z-50 flex flex-col items-center justify-center p-6 backdrop-blur-xl transition-all duration-500 ${isDark ? 'bg-zinc-950/80' : 'bg-white/80'
+            }`}>
+            <button
+              onClick={() => setIsVoiceMode(false)}
+              className={`absolute top-6 right-6 p-2 rounded-full transition ${isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-400 hover:bg-stone-100 hover:text-slate-800'
+                }`}
+            >
+              <X size={24} />
+            </button>
+
+            <VoiceOrb
+              isListening={isRecording}
+              isSpeaking={isSpeaking}
+              isProcessing={isTranscribing || isStreaming}
+              analyser={analyser}
+              isDark={isDark}
+            />
+
+            {/* Real-time speech and query display */}
+            {(() => {
+              const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+              const lastAssistantMessage = [...messages].reverse().find((m) => m.role === 'assistant');
+              
+              return (
+                <div className="mt-4 flex flex-col items-center gap-4 max-w-2xl px-4 text-center">
+                  {lastUserMessage && (
+                    <p className={`text-sm italic font-medium px-4 py-2 rounded-lg max-w-lg ${
+                      isDark ? 'text-zinc-300 bg-zinc-900/40' : 'text-slate-700 bg-stone-100/40'
+                    }`}>
+                      "{lastUserMessage.content}"
+                    </p>
+                  )}
+                  {lastAssistantMessage && lastAssistantMessage.content && (
+                    <div className={`w-full max-h-48 overflow-y-auto rounded-xl p-4 text-left text-sm border shadow-inner ${
+                      isDark 
+                        ? 'bg-zinc-900/60 border-zinc-800 text-zinc-200' 
+                        : 'bg-stone-50/60 border-stone-200 text-slate-800'
+                    }`}>
+                      <p className="whitespace-pre-wrap leading-relaxed">
+                        {lastAssistantMessage.content}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="mt-8 flex flex-col items-center gap-6">
+              <button
+                onClick={() => {
+                  if (isRecording) {
+                    void handleStopDictation();
+                  } else {
+                    void startRecording();
+                  }
+                }}
+                className={`group relative flex h-20 w-20 items-center justify-center rounded-full transition-all duration-300 ${isRecording
+                    ? 'bg-red-500 shadow-[0_0_40px_rgba(239,68,68,0.4)] scale-110'
+                    : 'bg-emerald-600 shadow-[0_0_30px_rgba(16,185,129,0.3)] hover:scale-105'
+                  }`}
+              >
+                {isRecording ? <X size={32} className="text-white" /> : <Mic size={32} className="text-white" />}
+                {isRecording && (
+                  <span className="absolute inset-0 animate-ping rounded-full bg-red-500/40" />
+                )}
+              </button>
+
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setIsTtsEnabled(!isTtsEnabled)}
+                  className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-medium transition ${isDark ? 'bg-zinc-900 text-zinc-400 hover:text-zinc-200' : 'bg-stone-100 text-slate-500 hover:text-slate-800'
+                    }`}
+                >
+                  {isTtsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                  {isTtsEnabled ? 'Speech On' : 'Speech Off'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {projectPermissionRequestId && (
@@ -4561,6 +5033,8 @@ export default function App() {
                 ['general', 'General'],
                 ['inference', 'Inference'],
                 ['models', 'Models'],
+                ['voice', 'Voice'],
+                ['rag', 'RAG'],
                 ['personal', 'Personal'],
               ].map(([value, label]) => (
                 <button
@@ -4684,6 +5158,139 @@ export default function App() {
                             </div>
                           </button>
                         ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {settingsTab === 'voice' && (
+                  <div className="space-y-5">
+                    <div>
+                      <div className="mb-2 text-sm font-semibold">Voice Caching & Performance</div>
+                      <div className="flex flex-col gap-3">
+                        <label className={`flex items-start justify-between rounded-xl border p-4 cursor-pointer transition ${
+                          isVoiceLowRamMode
+                            ? isDark
+                              ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100'
+                              : 'border-emerald-500 bg-emerald-50 text-emerald-900'
+                            : isDark
+                              ? 'border-zinc-800 hover:bg-zinc-900/60'
+                              : 'border-stone-300 hover:bg-stone-50'
+                        }`}>
+                          <div className="flex flex-col gap-1 pr-4">
+                            <span className="text-sm font-semibold">Low RAM Mode</span>
+                            <span className={`text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+                              Automatically unloads Whisper (STT) and Kokoro (TTS) models from system memory immediately after processing each voice prompt.
+                              Reduces RAM usage by up to ~470 MB, but slightly increases latency on the next voice input as models must reload.
+                            </span>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={isVoiceLowRamMode}
+                            onChange={(event) => void toggleVoiceLowRamMode(event.target.checked)}
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          />
+                        </label>
+
+                        <label className={`flex items-start justify-between rounded-xl border p-4 cursor-pointer transition ${
+                          isTtsEnabled
+                            ? isDark
+                              ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100'
+                              : 'border-emerald-500 bg-emerald-50 text-emerald-900'
+                            : isDark
+                              ? 'border-zinc-800 hover:bg-zinc-900/60'
+                              : 'border-stone-300 hover:bg-stone-50'
+                        }`}>
+                          <div className="flex flex-col gap-1 pr-4">
+                            <span className="text-sm font-semibold">Read Aloud by Default</span>
+                            <span className={`text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+                              Automatically speak assistant responses out loud using the local high-quality voice agent.
+                            </span>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={isTtsEnabled}
+                            onChange={(event) => changeTtsEnabled(event.target.checked)}
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {settingsTab === 'rag' && (
+                  <div className="space-y-5">
+                    <div>
+                      <div className="mb-2 text-sm font-semibold">Document Context (RAG)</div>
+                      <div className="flex flex-col gap-3">
+                        <label className={`flex items-start justify-between rounded-xl border p-4 cursor-pointer transition ${
+                          isRagEnabled
+                            ? isDark
+                              ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100'
+                              : 'border-emerald-500 bg-emerald-50 text-emerald-900'
+                            : isDark
+                              ? 'border-zinc-800 hover:bg-zinc-900/60'
+                              : 'border-stone-300 hover:bg-stone-50'
+                        }`}>
+                          <div className="flex flex-col gap-1 pr-4">
+                            <span className="text-sm font-semibold">Enable Retrieval-Augmented Generation</span>
+                            <span className={`text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+                              Inject relevant document excerpts from imported files into the LLM context to answer your questions.
+                              If disabled, the model will not read from your document library during chat conversations.
+                            </span>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={isRagEnabled}
+                            onChange={(event) => toggleRagEnabled(event.target.checked)}
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          />
+                        </label>
+
+                        {isRagEnabled && (
+                          <>
+                            <div className={`rounded-xl border p-4 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
+                              <div className="mb-1 flex items-center justify-between">
+                                <span className="text-sm font-semibold">Retrieve Limit (Top-K)</span>
+                                <span className="text-sm font-bold text-emerald-600">{ragTopK} chunks</span>
+                              </div>
+                              <span className={`block mb-3 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+                                The maximum number of document passages to retrieve and supply to the AI model per message. Higher values provide more context but consume more memory and tokens.
+                              </span>
+                              <input
+                                type="range"
+                                min="1"
+                                max="10"
+                                step="1"
+                                value={ragTopK}
+                                onChange={(event) => changeRagTopK(Number(event.target.value))}
+                                className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-stone-200 dark:bg-zinc-800 accent-emerald-600"
+                              />
+                            </div>
+
+                            <div className={`rounded-xl border p-4 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
+                              <div className="mb-1 flex items-center justify-between">
+                                <span className="text-sm font-semibold">Similarity Cutoff Score</span>
+                                <span className="text-sm font-bold text-emerald-600">
+                                  {ragSimilarityThreshold === 0.0 ? 'None (Retrieve all)' : `≥ ${ragSimilarityThreshold.toFixed(2)}`}
+                                </span>
+                              </div>
+                              <span className={`block mb-3 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+                                Only inject retrieved passages whose similarity scores exceed this cutoff. Helps filter out irrelevant text noise. A setting of 0.0 disables cutoff filtering.
+                              </span>
+                              <input
+                                type="range"
+                                min="0.0"
+                                max="0.9"
+                                step="0.05"
+                                value={ragSimilarityThreshold}
+                                onChange={(event) => changeRagThreshold(Number(event.target.value))}
+                                className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-stone-200 dark:bg-zinc-800 accent-emerald-600"
+                              />
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -4988,11 +5595,10 @@ export default function App() {
           onClick={() => setCalendarOpen(false)}
         >
           <div
-            className={`w-full max-w-lg rounded-xl border p-6 shadow-2xl ${
-              isDark
+            className={`w-full max-w-lg rounded-xl border p-6 shadow-2xl ${isDark
                 ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                 : 'border-stone-300 bg-white text-slate-900'
-            }`}
+              }`}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-4 flex items-center justify-between">
@@ -5001,9 +5607,8 @@ export default function App() {
                 Create Calendar Event
               </div>
               <button
-                className={`rounded-md p-1 ${
-                  isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
-                }`}
+                className={`rounded-md p-1 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
+                  }`}
                 onClick={() => setCalendarOpen(false)}
                 type="button"
               >
@@ -5016,11 +5621,10 @@ export default function App() {
                 Local Outlook calendar
               </label>
               <select
-                className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${
-                  isDark
+                className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark
                     ? 'border-zinc-800 bg-zinc-900 text-zinc-100'
                     : 'border-stone-300 bg-white text-slate-900'
-                }`}
+                  }`}
                 disabled={
                   creatingCalendarEvent ||
                   loadingOutlookCalendars ||
@@ -5045,11 +5649,10 @@ export default function App() {
               <p className="text-xs opacity-60">AEGIS uses local Outlook only.</p>
               {calendarMessage && !calendarResult && (
                 <div
-                  className={`rounded-lg border px-3 py-2 text-xs ${
-                    isDark
+                  className={`rounded-lg border px-3 py-2 text-xs ${isDark
                       ? 'border-emerald-800 bg-emerald-950/40 text-emerald-200'
                       : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                  }`}
+                    }`}
                 >
                   {calendarMessage}
                 </div>
@@ -5057,11 +5660,10 @@ export default function App() {
             </div>
 
             <textarea
-              className={`mb-4 w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${
-                isDark
+              className={`mb-4 w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${isDark
                   ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500'
                   : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
-              }`}
+                }`}
               disabled={creatingCalendarEvent}
               onChange={(event) => setCalendarPrompt(event.target.value)}
               placeholder='e.g. "Meeting with Jasser tomorrow at 3pm for 1 hour"'
@@ -5081,11 +5683,10 @@ export default function App() {
 
             {(calendarMessage || calendarResult) && (
               <div
-                className={`mt-4 rounded-lg border p-4 text-sm ${
-                  isDark
+                className={`mt-4 rounded-lg border p-4 text-sm ${isDark
                     ? 'border-emerald-800 bg-emerald-950/40 text-emerald-200'
                     : 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                }`}
+                  }`}
               >
                 {calendarMessage && <div className="mb-2 font-semibold">{calendarMessage}</div>}
                 {calendarResult && (
@@ -5116,10 +5717,10 @@ export default function App() {
           className={`flex h-full flex-col overflow-hidden ${isMetricsOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
         >
           <div
-            className="flex h-16 shrink-0 items-center justify-between px-6"
+            className="flex h-16 shrink-0 items-center justify-between px-6 border-b dark:border-zinc-900 border-stone-200"
           >
-            <div className="text-sm font-semibold uppercase tracking-wider text-zinc-500">
-              Live Metrics
+            <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">
+              {metricsTab === 'sources' ? 'Context Sources' : 'Performance Info'}
             </div>
             <button
               className={`rounded-md p-1 transition ${isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300' : 'text-slate-400 hover:bg-stone-200 hover:text-slate-600'}`}
@@ -5130,152 +5731,288 @@ export default function App() {
             </button>
           </div>
 
-          <div className="flex-1 space-y-8 overflow-y-auto p-6">
-            {/* SYSTEM RESOURCE UTILIZATION */}
-            <div className="space-y-4">
-              <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                System Resources
-              </div>
+          {/* TAB SELECTOR */}
+          <div className={`flex border-b shrink-0 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
+            <button
+              className={`flex-1 py-3 text-center text-[10px] font-bold uppercase tracking-wider transition ${
+                metricsTab === 'metrics'
+                  ? 'border-b-2 border-emerald-500 text-emerald-500'
+                  : isDark
+                    ? 'text-zinc-500 hover:text-zinc-300'
+                    : 'text-slate-500 hover:text-slate-700'
+              }`}
+              onClick={() => setMetricsTab('metrics')}
+              type="button"
+            >
+              Live Stats
+            </button>
+            <button
+              className={`flex-1 py-3 text-center text-[10px] font-bold uppercase tracking-wider transition relative ${
+                metricsTab === 'sources'
+                  ? 'border-b-2 border-emerald-500 text-emerald-500'
+                  : isDark
+                    ? 'text-zinc-500 hover:text-zinc-300'
+                    : 'text-slate-500 hover:text-slate-700'
+              }`}
+              onClick={() => setMetricsTab('sources')}
+              type="button"
+            >
+              Sources
+              {selectedMessageSources && selectedMessageSources.length > 0 && (
+                <span className="absolute right-3.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-extrabold text-white">
+                  {selectedMessageSources.length}
+                </span>
+              )}
+            </button>
+          </div>
 
-              {/* CPU USAGE */}
-              <div>
-                <div className="mb-2 flex justify-between text-xs">
-                  <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>CPU Usage</span>
-                  <span className="font-mono font-medium">{systemStats.cpu}%</span>
+          {/* SIDEBAR MAIN SWITCHABLE CONTENT */}
+          {metricsTab === 'sources' ? (
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {selectedMessageSources && selectedMessageSources.length > 0 ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                      Retrieved Excerpts
+                    </span>
+                    <button
+                      className={`text-[9px] font-bold uppercase tracking-wider transition hover:text-emerald-500 ${
+                        isDark ? 'text-zinc-400' : 'text-slate-500'
+                      }`}
+                      onClick={() => {
+                        setSelectedMessageSources(null);
+                        setSelectedMessageSourcesIndex(null);
+                      }}
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+
+                  <div className="space-y-3.5">
+                    {selectedMessageSources.map((src, sIdx) => {
+                      const isLegacyString = typeof src === 'string';
+                      const rawSource = isLegacyString ? (src as unknown as string) : (src.source || '');
+                      const filename = rawSource.split(/[/\\]/).pop() || rawSource;
+                      const page = isLegacyString ? undefined : src.page;
+                      const score = isLegacyString ? 0.0 : (src.score || 0.0);
+                      const text = isLegacyString ? '' : (src.text || '');
+
+                      return (
+                        <div
+                          key={sIdx}
+                          className={`rounded-lg border p-3.5 space-y-2.5 text-xs transition duration-200 ${
+                            isDark
+                              ? 'border-zinc-800 bg-zinc-900/30 hover:bg-zinc-900/50 text-zinc-300'
+                              : 'border-stone-200 bg-white hover:bg-stone-50 text-slate-800 shadow-sm'
+                          }`}
+                        >
+                          {/* CHUNK META HEADER */}
+                          <div className="flex flex-wrap items-center justify-between gap-1.5 border-b pb-2 border-dashed border-stone-200 dark:border-zinc-800/60">
+                            <div className="flex items-center gap-1.5 font-bold text-emerald-600 dark:text-emerald-400 truncate max-w-[70%]">
+                              <FileText size={12} className="shrink-0" />
+                              <span className="truncate" title={filename}>{filename}</span>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {page !== undefined && page !== null && (
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider ${
+                                  isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-stone-100 text-slate-500'
+                                }`}>
+                                  Pg {page}
+                                </span>
+                              )}
+                              {!isLegacyString && (
+                                <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded font-extrabold uppercase tracking-wider ${
+                                  isDark ? 'bg-emerald-950/40 text-emerald-400' : 'bg-emerald-50 text-emerald-700'
+                                }`}>
+                                  {(score * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* CHUNK TEXT EXCERPT */}
+                          {text ? (
+                            <div className={`font-serif leading-relaxed p-2.5 rounded border border-dashed text-[11px] overflow-y-auto max-h-48 whitespace-pre-wrap ${
+                              isDark
+                                ? 'border-zinc-800/80 bg-zinc-950/50 text-zinc-400'
+                                : 'border-stone-200 bg-stone-50/50 text-slate-600'
+                            }`}>
+                              {text}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] italic text-zinc-500">
+                              No excerpt available for legacy reference format.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-16 px-4 text-center space-y-4">
+                  <div className={`p-4 rounded-full ${isDark ? 'bg-zinc-900/60' : 'bg-stone-100'}`}>
+                    <BookOpen size={24} className="text-emerald-500 opacity-60" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <h3 className={`text-xs font-bold uppercase tracking-wider ${isDark ? 'text-zinc-300' : 'text-slate-800'}`}>
+                      No Turn Selected
+                    </h3>
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
+                      Click the <span className="inline-flex items-center align-middle font-bold text-emerald-500">📖 sources</span> button on any AI response to inspect retrieved context excerpts in detail.
+                    </p>
+                  </div>
                 </div>
-                <div
-                  className={`h-1.5 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
-                >
+              )}
+            </div>
+          ) : (
+            <div className="flex-1 space-y-8 overflow-y-auto p-6">
+              {/* SYSTEM RESOURCE UTILIZATION */}
+              <div className="space-y-4">
+                <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                  System Resources
+                </div>
+
+                {/* CPU USAGE */}
+                <div>
+                  <div className="mb-2 flex justify-between text-xs">
+                    <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>CPU Usage</span>
+                    <span className="font-mono font-medium">{systemStats.cpu}%</span>
+                  </div>
                   <div
-                    className={`h-full transition-all duration-500 ${systemStats.cpu > 85
+                    className={`h-1.5 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
+                  >
+                    <div
+                      className={`h-full transition-all duration-500 ${systemStats.cpu > 85
                         ? 'bg-red-500'
                         : systemStats.cpu > 60
                           ? 'bg-amber-500'
                           : 'bg-emerald-500'
-                      }`}
-                    style={{ width: `${systemStats.cpu}%` }}
-                  />
+                        }`}
+                      style={{ width: `${systemStats.cpu}%` }}
+                    />
+                  </div>
                 </div>
-              </div>
 
-              {/* RAM USAGE */}
-              <div>
-                <div className="mb-2 flex justify-between text-xs">
-                  <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>RAM Usage</span>
-                  <span className="font-mono font-medium">{systemStats.ram}%</span>
-                </div>
-                <div
-                  className={`h-1.5 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
-                >
+                {/* RAM USAGE */}
+                <div>
+                  <div className="mb-2 flex justify-between text-xs">
+                    <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>RAM Usage</span>
+                    <span className="font-mono font-medium">{systemStats.ram}%</span>
+                  </div>
                   <div
-                    className={`h-full transition-all duration-500 ${systemStats.ram > 85
+                    className={`h-1.5 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
+                  >
+                    <div
+                      className={`h-full transition-all duration-500 ${systemStats.ram > 85
                         ? 'bg-red-500'
                         : systemStats.ram > 60
                           ? 'bg-amber-500'
                           : 'bg-emerald-500'
-                      }`}
-                    style={{ width: `${systemStats.ram}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className={`h-px w-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`} />
-
-            {/* INFERENCE STATS */}
-            <div>
-              <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                Inference Engine
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div
-                  className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}
-                >
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">Total Latency</div>
-                  <div className="font-mono text-sm font-semibold">
-                    {inferenceStats.latency > 0 ? `${(inferenceStats.latency / 1000).toFixed(2)}s` : '---'}
-                  </div>
-                </div>
-                <div
-                  className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}
-                >
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">Speed (TPS)</div>
-                  <div className="font-mono text-sm font-semibold">
-                    {inferenceStats.tps > 0 ? `${inferenceStats.tps}` : '---'}
-                  </div>
-                </div>
-                <div
-                  className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}
-                >
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">TTFT</div>
-                  <div className="font-mono text-sm font-semibold">
-                    {inferenceStats.ttft > 0 ? `${inferenceStats.ttft}ms` : '---'}
-                  </div>
-                </div>
-                <div
-                  className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}
-                >
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">RAG Delay</div>
-                  <div className="font-mono text-sm font-semibold">
-                    {inferenceStats.ragTime > 0 ? `${inferenceStats.ragTime}ms` : '---'}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className={`h-px w-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`} />
-
-            {/* RAG ANALYSIS */}
-            <div>
-              <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                RAG Engine Analysis
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <div className="mb-1.5 flex justify-between text-[11px]">
-                    <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>
-                      Semantic Similarity
-                    </span>
-                    <span className="font-mono font-medium">
-                      {inferenceStats.similarity > 0
-                        ? `${(inferenceStats.similarity * 100).toFixed(0)}%`
-                        : '---'}
-                    </span>
-                  </div>
-                  <div
-                    className={`h-1 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
-                  >
-                    <div
-                      className="h-full bg-emerald-500 opacity-60 transition-all duration-500"
-                      style={{ width: `${inferenceStats.similarity * 100}%` }}
+                        }`}
+                      style={{ width: `${systemStats.ram}%` }}
                     />
                   </div>
                 </div>
-                
+              </div>
+
+              <div className={`h-px w-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`} />
+
+              {/* INFERENCE STATS */}
+              <div>
+                <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                  Inference Engine
+                </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Chunks</div>
-                    <div className="font-mono text-xs font-semibold">
-                      {inferenceStats.chunks || '0'}
+                  <div
+                    className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}
+                  >
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">Total Latency</div>
+                    <div className="font-mono text-sm font-semibold">
+                      {inferenceStats.latency > 0 ? `${(inferenceStats.latency / 1000).toFixed(2)}s` : '---'}
                     </div>
                   </div>
-                  <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Backend</div>
-                    <div className="truncate font-mono text-[10px] font-semibold">
-                      {inferenceStats.backend}
+                  <div
+                    className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}
+                  >
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">Speed (TPS)</div>
+                    <div className="font-mono text-sm font-semibold">
+                      {inferenceStats.tps > 0 ? `${inferenceStats.tps}` : '---'}
+                    </div>
+                  </div>
+                  <div
+                    className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}
+                  >
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">TTFT</div>
+                    <div className="font-mono text-sm font-semibold">
+                      {inferenceStats.ttft > 0 ? `${inferenceStats.ttft}ms` : '---'}
+                    </div>
+                  </div>
+                  <div
+                    className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}
+                  >
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">RAG Delay</div>
+                    <div className="font-mono text-sm font-semibold">
+                      {inferenceStats.ragTime > 0 ? `${inferenceStats.ragTime}ms` : '---'}
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div
-              className={`rounded-lg p-3 text-[11px] leading-relaxed ${isDark ? 'bg-zinc-900/60 text-zinc-500' : 'bg-stone-100 text-slate-500'}`}
-            >
-              Generation speed is estimated based on the average character count per token (approx. 4
-              chars/token).
+              <div className={`h-px w-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`} />
+
+              {/* RAG ANALYSIS */}
+              <div>
+                <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                  RAG Engine Analysis
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <div className="mb-1.5 flex justify-between text-[11px]">
+                      <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>
+                        Semantic Similarity
+                      </span>
+                      <span className="font-mono font-medium">
+                        {inferenceStats.similarity > 0
+                          ? `${(inferenceStats.similarity * 100).toFixed(0)}%`
+                          : '---'}
+                      </span>
+                    </div>
+                    <div
+                      className={`h-1 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}
+                    >
+                      <div
+                        className="h-full bg-emerald-500 opacity-60 transition-all duration-500"
+                        style={{ width: `${inferenceStats.similarity * 100}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
+                      <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Chunks</div>
+                      <div className="font-mono text-xs font-semibold">
+                        {inferenceStats.chunks || '0'}
+                      </div>
+                    </div>
+                    <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
+                      <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Backend</div>
+                      <div className="truncate font-mono text-[10px] font-semibold">
+                        {inferenceStats.backend}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                className={`rounded-lg p-3 text-[11px] leading-relaxed ${isDark ? 'bg-zinc-900/60 text-zinc-500' : 'bg-stone-100 text-slate-500'}`}
+              >
+                Generation speed is estimated based on the average character count per token (approx. 4
+                chars/token).
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </aside>
     </div>

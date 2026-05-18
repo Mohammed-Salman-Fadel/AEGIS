@@ -68,6 +68,10 @@ async fn handle_chat_ws(
             let mut full_ai_response = String::new();
             let (tx, mut rx) = mpsc::channel::<String>(100);
 
+            let rag_enabled = msg_data["rag_enabled"].as_bool();
+            let rag_top_k = msg_data["rag_top_k"].as_u64().map(|v| v as usize);
+            let rag_similarity_threshold = msg_data["rag_similarity_threshold"].as_f64();
+
             let req = ChatRequest {
                 session_id: None,
                 message: user_query,
@@ -78,6 +82,9 @@ async fn handle_chat_ws(
                 code_project_name: None,
                 code_project_path: None,
                 code_project_context: None,
+                rag_enabled,
+                rag_top_k,
+                rag_similarity_threshold,
             };
 
             let orchestrator = state.orchestrator.clone();
@@ -384,6 +391,82 @@ async fn remove_stored_ingest_file(stored_path: &str) -> Result<(), (StatusCode,
     }
 }
 
+async fn handle_voice_transcribe(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut audio_data = None;
+
+    while let Some(field) = multipart.next_field().await.map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Could not read multipart voice data: {error}"),
+        )
+    })? {
+        if field.name() == Some("file") {
+            audio_data = Some(field.bytes().await.map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Could not read audio bytes: {error}"),
+                )
+            })?);
+            break;
+        }
+    }
+
+    let audio_data = audio_data.ok_or_else(|| (StatusCode::BAD_REQUEST, "No audio file provided.".to_string()))?;
+
+    let text = state
+        .orchestrator
+        .rag_client
+        .transcribe(audio_data.to_vec())
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+
+    Ok(Json(json!({ "text": text })))
+}
+
+async fn handle_voice_synthesize(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<impl axum::response::IntoResponse, (StatusCode, String)> {
+    let text = params.get("text").cloned().unwrap_or_default();
+    if text.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "No text provided".to_string()));
+    }
+
+    let audio_bytes = state
+        .orchestrator
+        .rag_client
+        .synthesize(text)
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "audio/wav")],
+        audio_bytes,
+    ))
+}
+
+#[derive(Deserialize)]
+struct VoiceConfigRequest {
+    keep_cached: bool,
+}
+
+async fn handle_voice_config(
+    State(state): State<AppState>,
+    Json(payload): Json<VoiceConfigRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    state
+        .orchestrator
+        .rag_client
+        .configure_voice(payload.keep_cached)
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+
+    Ok(Json(json!({ "status": "ok", "keep_cached": payload.keep_cached })))
+}
+
 pub fn create_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
@@ -439,6 +522,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/ingest/document", delete(handle_ingest_document_delete))
         .route("/index/progress", get(handle_progress_ws))
         .route("/chat/stream", get(handle_chat_ws))
+        .route("/voice/transcribe", post(handle_voice_transcribe))
+        .route("/voice/synthesize", get(handle_voice_synthesize))
+        .route("/voice/config", post(handle_voice_config))
         .route(
             "/sessions",
             get(handlers::sessions::list_sessions).post(handlers::sessions::create_session),
