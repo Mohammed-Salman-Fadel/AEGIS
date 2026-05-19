@@ -10,6 +10,7 @@ Thumbs.db
 *.dylib
 *.out
 *.exe
+!landing page/public/downloads/AEGIS-Windows-x64.exe
 *.obj
 *.dll
 
@@ -29,6 +30,7 @@ build/
 .npm/
 .npm-cache/
 .eslintcache
+*.tsbuildinfo
 
 # Environment & Virtual Envs
 .env
