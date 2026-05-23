@@ -1904,6 +1904,7 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isClearingIndexedDocuments, setIsClearingIndexedDocuments] = useState(false);
+  const [documentContextNotice, setDocumentContextNotice] = useState<string | null>(null);
   const [importProgress, setImportProgress] = useState(0);
   const [importPhase, setImportPhase] = useState<ImportPhase>('idle');
   const [importFileLabel, setImportFileLabel] = useState('');
@@ -2450,6 +2451,20 @@ export default function App() {
     }
   }, [input]);
 
+  useEffect(() => {
+    if (!documentContextNotice) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setDocumentContextNotice(null);
+    }, 7000);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [documentContextNotice]);
+
   async function handleSessionSelect(sessionId: string) {
     if (deletingSessionIds.includes(sessionId)) {
       return;
@@ -2932,6 +2947,7 @@ export default function App() {
     const documentsToRemove = [...indexedDocuments];
 
     setIsClearingIndexedDocuments(true);
+    setDocumentContextNotice(null);
     setError(null);
     setStatus('Removing document context');
 
@@ -2992,6 +3008,7 @@ export default function App() {
           ? `Removed ${deletedChunks} document chunks`
           : 'Removed document context',
       );
+      setDocumentContextNotice('Imported document cleared.');
     } finally {
       setIsClearingIndexedDocuments(false);
     }
@@ -4504,36 +4521,52 @@ export default function App() {
           )}
           {indexedDocuments.length > 0 && (
             <div
-              className={`group relative mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border py-2 pl-3 pr-9 text-xs ${isDark
-                ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                }`}
+              aria-busy={isClearingIndexedDocuments}
+              className={`group relative mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border py-2 pl-3 pr-9 text-xs transition-all duration-[1800ms] ease-out ${
+                isClearingIndexedDocuments
+                  ? isDark
+                    ? 'border-red-900/70 bg-red-950/30 text-red-200 opacity-35'
+                    : 'border-red-300 bg-red-50 text-red-700 opacity-35'
+                  : isDark
+                    ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200 opacity-100'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-800 opacity-100'
+              }`}
             >
               <Upload className="shrink-0" size={14} />
               <span className="min-w-0 truncate">
                 Document context active: {indexedDocumentLabel} indexed into {indexedChunkCount}{' '}
                 chunks.
               </span>
-              <button
-                aria-label="Remove imported document context"
-                className={`absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-not-allowed ${isClearingIndexedDocuments ? 'opacity-100' : ''
-                  } ${isDark
-                    ? 'text-emerald-100/80 hover:bg-emerald-900/40 hover:text-emerald-50 disabled:text-emerald-200/45'
-                    : 'text-emerald-800/70 hover:bg-emerald-100 hover:text-emerald-950 disabled:text-emerald-700/45'
+              {!isClearingIndexedDocuments && (
+                <button
+                  aria-label="Remove imported document context"
+                  className={`absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-not-allowed ${
+                    isDark
+                      ? 'text-emerald-100/80 hover:bg-emerald-900/40 hover:text-emerald-50 disabled:text-emerald-200/45'
+                      : 'text-emerald-800/70 hover:bg-emerald-100 hover:text-emerald-950 disabled:text-emerald-700/45'
                   }`}
-                disabled={isClearingIndexedDocuments || isUploading || isStreaming}
-                onClick={() => {
-                  void clearIndexedDocuments();
-                }}
-                title={
-                  isClearingIndexedDocuments
-                    ? 'Removing document context'
-                    : 'Remove imported document context'
-                }
-                type="button"
-              >
-                <X size={14} />
-              </button>
+                  disabled={isUploading || isStreaming}
+                  onClick={() => {
+                    void clearIndexedDocuments();
+                  }}
+                  title="Remove imported document context"
+                  type="button"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          )}
+          {documentContextNotice && (
+            <div
+              className={`mx-auto mb-3 flex max-w-3xl items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
+                isDark
+                  ? 'border-zinc-800 bg-zinc-900/70 text-zinc-300'
+                  : 'border-stone-300 bg-white text-slate-600'
+              }`}
+            >
+              <Check className="mt-0.5 shrink-0" size={14} />
+              <span className="min-w-0">{documentContextNotice}</span>
             </div>
           )}
           {activeProject && (
