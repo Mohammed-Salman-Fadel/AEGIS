@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="AEGIS documentation for setup, CLI usage, engine flow, and project structure."
+    />
+    <title>AEGIS Docs</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="docs-body">
+    <div class="noise-layer" aria-hidden="true"></div>
+    <div class="scroll-progress" aria-hidden="true"></div>
+
+    <nav class="docs-topbar" id="navbar" aria-label="Primary navigation">
+      <a class="docs-brand" href="index.html" aria-label="AEGIS home">
+        <span class="nav-logo-icon" aria-hidden="true"></span>
+        AEGIS Docs
+      </a>
+      <div class="docs-search" aria-label="Documentation search placeholder">
+        <span>Search docs...</span>
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="docs-top-actions">
+        <a href="index.html">Home</a>
+        <a href="contact.html">Contact us</a>
+        <a href="features.html">Features</a>
+      </div>
+    </nav>
+
+    <div class="docs-product-nav" aria-label="Documentation categories">
+      <a class="active" href="docs.html">Get started</a>
+      <a href="features.html#architecture">Architecture</a>
+      <a href="features.html#features">Features</a>
+      <a href="features.html#privacy">Privacy</a>
+      <a href="contact.html">Support</a>
+    </div>
+
+    <main class="docs-app">
+      <aside class="docs-sidebar-modern" id="docsNav" aria-label="Documentation navigation">
+        <div class="docs-sidebar-group">
+          <span>Overview</span>
+          <button class="docs-nav-item active" type="button" data-doc="setup">
+            Setup guide
+          </button>
+          <button class="docs-nav-item" type="button" data-doc="cli">
+            CLI reference
+          </button>
+          <button class="docs-nav-item" type="button" data-doc="engine">
+            Engine flow
+          </button>
+          <button class="docs-nav-item" type="button" data-doc="project">
+            Project layout
+          </button>
+        </div>
+
+        <div class="docs-sidebar-group">
+          <span>Core concepts</span>
+          <a href="features.html#architecture">Runtime architecture</a>
+          <a href="features.html#privacy">Local-first privacy</a>
+          <a href="features.html#features">Feature overview</a>
+        </div>
+
+        <div class="docs-sidebar-group">
+          <span>Development</span>
+          <a href="contact.html">Report feedback</a>
+          <a href="index.html">Back to landing page</a>
+        </div>
+      </aside>
+
+      <article class="docs-content-panel" aria-live="polite">
+        <div class="docs-page-heading">
+          <span class="docs-path" id="docsPath">../docs/setup.md</span>
+          <h1 id="docsTitle">Loading documentation</h1>
+          <p>
+            Read AEGIS setup, CLI, engine, and project documentation directly
+            from the repository Markdown files.
+          </p>
+        </div>
+
+        <div class="docs-overview-grid" aria-label="Documentation quick links">
+          <button class="docs-overview-card" type="button" data-doc="setup">
+            <span>01</span>
+            <strong>Install and run</strong>
+            <small>Prepare dependencies, start RAG, and launch the engine.</small>
+          </button>
+          <button class="docs-overview-card" type="button" data-doc="cli">
+            <span>02</span>
+            <strong>Use the CLI</strong>
+            <small>Sessions, model commands, providers, and personalization.</small>
+          </button>
+          <button class="docs-overview-card" type="button" data-doc="engine">
+            <span>03</span>
+            <strong>Understand routing</strong>
+            <small>How prompts move through engine, RAG, tools, and providers.</small>
+          </button>
+          <button class="docs-overview-card" type="button" data-doc="project">
+            <span>04</span>
+            <strong>Project structure</strong>
+            <small>Directory responsibilities across engine, RAG, UI, CLI, and scripts.</small>
+          </button>
+        </div>
+
+        <div class="markdown-body docs-markdown" id="docsContent">
+          <p>Loading Markdown from the docs folder...</p>
+        </div>
+      </article>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>

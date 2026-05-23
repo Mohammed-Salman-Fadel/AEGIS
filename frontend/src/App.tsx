@@ -152,6 +152,11 @@ interface IngestResponse {
   session?: EngineSession | null;
 }
 
+interface DeleteIndexedDocumentResponse {
+  status: string;
+  deleted_chunks: number;
+}
+
 interface ModelResponse {
   name: string;
   description: string;
@@ -1898,6 +1903,7 @@ export default function App() {
   });
   const [isStreaming, setIsStreaming] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isClearingIndexedDocuments, setIsClearingIndexedDocuments] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [importPhase, setImportPhase] = useState<ImportPhase>('idle');
   const [importFileLabel, setImportFileLabel] = useState('');
@@ -2888,6 +2894,106 @@ export default function App() {
         setImportProgress(0);
         setImportFileLabel('');
       }, 1800);
+    }
+  }
+
+  async function deleteIndexedDocumentFromRag(
+    sessionId: string,
+    document: IndexedDocument,
+  ): Promise<DeleteIndexedDocumentResponse> {
+    const response = await fetch(`${API_BASE}/ingest/document`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        stored_path: document.stored_path,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(
+        body ||
+        `Engine returned HTTP ${response.status} while removing ${document.file_name}.`,
+      );
+    }
+
+    return (await response.json()) as DeleteIndexedDocumentResponse;
+  }
+
+  async function clearIndexedDocuments() {
+    if (!activeSessionId || indexedDocuments.length === 0 || isClearingIndexedDocuments) {
+      return;
+    }
+
+    const sessionId = activeSessionId;
+    const documentsToRemove = [...indexedDocuments];
+
+    setIsClearingIndexedDocuments(true);
+    setError(null);
+    setStatus('Removing document context');
+
+    try {
+      const results = await Promise.allSettled(
+        documentsToRemove.map((document) => deleteIndexedDocumentFromRag(sessionId, document)),
+      );
+      const removedPaths = new Set<string>();
+      const failures: string[] = [];
+      let deletedChunks = 0;
+
+      results.forEach((result, index) => {
+        const document = documentsToRemove[index];
+        if (result.status === 'fulfilled') {
+          removedPaths.add(document.stored_path);
+          deletedChunks += Math.max(0, Number(result.value.deleted_chunks ?? 0));
+          return;
+        }
+
+        failures.push(
+          result.reason instanceof Error
+            ? result.reason.message
+            : `Could not remove ${document.file_name}.`,
+        );
+      });
+
+      if (removedPaths.size > 0) {
+        setIndexedDocumentsBySession((current) => {
+          const remainingDocuments = (current[sessionId] ?? []).filter(
+            (document) => !removedPaths.has(document.stored_path),
+          );
+          const next = { ...current };
+
+          if (remainingDocuments.length > 0) {
+            next[sessionId] = remainingDocuments;
+          } else {
+            delete next[sessionId];
+          }
+
+          return next;
+        });
+      }
+
+      setImportPhase('idle');
+      setImportProgress(0);
+      setImportFileLabel('');
+
+      if (failures.length > 0) {
+        setError(
+          `Could not remove ${failures.length} imported document${failures.length === 1 ? '' : 's'} from RAG memory. ${failures[0]}`,
+        );
+        setStatus('Document removal incomplete');
+        return;
+      }
+
+      setStatus(
+        deletedChunks > 0
+          ? `Removed ${deletedChunks} document chunks`
+          : 'Removed document context',
+      );
+    } finally {
+      setIsClearingIndexedDocuments(false);
     }
   }
 
@@ -4398,16 +4504,36 @@ export default function App() {
           )}
           {indexedDocuments.length > 0 && (
             <div
-              className={`mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border px-3 py-2 text-xs ${isDark
+              className={`group relative mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border py-2 pl-3 pr-9 text-xs ${isDark
                 ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
                 : 'border-emerald-200 bg-emerald-50 text-emerald-800'
                 }`}
             >
-              <Upload size={14} />
-              <span className="truncate">
+              <Upload className="shrink-0" size={14} />
+              <span className="min-w-0 truncate">
                 Document context active: {indexedDocumentLabel} indexed into {indexedChunkCount}{' '}
                 chunks.
               </span>
+              <button
+                aria-label="Remove imported document context"
+                className={`absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-not-allowed ${isClearingIndexedDocuments ? 'opacity-100' : ''
+                  } ${isDark
+                    ? 'text-emerald-100/80 hover:bg-emerald-900/40 hover:text-emerald-50 disabled:text-emerald-200/45'
+                    : 'text-emerald-800/70 hover:bg-emerald-100 hover:text-emerald-950 disabled:text-emerald-700/45'
+                  }`}
+                disabled={isClearingIndexedDocuments || isUploading || isStreaming}
+                onClick={() => {
+                  void clearIndexedDocuments();
+                }}
+                title={
+                  isClearingIndexedDocuments
+                    ? 'Removing document context'
+                    : 'Remove imported document context'
+                }
+                type="button"
+              >
+                <X size={14} />
+              </button>
             </div>
           )}
           {activeProject && (
