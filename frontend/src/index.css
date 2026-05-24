@@ -44,6 +44,18 @@
   }
 }
 
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .thinking-dot {
   width: 0.32rem;
   height: 0.32rem;
@@ -94,4 +106,209 @@
 
 .sessions-scroll:hover::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.38);
+}
+
+.settings-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.18) transparent;
+  scrollbar-gutter: stable;
+}
+
+.settings-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.settings-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  transition: background 160ms ease;
+}
+
+.settings-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.28);
+}
+
+.aegis-shell {
+  position: relative;
+  isolation: isolate;
+  --aegis-accent-rgb: 16, 185, 129;
+  --aegis-accent-500: #34d399;
+  --aegis-accent-600: #10b981;
+  --aegis-accent-700: #059669;
+}
+
+.aegis-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 16% 12%, rgba(var(--aegis-accent-rgb), 0.2), transparent 28%),
+    radial-gradient(circle at 84% 18%, rgba(var(--aegis-accent-rgb), 0.12), transparent 24%),
+    radial-gradient(circle at 50% 100%, rgba(var(--aegis-accent-rgb), 0.1), transparent 34%);
+}
+
+.aegis-shell.aegis-mode-dark::before {
+  opacity: 0.95;
+}
+
+.aegis-shell.aegis-mode-light::before {
+  opacity: 0.72;
+}
+
+.aegis-shell > nav,
+.aegis-shell > aside,
+.aegis-shell > main {
+  position: relative;
+  z-index: 1;
+}
+
+.aegis-theme-default {
+  --aegis-accent-rgb: 16, 185, 129;
+  --aegis-accent-500: #34d399;
+  --aegis-accent-600: #10b981;
+  --aegis-accent-700: #059669;
+}
+
+.aegis-theme-terminal {
+  --aegis-accent-rgb: 74, 222, 128;
+  --aegis-accent-500: #86efac;
+  --aegis-accent-600: #4ade80;
+  --aegis-accent-700: #22c55e;
+}
+
+.aegis-theme-ocean {
+  --aegis-accent-rgb: 56, 189, 248;
+  --aegis-accent-500: #7dd3fc;
+  --aegis-accent-600: #38bdf8;
+  --aegis-accent-700: #0284c7;
+}
+
+.aegis-theme-ember {
+  --aegis-accent-rgb: 251, 146, 60;
+  --aegis-accent-500: #fdba74;
+  --aegis-accent-600: #fb923c;
+  --aegis-accent-700: #c2410c;
+}
+
+.aegis-theme-rose {
+  --aegis-accent-rgb: 244, 114, 182;
+  --aegis-accent-500: #f9a8d4;
+  --aegis-accent-600: #f472b6;
+  --aegis-accent-700: #db2777;
+}
+
+.aegis-theme-slate {
+  --aegis-accent-rgb: 148, 163, 184;
+  --aegis-accent-500: #cbd5e1;
+  --aegis-accent-600: #94a3b8;
+  --aegis-accent-700: #475569;
+}
+
+.aegis-wordmark {
+  color: #050505;
+  text-shadow: 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.aegis-accent-solid {
+  background: var(--aegis-accent-600);
+  box-shadow: 0 10px 24px rgba(var(--aegis-accent-rgb), 0.22);
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.aegis-accent-solid:hover:not(:disabled) {
+  background: var(--aegis-accent-500);
+  box-shadow: 0 12px 28px rgba(var(--aegis-accent-rgb), 0.26);
+}
+
+.aegis-accent-chip-active {
+  background: var(--aegis-accent-600);
+  box-shadow: 0 8px 22px rgba(var(--aegis-accent-rgb), 0.2);
+}
+
+.aegis-accent-subtle {
+  border-color: rgba(var(--aegis-accent-rgb), 0.42) !important;
+  box-shadow: 0 8px 24px rgba(var(--aegis-accent-rgb), 0.12);
+}
+
+.aegis-shell.aegis-mode-dark .aegis-accent-subtle {
+  background: rgba(var(--aegis-accent-rgb), 0.14);
+  color: var(--aegis-accent-500);
+}
+
+.aegis-shell.aegis-mode-light .aegis-accent-subtle {
+  background: rgba(var(--aegis-accent-rgb), 0.1);
+  color: var(--aegis-accent-700);
+}
+
+.aegis-accent-ghost {
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.aegis-shell.aegis-mode-dark .aegis-accent-ghost:hover:not(:disabled) {
+  border-color: rgba(var(--aegis-accent-rgb), 0.3);
+  background: rgba(var(--aegis-accent-rgb), 0.1);
+  color: var(--aegis-accent-500);
+  box-shadow: 0 8px 24px rgba(var(--aegis-accent-rgb), 0.1);
+}
+
+.aegis-shell.aegis-mode-light .aegis-accent-ghost:hover:not(:disabled) {
+  border-color: rgba(var(--aegis-accent-rgb), 0.34);
+  background: rgba(var(--aegis-accent-rgb), 0.08);
+  color: var(--aegis-accent-700);
+  box-shadow: 0 8px 22px rgba(var(--aegis-accent-rgb), 0.08);
+}
+
+.aegis-accent-selected {
+  border-color: rgba(var(--aegis-accent-rgb), 0.82) !important;
+  box-shadow: 0 0 0 1px rgba(var(--aegis-accent-rgb), 0.16);
+}
+
+.aegis-shell.aegis-mode-dark .aegis-accent-selected {
+  background: rgba(var(--aegis-accent-rgb), 0.16);
+  color: #f8fafc;
+}
+
+.aegis-shell.aegis-mode-light .aegis-accent-selected {
+  background: rgba(var(--aegis-accent-rgb), 0.1);
+  color: #0f172a;
+}
+
+.aegis-modal-backdrop {
+  animation: modalIn 180ms ease-out;
+  opacity: 1;
+}
+
+.aegis-modal-backdrop-out {
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+}
+
+.aegis-modal-panel {
+  animation: modalIn 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.aegis-modal-panel-out {
+  opacity: 0;
+  transform: translateY(18px) scale(0.985);
+  transform-origin: center;
+  transition:
+    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
