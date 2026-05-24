@@ -41,6 +41,7 @@ import { useAudioRecorder } from './hooks/useAudioRecorder';
 
 type Role = 'user' | 'assistant';
 type ThemeMode = 'dark' | 'light';
+type AppearanceTheme = 'default' | 'terminal' | 'ocean' | 'ember' | 'rose' | 'slate';
 type MarkdownHeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 type MarkdownBlock =
   | { type: 'heading'; level: MarkdownHeadingLevel; text: string }
@@ -50,7 +51,7 @@ type MarkdownBlock =
   | { type: 'code'; text: string; language: string };
 
 type ChatMode = 'general' | 'coder' | 'academic';
-type SettingsTab = 'general' | 'inference' | 'models' | 'personal' | 'voice' | 'rag';
+type SettingsTab = 'general' | 'inference' | 'models' | 'personalize';
 type ResponseStyle = 'default' | 'friendly' | 'concise' | 'elaborate' | 'technical';
 type ModelDownloadState = 'idle' | 'downloading' | 'paused';
 
@@ -162,6 +163,11 @@ interface IngestResponse {
   session?: EngineSession | null;
 }
 
+interface DeleteIndexedDocumentResponse {
+  status: string;
+  deleted_chunks: number;
+}
+
 interface ModelResponse {
   name: string;
   description: string;
@@ -257,6 +263,7 @@ type ImportPhase = 'idle' | 'uploading' | 'indexing' | 'complete' | 'error';
 
 const API_BASE = '/api';
 const THEME_STORAGE_KEY = 'aegis-ui-theme';
+const APPEARANCE_THEME_STORAGE_KEY = 'aegis-ui-appearance-theme';
 const INDEXED_DOCUMENTS_STORAGE_KEY = 'aegis-indexed-documents-by-session';
 const PINNED_SESSIONS_STORAGE_KEY = 'aegis-pinned-session-ids';
 const RESPONSE_STYLE_STORAGE_KEY = 'aegis-response-style';
@@ -334,6 +341,50 @@ const RESPONSE_STYLE_OPTIONS: Array<{ value: ResponseStyle; label: string; descr
     value: 'technical',
     label: 'Technical',
     description: 'Precise engineering-oriented responses with implementation detail.',
+  },
+];
+
+const APPEARANCE_THEME_OPTIONS: Array<{
+  value: AppearanceTheme;
+  label: string;
+  description: string;
+  preview: string;
+}> = [
+  {
+    value: 'default',
+    label: 'Default',
+    description: 'The current AEGIS emerald look with the clean baseline palette.',
+    preview: 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
+  },
+  {
+    value: 'terminal',
+    label: 'Terminal',
+    description: 'Neon green accents with a sharper operator-console feel.',
+    preview: 'linear-gradient(135deg, #84cc16 0%, #14532d 100%)',
+  },
+  {
+    value: 'ocean',
+    label: 'Ocean',
+    description: 'Cool cyan and deep blue accents for a crisp analytical feel.',
+    preview: 'linear-gradient(135deg, #38bdf8 0%, #1d4ed8 100%)',
+  },
+  {
+    value: 'ember',
+    label: 'Ember',
+    description: 'Copper-orange highlights with a more energetic operations tone.',
+    preview: 'linear-gradient(135deg, #fb923c 0%, #b45309 100%)',
+  },
+  {
+    value: 'rose',
+    label: 'Rose',
+    description: 'Soft magenta accents for a warmer, more editorial presentation.',
+    preview: 'linear-gradient(135deg, #f472b6 0%, #be185d 100%)',
+  },
+  {
+    value: 'slate',
+    label: 'Slate',
+    description: 'Subdued steel-blue accents for a quieter, more minimal workspace.',
+    preview: 'linear-gradient(135deg, #94a3b8 0%, #334155 100%)',
   },
 ];
 
@@ -1092,6 +1143,17 @@ function loadStoredResponseStyle(): ResponseStyle {
   const storedStyle = window.localStorage.getItem(RESPONSE_STYLE_STORAGE_KEY);
   return RESPONSE_STYLE_OPTIONS.some((option) => option.value === storedStyle)
     ? (storedStyle as ResponseStyle)
+    : 'default';
+}
+
+function loadStoredAppearanceTheme(): AppearanceTheme {
+  if (typeof window === 'undefined') {
+    return 'default';
+  }
+
+  const storedTheme = window.localStorage.getItem(APPEARANCE_THEME_STORAGE_KEY);
+  return APPEARANCE_THEME_OPTIONS.some((option) => option.value === storedTheme)
+    ? (storedTheme as AppearanceTheme)
     : 'default';
 }
 
@@ -1981,8 +2043,13 @@ export default function App() {
     const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
     return storedTheme === 'light' ? 'light' : 'dark';
   });
+  const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(
+    loadStoredAppearanceTheme,
+  );
   const [isStreaming, setIsStreaming] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isClearingIndexedDocuments, setIsClearingIndexedDocuments] = useState(false);
+  const [documentContextNotice, setDocumentContextNotice] = useState<string | null>(null);
   const [importProgress, setImportProgress] = useState(0);
   const [importPhase, setImportPhase] = useState<ImportPhase>('idle');
   const [importFileLabel, setImportFileLabel] = useState('');
@@ -2023,6 +2090,7 @@ export default function App() {
   const [dismissedResourceWarning, setDismissedResourceWarning] = useState<string | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsClosing, setSettingsClosing] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(false);
@@ -2085,9 +2153,16 @@ export default function App() {
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const modelDownloadAbortRef = useRef<AbortController | null>(null);
   const modelDownloadAbortReasonRef = useRef<'pause' | 'cancel' | null>(null);
+  const settingsCloseTimeoutRef = useRef<number | null>(null);
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   const streamingMessagesBySessionRef = useRef<Record<string, Message[]>>({});
   const isDark = theme === 'dark';
+  const activeAppearanceTheme = useMemo(
+    () =>
+      APPEARANCE_THEME_OPTIONS.find((option) => option.value === appearanceTheme) ??
+      APPEARANCE_THEME_OPTIONS[0],
+    [appearanceTheme],
+  );
   const resourceWarning =
     systemStats.cpu > 80 || systemStats.ram > 80
       ? `${[
@@ -2516,6 +2591,14 @@ export default function App() {
       return;
     }
 
+    window.localStorage.setItem(APPEARANCE_THEME_STORAGE_KEY, appearanceTheme);
+  }, [appearanceTheme]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
     window.localStorage.setItem(RESPONSE_STYLE_STORAGE_KEY, responseStyle);
   }, [responseStyle]);
 
@@ -2596,6 +2679,28 @@ export default function App() {
       fitTextareaToContent(composerTextareaRef.current);
     }
   }, [input]);
+
+  useEffect(() => {
+    return () => {
+      if (settingsCloseTimeoutRef.current !== null) {
+        window.clearTimeout(settingsCloseTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!documentContextNotice) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setDocumentContextNotice(null);
+    }, 7000);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [documentContextNotice]);
 
   async function handleSessionSelect(sessionId: string) {
     if (deletingSessionIds.includes(sessionId)) {
@@ -3050,6 +3155,108 @@ export default function App() {
     }
   }
 
+  async function deleteIndexedDocumentFromRag(
+    sessionId: string,
+    document: IndexedDocument,
+  ): Promise<DeleteIndexedDocumentResponse> {
+    const response = await fetch(`${API_BASE}/ingest/document`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        stored_path: document.stored_path,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(
+        body ||
+        `Engine returned HTTP ${response.status} while removing ${document.file_name}.`,
+      );
+    }
+
+    return (await response.json()) as DeleteIndexedDocumentResponse;
+  }
+
+  async function clearIndexedDocuments() {
+    if (!activeSessionId || indexedDocuments.length === 0 || isClearingIndexedDocuments) {
+      return;
+    }
+
+    const sessionId = activeSessionId;
+    const documentsToRemove = [...indexedDocuments];
+
+    setIsClearingIndexedDocuments(true);
+    setDocumentContextNotice(null);
+    setError(null);
+    setStatus('Removing document context');
+
+    try {
+      const results = await Promise.allSettled(
+        documentsToRemove.map((document) => deleteIndexedDocumentFromRag(sessionId, document)),
+      );
+      const removedPaths = new Set<string>();
+      const failures: string[] = [];
+      let deletedChunks = 0;
+
+      results.forEach((result, index) => {
+        const document = documentsToRemove[index];
+        if (result.status === 'fulfilled') {
+          removedPaths.add(document.stored_path);
+          deletedChunks += Math.max(0, Number(result.value.deleted_chunks ?? 0));
+          return;
+        }
+
+        failures.push(
+          result.reason instanceof Error
+            ? result.reason.message
+            : `Could not remove ${document.file_name}.`,
+        );
+      });
+
+      if (removedPaths.size > 0) {
+        setIndexedDocumentsBySession((current) => {
+          const remainingDocuments = (current[sessionId] ?? []).filter(
+            (document) => !removedPaths.has(document.stored_path),
+          );
+          const next = { ...current };
+
+          if (remainingDocuments.length > 0) {
+            next[sessionId] = remainingDocuments;
+          } else {
+            delete next[sessionId];
+          }
+
+          return next;
+        });
+      }
+
+      setImportPhase('idle');
+      setImportProgress(0);
+      setImportFileLabel('');
+
+      if (failures.length > 0) {
+        setError(
+          `Could not remove ${failures.length} imported document${failures.length === 1 ? '' : 's'} from RAG memory. ${failures[0]}`,
+        );
+        setStatus('Document removal incomplete');
+        return;
+      }
+
+      setStatus(
+        deletedChunks > 0
+          ? `Removed ${deletedChunks} document chunks`
+          : 'Removed document context',
+      );
+      setDocumentContextNotice('Imported document cleared.');
+    } finally {
+      setIsClearingIndexedDocuments(false);
+    }
+  }
+
   async function loadOutlookCalendars() {
     setLoadingOutlookCalendars(true);
 
@@ -3229,9 +3436,30 @@ export default function App() {
   }
 
   function openSettings(tab: SettingsTab = 'general') {
+    if (settingsCloseTimeoutRef.current !== null) {
+      window.clearTimeout(settingsCloseTimeoutRef.current);
+      settingsCloseTimeoutRef.current = null;
+    }
     setSettingsTab(tab);
+    setSettingsClosing(false);
     setSettingsOpen(true);
     setSettingsMessage(null);
+  }
+
+  function closeSettings() {
+    if (!settingsOpen || settingsClosing) {
+      return;
+    }
+
+    setSettingsClosing(true);
+    if (settingsCloseTimeoutRef.current !== null) {
+      window.clearTimeout(settingsCloseTimeoutRef.current);
+    }
+    settingsCloseTimeoutRef.current = window.setTimeout(() => {
+      setSettingsOpen(false);
+      setSettingsClosing(false);
+      settingsCloseTimeoutRef.current = null;
+    }, 200);
   }
 
   async function selectProvider(providerName: string) {
@@ -3785,7 +4013,7 @@ export default function App() {
 
   return (
     <div
-      className={`flex h-screen overflow-hidden ${isDark ? 'bg-zinc-950 text-zinc-100' : 'bg-stone-100 text-slate-900'
+      className={`aegis-shell aegis-mode-${theme} aegis-theme-${appearanceTheme} flex h-screen overflow-hidden ${isDark ? 'bg-zinc-950 text-zinc-100' : 'bg-stone-100 text-slate-900'
         }`}
       onClick={() => setSessionMenuOpenId(null)}
     >
@@ -3827,10 +4055,10 @@ export default function App() {
         </button>
         <button
           aria-label="Open settings"
-          className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${settingsOpen
+          className={`aegis-accent-ghost mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent transition ${settingsOpen
               ? isDark
-                ? 'bg-zinc-900 text-emerald-300'
-                : 'bg-stone-200 text-emerald-700'
+                ? 'aegis-accent-subtle'
+                : 'aegis-accent-subtle'
               : isDark
                 ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
                 : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
@@ -3860,7 +4088,7 @@ export default function App() {
           </div>
 
           <button
-            className="relative mb-4 flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold tracking-[0.14em] text-white hover:bg-emerald-500 disabled:opacity-60"
+            className="aegis-accent-solid relative mb-4 flex items-center justify-center rounded-lg px-3 py-2 text-xs font-semibold tracking-[0.14em] text-white disabled:opacity-60"
             disabled={isStreaming}
             onClick={handleNewSession}
             type="button"
@@ -4200,7 +4428,7 @@ export default function App() {
           <div className="flex items-center gap-1 rounded-xl border border-zinc-800/50 bg-zinc-900/30 p-1 shadow-inner backdrop-blur-sm">
             <button
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'general'
-                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                ? 'aegis-accent-chip-active text-white'
                 : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                 }`}
               onClick={() => setChatMode('general')}
@@ -4211,7 +4439,7 @@ export default function App() {
             </button>
             <button
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'coder'
-                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                ? 'aegis-accent-chip-active text-white'
                 : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                 }`}
               onClick={() => setChatMode('coder')}
@@ -4222,7 +4450,7 @@ export default function App() {
             </button>
             <button
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${chatMode === 'academic'
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20'
+                  ? 'aegis-accent-chip-active text-white'
                   : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                 }`}
               onClick={() => setChatMode('academic')}
@@ -4235,8 +4463,8 @@ export default function App() {
 
           <div className="flex items-center gap-3">
             <button
-              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${isMetricsOpen
-                ? 'border-emerald-600 bg-emerald-950/30 text-emerald-400'
+              className={`aegis-accent-ghost inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${isMetricsOpen
+                ? 'aegis-accent-subtle'
                 : isDark
                   ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
                   : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'
@@ -4618,16 +4846,52 @@ export default function App() {
           )}
           {indexedDocuments.length > 0 && (
             <div
-              className={`mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border px-3 py-2 text-xs ${isDark
-                ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                }`}
+              aria-busy={isClearingIndexedDocuments}
+              className={`group relative mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg border py-2 pl-3 pr-9 text-xs transition-all duration-[1800ms] ease-out ${
+                isClearingIndexedDocuments
+                  ? isDark
+                    ? 'border-red-900/70 bg-red-950/30 text-red-200 opacity-35'
+                    : 'border-red-300 bg-red-50 text-red-700 opacity-35'
+                  : isDark
+                    ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200 opacity-100'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-800 opacity-100'
+              }`}
             >
-              <Upload size={14} />
-              <span className="truncate">
+              <Upload className="shrink-0" size={14} />
+              <span className="min-w-0 truncate">
                 Document context active: {indexedDocumentLabel} indexed into {indexedChunkCount}{' '}
                 chunks.
               </span>
+              {!isClearingIndexedDocuments && (
+                <button
+                  aria-label="Remove imported document context"
+                  className={`absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-not-allowed ${
+                    isDark
+                      ? 'text-emerald-100/80 hover:bg-emerald-900/40 hover:text-emerald-50 disabled:text-emerald-200/45'
+                      : 'text-emerald-800/70 hover:bg-emerald-100 hover:text-emerald-950 disabled:text-emerald-700/45'
+                  }`}
+                  disabled={isUploading || isStreaming}
+                  onClick={() => {
+                    void clearIndexedDocuments();
+                  }}
+                  title="Remove imported document context"
+                  type="button"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          )}
+          {documentContextNotice && (
+            <div
+              className={`mx-auto mb-3 flex max-w-3xl items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
+                isDark
+                  ? 'border-zinc-800 bg-zinc-900/70 text-zinc-300'
+                  : 'border-stone-300 bg-white text-slate-600'
+              }`}
+            >
+              <Check className="mt-0.5 shrink-0" size={14} />
+              <span className="min-w-0">{documentContextNotice}</span>
             </div>
           )}
           {activeProject && (
@@ -4722,14 +4986,12 @@ export default function App() {
                 <div className="relative">
                   <button
                     aria-expanded={toolsOpen}
-                    className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition-all duration-200 ${isStreaming ? 'cursor-not-allowed opacity-60' : ''
+                    className={`aegis-accent-ghost inline-flex items-center gap-2 rounded-lg border px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition-all duration-200 ${isStreaming ? 'cursor-not-allowed opacity-60' : ''
                       } ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${toolsOpen
-                        ? isDark
-                          ? 'border border-emerald-500/40 bg-zinc-800 text-emerald-200 shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
-                          : 'border border-emerald-400/70 bg-emerald-50 text-emerald-800 shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
+                        ? 'aegis-accent-subtle'
                         : isDark
-                          ? 'border border-transparent text-zinc-500 hover:border-emerald-500/30 hover:bg-zinc-800 hover:text-emerald-200 hover:shadow-[0_8px_24px_rgba(16,185,129,0.10)]'
-                          : 'border border-transparent text-slate-500 hover:border-emerald-400/60 hover:bg-emerald-50 hover:text-emerald-800 hover:shadow-[0_8px_22px_rgba(16,185,129,0.14)]'
+                          ? 'border-transparent text-zinc-500 hover:bg-zinc-800'
+                          : 'border-transparent text-slate-500 hover:bg-stone-100'
                       }`}
                     disabled={isStreaming}
                     onClick={() => setToolsOpen((current) => !current)}
@@ -4795,7 +5057,7 @@ export default function App() {
                   </span>
                   <button
                     className={`inline-flex h-9 w-9 items-center justify-center rounded-lg transition-all duration-200 ${isVoiceMode
-                        ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20'
+                        ? 'aegis-accent-chip-active text-white'
                         : isDark
                           ? 'text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400'
                           : 'text-slate-500 hover:bg-stone-100 hover:text-emerald-600'
@@ -4807,7 +5069,7 @@ export default function App() {
                     <Mic size={19} />
                   </button>
                   <button
-                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-emerald-500 disabled:opacity-60"
+                    className="aegis-accent-solid inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white disabled:opacity-60"
                     disabled={isStreaming || !input.trim() || isUploading}
                     type="submit"
                   >
@@ -5009,11 +5271,15 @@ export default function App() {
 
       {settingsOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setSettingsOpen(false)}
+          className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 ${
+            settingsClosing ? 'aegis-modal-backdrop-out' : 'aegis-modal-backdrop'
+          }`}
+          onClick={closeSettings}
         >
           <div
             className={`flex h-[64vh] min-h-[420px] w-full max-w-4xl overflow-hidden rounded-2xl border shadow-2xl ${
+              settingsClosing ? 'aegis-modal-panel-out' : 'aegis-modal-panel'
+            } ${
               isDark
                 ? 'border-zinc-800 bg-zinc-950 text-zinc-100'
                 : 'border-stone-300 bg-white text-slate-900'
@@ -5040,7 +5306,7 @@ export default function App() {
                 <button
                   className={`mb-1 flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition ${
                     settingsTab === value
-                      ? 'bg-emerald-600 text-white'
+                      ? 'aegis-accent-solid text-white'
                       : isDark
                         ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
                         : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'
@@ -5071,7 +5337,7 @@ export default function App() {
                   className={`rounded-md p-1 transition ${
                     isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'
                   }`}
-                  onClick={() => setSettingsOpen(false)}
+                  onClick={closeSettings}
                   type="button"
                 >
                   <X size={18} />
@@ -5096,7 +5362,7 @@ export default function App() {
                 </div>
               )}
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+              <div className="settings-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-5">
                 {settingsTab === 'general' && (
                   <div className="space-y-5">
                     <div>
@@ -5131,15 +5397,83 @@ export default function App() {
                     </div>
 
                     <div>
+                      <div className="mb-2 text-sm font-semibold">Appearance</div>
+                      <div className="mb-3 flex flex-wrap gap-2">
+                        {(['dark', 'light'] as ThemeMode[]).map((mode) => (
+                          <button
+                            className={`rounded-lg border px-3 py-2 text-sm transition ${
+                              theme === mode
+                                ? 'aegis-accent-selected'
+                                : isDark
+                                  ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900'
+                                  : 'border-stone-300 text-slate-700 hover:bg-stone-100'
+                            }`}
+                            key={mode}
+                            onClick={() => setTheme(mode)}
+                            type="button"
+                          >
+                            {mode === 'dark' ? 'Dark mode' : 'Light mode'}
+                          </button>
+                        ))}
+                      </div>
+                      <div className={`mb-3 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                        Pick a base mode and a color profile for the overall interface.
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {APPEARANCE_THEME_OPTIONS.map((option) => (
+                          <button
+                            className={`rounded-xl border p-3 text-left transition ${
+                              appearanceTheme === option.value
+                                ? 'aegis-accent-selected shadow-lg'
+                                : isDark
+                                  ? 'border-zinc-800 hover:bg-zinc-900'
+                                  : 'border-stone-300 hover:bg-stone-50'
+                            }`}
+                            key={option.value}
+                            onClick={() => setAppearanceTheme(option.value)}
+                            type="button"
+                          >
+                            <span
+                              className={`mb-3 block h-14 rounded-lg border ${
+                                isDark ? 'border-white/10' : 'border-black/5'
+                              }`}
+                              style={{ background: option.preview }}
+                            />
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-sm font-semibold">{option.label}</div>
+                              {appearanceTheme === option.value && (
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] ${
+                                    isDark ? 'bg-white/10 text-zinc-100' : 'bg-black/5 text-slate-700'
+                                  }`}
+                                >
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <div
+                              className={`mt-1 text-xs leading-5 ${
+                                isDark ? 'text-zinc-400' : 'text-slate-500'
+                              }`}
+                            >
+                              {option.description}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                      <div className={`mt-2 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                        Current appearance: {activeAppearanceTheme.label}.
+                      </div>
+                    </div>
+
+                    <div>
                       <div className="mb-2 text-sm font-semibold">Response Style</div>
                       <div className="grid gap-2 sm:grid-cols-2">
                         {RESPONSE_STYLE_OPTIONS.map((option) => (
                           <button
                             className={`rounded-xl border p-3 text-left transition ${
                               responseStyle === option.value
-                                ? isDark
-                                  ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100'
-                                  : 'border-emerald-500 bg-emerald-50 text-emerald-900'
+                                ? 'aegis-accent-selected'
                                 : isDark
                                   ? 'border-zinc-800 hover:bg-zinc-900'
                                   : 'border-stone-300 hover:bg-stone-50'
@@ -5390,7 +5724,7 @@ export default function App() {
                       </div>
 
                       <div
-                        className={`max-h-56 space-y-2 overflow-y-auto rounded-xl border p-2 ${
+                        className={`settings-scroll max-h-56 space-y-2 overflow-y-auto rounded-xl border p-2 ${
                           isDark
                             ? 'border-zinc-800 bg-zinc-950/40'
                             : 'border-stone-300 bg-stone-50'
@@ -5402,7 +5736,7 @@ export default function App() {
                           </div>
                         ) : (
                           filteredCatalogModels.map((model) => (
-                            <button
+                            <div
                               className={`flex w-full items-start justify-between gap-3 rounded-lg p-3 text-left transition ${
                                 modelSearch.trim() === model.name
                                   ? isDark
@@ -5413,8 +5747,6 @@ export default function App() {
                                     : 'hover:bg-white'
                               }`}
                               key={model.name}
-                              onClick={() => setModelSearch(model.name)}
-                              type="button"
                             >
                               <span className="min-w-0">
                                 <span className="block truncate font-mono text-sm">{model.name}</span>
@@ -5436,8 +5768,22 @@ export default function App() {
                                   ))}
                                 </span>
                               </span>
-                              <Download className="mt-0.5 shrink-0 opacity-60" size={15} />
-                            </button>
+                              <button
+                                aria-label={`Download ${model.name}`}
+                                className={`aegis-accent-ghost mt-0.5 inline-flex shrink-0 items-center justify-center rounded-md border border-transparent p-2 transition ${
+                                  modelDownloadState === 'downloading'
+                                    ? 'cursor-not-allowed opacity-45'
+                                    : isDark
+                                      ? 'text-zinc-400'
+                                      : 'text-slate-500'
+                                }`}
+                                disabled={modelDownloadState === 'downloading'}
+                                onClick={() => void downloadOllamaModel(model.name)}
+                                type="button"
+                              >
+                                <Download size={15} />
+                              </button>
+                            </div>
                           ))
                         )}
                       </div>
@@ -5536,7 +5882,7 @@ export default function App() {
                   </div>
                 )}
 
-                {settingsTab === 'personal' && (
+                {settingsTab === 'personalize' && (
                   <div className="space-y-3">
                     <div>
                       <div className="text-sm font-semibold">Local User Profile</div>

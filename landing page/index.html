@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="AEGIS is a privacy-first local AI orchestration platform for local models, RAG, project context, and tool-driven workflows."
+    />
+    <title>AEGIS - Local AI, Yours Alone</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="noise-layer" aria-hidden="true"></div>
+    <div class="scroll-progress" aria-hidden="true"></div>
+
+    <nav class="navbar" id="navbar" aria-label="Primary navigation">
+      <a class="nav-logo" href="#top" aria-label="AEGIS landing page">
+        <span class="nav-logo-icon" aria-hidden="true"></span>
+        AEGIS
+      </a>
+      <div class="nav-links">
+        <a href="docs.html">Docs</a>
+        <a href="contact.html">Contact us</a>
+        <a href="features.html">Features</a>
+      </div>
+    </nav>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-glow" aria-hidden="true"></div>
+        <div class="hero-grid" aria-hidden="true"></div>
+        <div class="hero-ribbon" aria-hidden="true"></div>
+        <div class="glass-wing glass-wing-left" aria-hidden="true"></div>
+        <div class="glass-wing glass-wing-right" aria-hidden="true"></div>
+
+        <div class="hero-inner">
+          <p class="hero-label">Private localhost AI orchestration</p>
+          <h1 class="hero-title">
+            AEGIS
+            <span>Your local assistant.</span>
+          </h1>
+          <p class="hero-subtitle">
+            AEGIS brings local models, private memory, document retrieval,
+            workflow tools, and a clean CLI and web interface into one system,
+            helping users work with their own data securely, efficiently, and
+            fully under their control.
+          </p>
+
+          <div class="hero-actions" id="download">
+            <button class="btn-download" type="button" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M12 15V3" />
+              </svg>
+              Download installer binary
+            </button>
+            <a class="btn-secondary" href="features.html#architecture"
+              >Explore the stack</a
+            >
+          </div>
+
+          <div class="hero-meta" aria-label="AEGIS quick facts">
+            <div class="meta-item">
+              <span class="meta-value accent">127.0.0.1</span>
+              <span class="meta-label">Runtime boundary</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-value">Rust</span>
+              <span class="meta-label">Engine core</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-value">Python</span>
+              <span class="meta-label">RAG service</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-value">CLI + UI</span>
+              <span class="meta-label">Interfaces</span>
+            </div>
+          </div>
+        </div>
+
+        <aside
+          class="hero-terminal"
+          data-tilt
+          aria-label="AEGIS terminal preview"
+        >
+          <div class="terminal-bar">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot amber"></span>
+            <span class="terminal-dot green"></span>
+            <span class="terminal-title">aegis-shell</span>
+          </div>
+          <div class="terminal-body">
+            <div class="t-prompt">aegis open</div>
+            <div class="t-output">starting RAG on 127.0.0.1:8000</div>
+            <div class="t-output">starting engine on 127.0.0.1:8080</div>
+            <div class="t-success">runtime stack ready</div>
+            <br />
+            <div class="t-prompt">model switch llama3.2:3b</div>
+            <div class="t-output">warming requested model...</div>
+            <div class="t-success">model is active</div>
+            <br />
+            <div class="t-prompt">import project ./AEGIS</div>
+            <div class="t-output">
+              project context attached<span class="t-cursor"></span>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="principles reveal" aria-label="AEGIS principles">
+        <span>Local-first</span>
+        <span>Session-aware RAG</span>
+        <span>Provider switching</span>
+        <span>User-approved edits</span>
+      </section>
+
+      <section class="features section-pad" id="features">
+        <div class="section-intro reveal">
+          <p class="section-label">Core capabilities</p>
+          <h2 class="section-title">
+            Designed around what AEGIS actually does.
+          </h2>
+          <p class="section-body">
+            The system is not just a chat box. It is a local orchestration layer
+            that keeps session state, model control, retrieval, documents,
+            projects, and tools moving through the same backend contract.
+          </p>
+        </div>
+
+        <div class="features-grid">
+          <article class="feature-card reveal">
+            <span class="feature-num">01</span>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="14" rx="2" />
+                <path d="M8 21h8M12 18v3" />
+              </svg>
+            </div>
+            <h3 class="feature-title">Local inference providers</h3>
+            <p class="feature-desc">
+              Route generation through Ollama or LM Studio while keeping
+              provider selection, model listing, warmup, and switching behind
+              the engine.
+            </p>
+            <span class="feature-tag">Ollama / LM Studio</span>
+          </article>
+
+          <article class="feature-card reveal">
+            <span class="feature-num">02</span>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+                />
+                <path d="M14 2v6h6" />
+                <path d="M8 13h8M8 17h6" />
+              </svg>
+            </div>
+            <h3 class="feature-title">Document-grounded RAG</h3>
+            <p class="feature-desc">
+              Imported documents are indexed by the Python RAG service and
+              scoped to the active conversation so context does not leak across
+              sessions.
+            </p>
+            <span class="feature-tag">PDF / TXT / Chroma</span>
+          </article>
+
+          <article class="feature-card reveal">
+            <span class="feature-num">03</span>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M3 7h7l2 2h9v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                <path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h4" />
+              </svg>
+            </div>
+            <h3 class="feature-title">Coding project context</h3>
+            <p class="feature-desc">
+              Attach a local project folder, summarize supported files, and
+              prepare patch-style code changes only after the user grants edit
+              approval.
+            </p>
+            <span class="feature-tag">Project mode / patches</span>
+          </article>
+
+          <article class="feature-card reveal">
+            <span class="feature-num">04</span>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M4 17l6-6-6-6" />
+                <path d="M12 19h8" />
+              </svg>
+            </div>
+            <h3 class="feature-title">CLI that feels alive</h3>
+            <p class="feature-desc">
+              Use sessions, slash-style tools, model commands, status checks,
+              doctor, import flows, and live Markdown token streaming from the
+              terminal.
+            </p>
+            <span class="feature-tag">Rust CLI / SSE</span>
+          </article>
+
+          <article class="feature-card reveal">
+            <span class="feature-num">05</span>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M4 5h16v14H4z" />
+                <path d="M4 10h16" />
+                <path d="M8 15h4" />
+              </svg>
+            </div>
+            <h3 class="feature-title">Web UI for sessions</h3>
+            <p class="feature-desc">
+              Manage conversations, tools, project cards, model settings,
+              metrics, document context, exports, light/dark mode, and Markdown
+              rendering.
+            </p>
+            <span class="feature-tag">React / localhost</span>
+          </article>
+
+          <article class="feature-card reveal">
+            <span class="feature-num">06</span>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <path d="M9 12l2 2 4-5" />
+              </svg>
+            </div>
+            <h3 class="feature-title">Local personalization</h3>
+            <p class="feature-desc">
+              Store profile notes and response style preferences locally so the
+              model can adapt without requiring an AEGIS account or remote
+              profile.
+            </p>
+            <span class="feature-tag">User profile / styles</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="architecture section-pad" id="architecture">
+        <div class="architecture-inner">
+          <div class="architecture-copy">
+            <p class="section-label reveal">Architecture</p>
+            <h2 class="section-title reveal">
+              A localhost stack with one routing brain.
+            </h2>
+            <p class="section-body reveal">
+              The Rust engine exposes the shared HTTP boundary used by the CLI
+              and web UI. It builds prompts, manages sessions, routes model
+              calls, and delegates retrieval to the Python RAG service when
+              document context is active.
+            </p>
+
+            <div class="steps">
+              <div class="step reveal">
+                <span class="step-num">01</span>
+                <div>
+                  <h3 class="step-title">User sends a prompt</h3>
+                  <p class="step-desc">
+                    The CLI or web app forwards the request to the Rust engine.
+                  </p>
+                </div>
+              </div>
+              <div class="step reveal">
+                <span class="step-num">02</span>
+                <div>
+                  <h3 class="step-title">Engine assembles context</h3>
+                  <p class="step-desc">
+                    Session history, profile notes, selected mode, documents,
+                    and project context are prepared.
+                  </p>
+                </div>
+              </div>
+              <div class="step reveal">
+                <span class="step-num">03</span>
+                <div>
+                  <h3 class="step-title">Provider generates locally</h3>
+                  <p class="step-desc">
+                    Ollama or LM Studio streams tokens back through the same
+                    engine endpoint.
+                  </p>
+                </div>
+              </div>
+              <div class="step reveal">
+                <span class="step-num">04</span>
+                <div>
+                  <h3 class="step-title">Interface renders live</h3>
+                  <p class="step-desc">
+                    Markdown, code blocks, metrics, and tool feedback appear
+                    incrementally.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="arch-diagram workflow-map reveal">
+            <div class="arch-header">// localhost workflow</div>
+            <div class="workflow-shell">
+              <div class="workflow-lane interfaces">
+                <span class="lane-label">Interfaces</span>
+                <div class="workflow-node ui-node">
+                  <span class="node-dot"></span>
+                  Web UI
+                </div>
+                <div class="workflow-node cli-node">
+                  <span class="node-dot"></span>
+                  CLI
+                </div>
+              </div>
+
+              <div class="workflow-flow" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+
+              <div class="workflow-node engine-node">
+                <span class="node-kicker">Rust</span>
+                <strong>Orchestration Engine</strong>
+                <small>sessions, modes, tools, prompt assembly</small>
+              </div>
+
+              <div class="workflow-branches">
+                <div class="workflow-node branch-node">
+                  <span class="node-kicker">RAG</span>
+                  Python retrieval
+                </div>
+                <div class="workflow-node branch-node">
+                  <span class="node-kicker">Tools</span>
+                  calendar, projects, profile
+                </div>
+              </div>
+
+              <div class="workflow-node model-node">
+                <span class="node-kicker">Provider</span>
+                <strong>Ollama / LM Studio</strong>
+                <small>local model warmup and token stream</small>
+              </div>
+
+              <div class="workflow-return">
+                <span>Markdown</span>
+                <span>code blocks</span>
+                <span>metrics</span>
+                <span>tool feedback</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="usecases section-pad" id="usecases">
+        <div class="section-intro reveal">
+          <p class="section-label">Use cases</p>
+          <h2 class="section-title">Useful where context should stay close.</h2>
+          <p class="section-body">
+            AEGIS is strongest when the user wants assistant behavior around
+            private files, local documents, coding projects, and repeatable
+            desktop workflows.
+          </p>
+        </div>
+
+        <div class="usecases-grid">
+          <article class="usecase-card reveal">
+            <span class="usecase-icon">DOC</span>
+            <h3 class="usecase-title">Course and research notes</h3>
+            <p class="usecase-desc">
+              Import lecture PDFs or notes and ask grounded follow-up questions
+              inside that exact session.
+            </p>
+          </article>
+          <article class="usecase-card reveal">
+            <span class="usecase-icon">DEV</span>
+            <h3 class="usecase-title">Local codebases</h3>
+            <p class="usecase-desc">
+              Scan a folder, explain files, generate patch suggestions, and
+              approve edits explicitly.
+            </p>
+          </article>
+          <article class="usecase-card reveal">
+            <span class="usecase-icon">CAL</span>
+            <h3 class="usecase-title">Desktop calendar actions</h3>
+            <p class="usecase-desc">
+              Create local Outlook calendar events without making AEGIS handle
+              account login.
+            </p>
+          </article>
+          <article class="usecase-card reveal">
+            <span class="usecase-icon">OPS</span>
+            <h3 class="usecase-title">Diagnostics and setup</h3>
+            <p class="usecase-desc">
+              Use doctor and status commands to inspect Ollama, RAG, engine,
+              sessions, and runtime readiness.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="privacy section-pad" id="privacy">
+        <div class="privacy-inner">
+          <div class="privacy-copy">
+            <p class="section-label reveal">Privacy model</p>
+            <h2 class="section-title reveal">
+              Secure by locality, transparent by design.
+            </h2>
+            <p class="section-body reveal">
+              AEGIS is designed around localhost services and explicit user
+              choices. Some setup steps may download models or dependencies, but
+              normal inference, retrieval, sessions, and tools are intended to
+              run locally.
+            </p>
+
+            <div class="privacy-checks">
+              <div class="privacy-check reveal">
+                <span class="check-icon" aria-hidden="true">OK</span>
+                <div>
+                  <h3>Local runtime boundary</h3>
+                  <p>
+                    The engine, RAG service, and inference provider communicate
+                    over localhost ports.
+                  </p>
+                </div>
+              </div>
+              <div class="privacy-check reveal">
+                <span class="check-icon" aria-hidden="true">OK</span>
+                <div>
+                  <h3>Explicit project write consent</h3>
+                  <p>
+                    Project folder edits require user approval before AEGIS can
+                    apply patches.
+                  </p>
+                </div>
+              </div>
+              <div class="privacy-check reveal">
+                <span class="check-icon" aria-hidden="true">OK</span>
+                <div>
+                  <h3>Session-scoped document context</h3>
+                  <p>
+                    Imported documents are kept tied to the conversation where
+                    they were added.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="network-monitor reveal">
+            <div class="monitor-header">
+              Local service monitor
+              <span class="monitor-badge">expected stack</span>
+            </div>
+            <div class="monitor-body">
+              <div class="monitor-row">
+                <span>127.0.0.1:8080</span>
+                <span><i class="dot green"></i>Rust engine</span>
+              </div>
+              <div class="monitor-row">
+                <span>127.0.0.1:8000</span>
+                <span><i class="dot green"></i>Python RAG</span>
+              </div>
+              <div class="monitor-row">
+                <span>127.0.0.1:11434</span>
+                <span><i class="dot green"></i>Ollama</span>
+              </div>
+              <div class="monitor-row">
+                <span>local Outlook profile</span>
+                <span><i class="dot amber"></i>optional tool</span>
+              </div>
+              <div class="monitor-row muted">
+                <span>external model downloads</span>
+                <span><i class="dot amber"></i>setup only</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="cta-section">
+        <div class="cta-inner reveal">
+          <p class="cta-eyebrow">// start locally</p>
+          <h2 class="cta-title">
+            One installer. One local stack. One assistant that stays close.
+          </h2>
+          <p class="cta-sub">
+            The real download will point to the packaged Windows binary. For now
+            this button is intentionally a placeholder while the installer
+            pipeline is finalized.
+          </p>
+          <button class="btn-download" type="button" aria-disabled="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <path d="M7 10l5 5 5-5" />
+              <path d="M12 15V3" />
+            </svg>
+            Download installer binary
+          </button>
+          <p class="cta-note">
+            Placeholder link - Windows x64 installer target
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>AEGIS</span>
+      <div class="footer-links">
+        <a href="docs.html">Docs</a>
+        <a href="contact.html">Contact us</a>
+        <a href="features.html">Features</a>
+      </div>
+      <span>No telemetry-first assumptions. No cloud-first posture.</span>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>
