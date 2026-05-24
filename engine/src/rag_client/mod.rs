@@ -27,16 +27,15 @@ struct DeleteDocumentRequest {
     source: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct SearchResult {
     text: String,
-    #[allow(dead_code)]
     source: String,
-    #[allow(dead_code)]
+    page: Option<i32>,
     score: f64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RagMetrics {
     pub retrieval_time_ms: f64,
     pub avg_similarity: f64,
@@ -61,8 +60,16 @@ struct QueryResponse {
     metrics: RagMetrics,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RetrievalChunk {
+    pub text: String,
+    pub source: String,
+    pub page: Option<i32>,
+    pub score: f64,
+}
+
 pub struct RetrievalOutcome {
-    pub chunks: Vec<String>,
+    pub chunks: Vec<RetrievalChunk>,
     pub metrics: RagMetrics,
 }
 
@@ -129,6 +136,7 @@ impl RagClient {
         &self,
         query: &str,
         limit: usize,
+        threshold: f64,
         session_id: &str,
     ) -> anyhow::Result<RetrievalOutcome> {
         self.init().await?; // Ensure it is initialized before querying
@@ -150,8 +158,20 @@ impl RagClient {
         }
 
         let result: QueryResponse = resp.json().await?;
+        let filtered_chunks = result
+            .results
+            .into_iter()
+            .filter(|r| r.score >= threshold)
+            .map(|r| RetrievalChunk {
+                text: r.text,
+                source: r.source,
+                page: r.page,
+                score: r.score,
+            })
+            .collect();
+
         Ok(RetrievalOutcome {
-            chunks: result.results.into_iter().map(|r| r.text).collect(),
+            chunks: filtered_chunks,
             metrics: result.metrics,
         })
     }
@@ -237,5 +257,20 @@ impl RagClient {
 
         let bytes = response.bytes().await?;
         Ok(bytes.to_vec())
+    }
+
+    pub async fn configure_voice(&self, keep_cached: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let response = self.client
+            .post(format!("{}/voice/config", self.base_url))
+            .query(&[("keep_cached", &keep_cached.to_string())])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let err = response.text().await?;
+            return Err(format!("RAG voice config failed: {}", err).into());
+        }
+
+        Ok(())
     }
 }
