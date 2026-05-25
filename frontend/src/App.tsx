@@ -51,7 +51,7 @@ type MarkdownBlock =
   | { type: 'code'; text: string; language: string };
 
 type ChatMode = 'general' | 'coder' | 'academic';
-type SettingsTab = 'general' | 'inference' | 'models' | 'personalize';
+type SettingsTab = 'general' | 'inference' | 'models' | 'personalize' | 'voice' | 'rag';
 type ResponseStyle = 'default' | 'friendly' | 'concise' | 'elaborate' | 'technical';
 type ModelDownloadState = 'idle' | 'downloading' | 'paused';
 
@@ -1410,6 +1410,11 @@ function sseEventData(event: string) {
     .filter((line) => line.startsWith('data:'))
     .map((line) => line.replace(/^data: ?/, ''))
     .join('\n');
+}
+
+function splitAssistantStreamSegments(content: string) {
+  const segments = content.match(/(\r?\n|[^\S\r\n]+|[^\s]+)/g);
+  return segments && segments.length > 0 ? segments : [content];
 }
 
 function parseMarkdownBlocks(content: string): MarkdownBlock[] {
@@ -3700,6 +3705,11 @@ export default function App() {
 
     let targetSessionId: string | null = null;
     let seedMessages = nextMessages;
+    const pendingAssistantSegments: string[] = [];
+    let streamFlushTimer: number | null = null;
+    let streamDrainResolver: (() => void) | null = null;
+    let streamClosed = false;
+
     const updateTargetMessages = (updater: (current: Message[]) => Message[]) => {
       if (!targetSessionId) {
         return;
@@ -3726,6 +3736,93 @@ export default function App() {
       if (activeSessionIdRef.current === sessionId) {
         setMessages(updatedMessages);
       }
+    };
+    const settleStreamDrain = () => {
+      if (
+        streamClosed &&
+        pendingAssistantSegments.length === 0 &&
+        streamFlushTimer === null &&
+        streamDrainResolver
+      ) {
+        const resolve = streamDrainResolver;
+        streamDrainResolver = null;
+        resolve();
+      }
+    };
+    const flushAssistantSegments = (forceAll = false) => {
+      streamFlushTimer = null;
+
+      if (pendingAssistantSegments.length === 0) {
+        settleStreamDrain();
+        return;
+      }
+
+      const segmentCount = forceAll
+        ? pendingAssistantSegments.length
+        : pendingAssistantSegments.length > 48
+          ? 8
+          : pendingAssistantSegments.length > 24
+            ? 5
+            : pendingAssistantSegments.length > 12
+              ? 3
+              : 1;
+      const nextChunk = pendingAssistantSegments.splice(0, segmentCount).join('');
+
+      updateTargetMessages((current) => {
+        const next = [...current];
+        const last = next[next.length - 1];
+
+        if (last?.role === 'assistant') {
+          next[next.length - 1] = {
+            ...last,
+            content: `${last.content}${nextChunk}`,
+            timestamp: last.timestamp ?? new Date().toISOString(),
+          };
+        }
+
+        return next;
+      });
+
+      if (pendingAssistantSegments.length > 0) {
+        const delay =
+          pendingAssistantSegments.length > 60
+            ? 10
+            : pendingAssistantSegments.length > 28
+              ? 14
+              : 18;
+        streamFlushTimer = window.setTimeout(() => {
+          flushAssistantSegments();
+        }, delay);
+        return;
+      }
+
+      settleStreamDrain();
+    };
+    const scheduleAssistantFlush = () => {
+      if (streamFlushTimer !== null) {
+        return;
+      }
+
+      streamFlushTimer = window.setTimeout(() => {
+        flushAssistantSegments();
+      }, 12);
+    };
+    const enqueueAssistantContent = (content: string) => {
+      if (!content) {
+        return;
+      }
+
+      pendingAssistantSegments.push(...splitAssistantStreamSegments(content));
+      scheduleAssistantFlush();
+    };
+    const waitForAssistantDrain = () => {
+      if (pendingAssistantSegments.length === 0 && streamFlushTimer === null) {
+        return Promise.resolve();
+      }
+
+      return new Promise<void>((resolve) => {
+        streamDrainResolver = resolve;
+      });
     };
     inferenceStartTime.current = Date.now();
     setInferenceStats({
@@ -3861,20 +3958,7 @@ export default function App() {
           }
 
           accumulatedResponse += data;
-          updateTargetMessages((current) => {
-            const next = [...current];
-            const last = next[next.length - 1];
-
-            if (last?.role === 'assistant') {
-              next[next.length - 1] = {
-                ...last,
-                content: `${last.content}${data}`,
-                timestamp: last.timestamp ?? new Date().toISOString(),
-              };
-            }
-
-            return next;
-          });
+          enqueueAssistantContent(data);
         }
       }
 
@@ -3890,21 +3974,11 @@ export default function App() {
         }
 
         accumulatedResponse += finalData;
-        updateTargetMessages((current) => {
-          const next = [...current];
-          const last = next[next.length - 1];
-
-          if (last?.role === 'assistant') {
-            next[next.length - 1] = {
-              ...last,
-              content: `${last.content}${finalData}`,
-              timestamp: last.timestamp ?? new Date().toISOString(),
-            };
-          }
-
-          return next;
-        });
+        enqueueAssistantContent(finalData);
       }
+
+      streamClosed = true;
+      await waitForAssistantDrain();
 
       const totalLatency = Date.now() - (inferenceStartTime.current ?? Date.now());
       const charCount = accumulatedResponse.length;
@@ -3937,10 +4011,20 @@ export default function App() {
         }, 1400);
       }
     } catch (sendError) {
+      if (pendingAssistantSegments.length > 0) {
+        flushAssistantSegments(true);
+      }
+      if (streamFlushTimer !== null) {
+        window.clearTimeout(streamFlushTimer);
+        streamFlushTimer = null;
+      }
       setError(sendError instanceof Error ? sendError.message : 'Could not send chat request.');
       setStatus('Chat failed');
       updateTargetMessages((current) => current.filter((message) => message.content.length > 0));
     } finally {
+      if (streamFlushTimer !== null) {
+        window.clearTimeout(streamFlushTimer);
+      }
       setIsStreaming(false);
       setStreamingSessionId(null);
       if (targetSessionId) {
