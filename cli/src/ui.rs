@@ -38,6 +38,8 @@ pub struct StreamedMarkdownRenderer<'a> {
     printed_content: bool,
 }
 
+pub struct LiveTokenRenderer;
+
 impl Ui {
     pub fn new(no_color: bool, verbose: bool) -> Self {
         Self { no_color, verbose }
@@ -65,6 +67,10 @@ impl Ui {
             code_line_number: 1,
             printed_content: false,
         }
+    }
+
+    pub fn live_token_renderer(&self) -> LiveTokenRenderer {
+        LiveTokenRenderer
     }
 
     pub fn clear_screen(&self) {
@@ -500,6 +506,17 @@ impl Drop for LoadingAnimation {
     }
 }
 
+impl LiveTokenRenderer {
+    pub fn push(&mut self, token: &str) -> io::Result<()> {
+        print!("{token}");
+        io::stdout().flush()
+    }
+
+    pub fn finish(&mut self) -> io::Result<()> {
+        io::stdout().flush()
+    }
+}
+
 fn normalize_model_response(text: &str) -> String {
     let input = text.replace("\r\n", "\n");
     let chars: Vec<char> = input.chars().collect();
@@ -890,5 +907,19 @@ mod tests {
         let rendered = ui.render_inline_markdown("Use **bold**, *italic*, and `code`.");
 
         assert_eq!(rendered, "Use bold, italic, and code.");
+    }
+
+    #[test]
+    fn collapses_repeated_blank_lines_during_normalization() {
+        let normalized = normalize_model_response("First line\n\n\nSecond line");
+
+        assert_eq!(normalized, "First line\n\nSecond line");
+    }
+
+    #[test]
+    fn normalizes_common_code_fence_aliases() {
+        assert_eq!(normalized_code_language("ts"), "typescript");
+        assert_eq!(normalized_code_language("py"), "python");
+        assert_eq!(normalized_code_language("txt"), "code");
     }
 }

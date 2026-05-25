@@ -42,6 +42,7 @@ impl DoctorReport {
     pub fn collect_live(workspace: &Workspace, engine: &EngineClient) -> Self {
         let runtime = vec![
             engine_runtime_check(engine.health()),
+            rag_runtime_check(engine.rag_health()),
             ollama_runtime_check(engine.ollama_health()),
         ];
 
@@ -89,7 +90,7 @@ impl DoctorReport {
             component_check(
                 &rag,
                 false,
-                "Add Python project files when you are ready to enable the RAG runtime."
+                "Start the RAG service or check `.aegis/logs/rag.log` if auto-start did not complete."
                     .to_string(),
             ),
             component_check(
@@ -177,6 +178,14 @@ fn ollama_runtime_check(health: EngineHealth) -> CheckItem {
         health,
         "Run `ollama serve` and keep it available on the configured localhost URL before you try inference."
             .to_string(),
+    )
+}
+
+fn rag_runtime_check(health: EngineHealth) -> CheckItem {
+    runtime_check(
+        "rag /health",
+        health,
+        "Start the AEGIS RAG service so document indexing and retrieval can run.".to_string(),
     )
 }
 
@@ -296,7 +305,7 @@ fn python_check(rag_runtime_required: bool) -> CheckItem {
         (Some(detail), true) => CheckItem {
             name: "python".to_string(),
             health: Health::Ok,
-            detail: format!("{detail} (needed for the future RAG runtime)"),
+            detail: format!("{detail} (needed for the RAG runtime)"),
             guidance: None,
             blocking: false,
         },
@@ -310,10 +319,9 @@ fn python_check(rag_runtime_required: bool) -> CheckItem {
         (None, true) => CheckItem {
             name: "python".to_string(),
             health: Health::Missing,
-            detail: "Python was not found on PATH, so the future RAG service cannot start."
-                .to_string(),
+            detail: "Python was not found on PATH, so the RAG service cannot start.".to_string(),
             guidance: Some(
-                "Install Python so the retrieval service can run once its project files are in place."
+                "Install Python or use the bundled RAG virtual environment so document retrieval can run."
                     .to_string(),
             ),
             blocking: true,

@@ -51,7 +51,7 @@ type MarkdownBlock =
   | { type: 'code'; text: string; language: string };
 
 type ChatMode = 'general' | 'coder' | 'academic';
-type SettingsTab = 'general' | 'inference' | 'models' | 'personalize';
+type SettingsTab = 'general' | 'inference' | 'models' | 'personalize' | 'voice' | 'rag';
 type ResponseStyle = 'default' | 'friendly' | 'concise' | 'elaborate' | 'technical';
 type ModelDownloadState = 'idle' | 'downloading' | 'paused';
 
@@ -1410,6 +1410,11 @@ function sseEventData(event: string) {
     .filter((line) => line.startsWith('data:'))
     .map((line) => line.replace(/^data: ?/, ''))
     .join('\n');
+}
+
+function splitAssistantStreamSegments(content: string) {
+  const segments = content.match(/(\r?\n|[^\S\r\n]+|[^\s]+)/g);
+  return segments && segments.length > 0 ? segments : [content];
 }
 
 function parseMarkdownBlocks(content: string): MarkdownBlock[] {
@@ -3659,7 +3664,9 @@ export default function App() {
       const data = (await response.json()) as ProfileResponse;
       setProfileText(data.contents);
       setProfilePath(data.path);
-      setSettingsMessage('Personal profile saved locally.');
+      setSettingsMessage(
+        'Personalization saved locally as markdown and will be applied to future replies.',
+      );
     } catch (profileError) {
       setSettingsMessage(
         profileError instanceof Error ? profileError.message : 'Could not save profile.',
@@ -3681,7 +3688,9 @@ export default function App() {
 
     try {
       setProfileText(await file.text());
-      setSettingsMessage(`Imported ${file.name}. Save to apply it locally.`);
+      setSettingsMessage(
+        `Imported ${file.name}. Save to store it as your local markdown personalization profile.`,
+      );
     } catch {
       setSettingsMessage('Could not read the selected profile file.');
     } finally {
@@ -3700,6 +3709,11 @@ export default function App() {
 
     let targetSessionId: string | null = null;
     let seedMessages = nextMessages;
+    const pendingAssistantSegments: string[] = [];
+    let streamFlushTimer: number | null = null;
+    let streamDrainResolver: (() => void) | null = null;
+    let streamClosed = false;
+
     const updateTargetMessages = (updater: (current: Message[]) => Message[]) => {
       if (!targetSessionId) {
         return;
@@ -3726,6 +3740,93 @@ export default function App() {
       if (activeSessionIdRef.current === sessionId) {
         setMessages(updatedMessages);
       }
+    };
+    const settleStreamDrain = () => {
+      if (
+        streamClosed &&
+        pendingAssistantSegments.length === 0 &&
+        streamFlushTimer === null &&
+        streamDrainResolver
+      ) {
+        const resolve = streamDrainResolver;
+        streamDrainResolver = null;
+        resolve();
+      }
+    };
+    const flushAssistantSegments = (forceAll = false) => {
+      streamFlushTimer = null;
+
+      if (pendingAssistantSegments.length === 0) {
+        settleStreamDrain();
+        return;
+      }
+
+      const segmentCount = forceAll
+        ? pendingAssistantSegments.length
+        : pendingAssistantSegments.length > 48
+          ? 8
+          : pendingAssistantSegments.length > 24
+            ? 5
+            : pendingAssistantSegments.length > 12
+              ? 3
+              : 1;
+      const nextChunk = pendingAssistantSegments.splice(0, segmentCount).join('');
+
+      updateTargetMessages((current) => {
+        const next = [...current];
+        const last = next[next.length - 1];
+
+        if (last?.role === 'assistant') {
+          next[next.length - 1] = {
+            ...last,
+            content: `${last.content}${nextChunk}`,
+            timestamp: last.timestamp ?? new Date().toISOString(),
+          };
+        }
+
+        return next;
+      });
+
+      if (pendingAssistantSegments.length > 0) {
+        const delay =
+          pendingAssistantSegments.length > 60
+            ? 10
+            : pendingAssistantSegments.length > 28
+              ? 14
+              : 18;
+        streamFlushTimer = window.setTimeout(() => {
+          flushAssistantSegments();
+        }, delay);
+        return;
+      }
+
+      settleStreamDrain();
+    };
+    const scheduleAssistantFlush = () => {
+      if (streamFlushTimer !== null) {
+        return;
+      }
+
+      streamFlushTimer = window.setTimeout(() => {
+        flushAssistantSegments();
+      }, 12);
+    };
+    const enqueueAssistantContent = (content: string) => {
+      if (!content) {
+        return;
+      }
+
+      pendingAssistantSegments.push(...splitAssistantStreamSegments(content));
+      scheduleAssistantFlush();
+    };
+    const waitForAssistantDrain = () => {
+      if (pendingAssistantSegments.length === 0 && streamFlushTimer === null) {
+        return Promise.resolve();
+      }
+
+      return new Promise<void>((resolve) => {
+        streamDrainResolver = resolve;
+      });
     };
     inferenceStartTime.current = Date.now();
     setInferenceStats({
@@ -3861,20 +3962,7 @@ export default function App() {
           }
 
           accumulatedResponse += data;
-          updateTargetMessages((current) => {
-            const next = [...current];
-            const last = next[next.length - 1];
-
-            if (last?.role === 'assistant') {
-              next[next.length - 1] = {
-                ...last,
-                content: `${last.content}${data}`,
-                timestamp: last.timestamp ?? new Date().toISOString(),
-              };
-            }
-
-            return next;
-          });
+          enqueueAssistantContent(data);
         }
       }
 
@@ -3890,21 +3978,11 @@ export default function App() {
         }
 
         accumulatedResponse += finalData;
-        updateTargetMessages((current) => {
-          const next = [...current];
-          const last = next[next.length - 1];
-
-          if (last?.role === 'assistant') {
-            next[next.length - 1] = {
-              ...last,
-              content: `${last.content}${finalData}`,
-              timestamp: last.timestamp ?? new Date().toISOString(),
-            };
-          }
-
-          return next;
-        });
+        enqueueAssistantContent(finalData);
       }
+
+      streamClosed = true;
+      await waitForAssistantDrain();
 
       const totalLatency = Date.now() - (inferenceStartTime.current ?? Date.now());
       const charCount = accumulatedResponse.length;
@@ -3937,10 +4015,20 @@ export default function App() {
         }, 1400);
       }
     } catch (sendError) {
+      if (pendingAssistantSegments.length > 0) {
+        flushAssistantSegments(true);
+      }
+      if (streamFlushTimer !== null) {
+        window.clearTimeout(streamFlushTimer);
+        streamFlushTimer = null;
+      }
       setError(sendError instanceof Error ? sendError.message : 'Could not send chat request.');
       setStatus('Chat failed');
       updateTargetMessages((current) => current.filter((message) => message.content.length > 0));
     } finally {
+      if (streamFlushTimer !== null) {
+        window.clearTimeout(streamFlushTimer);
+      }
       setIsStreaming(false);
       setStreamingSessionId(null);
       if (targetSessionId) {
@@ -5301,7 +5389,7 @@ export default function App() {
                 ['models', 'Models'],
                 ['voice', 'Voice'],
                 ['rag', 'RAG'],
-                ['personal', 'Personal'],
+                ['personalize', 'Personalize'],
               ].map(([value, label]) => (
                 <button
                   className={`mb-1 flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition ${
@@ -5885,9 +5973,15 @@ export default function App() {
                 {settingsTab === 'personalize' && (
                   <div className="space-y-3">
                     <div>
-                      <div className="text-sm font-semibold">Local User Profile</div>
+                      <div className="text-sm font-semibold">Local Personalization Profile</div>
                       <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-                        {profilePath || 'Profile path will appear after the engine responds.'}
+                        {profilePath || 'Markdown save path will appear after the engine responds.'}
+                      </div>
+                      <div className={`mt-2 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                        Add identity details, preferences, writing style notes, goals, or context
+                        about how you want AEGIS to respond. This is stored locally as a markdown
+                        file and injected into model context during inference so replies stay more
+                        aligned to you.
                       </div>
                     </div>
                     <input
@@ -5904,7 +5998,7 @@ export default function App() {
                           : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
                       }`}
                       onChange={(event) => setProfileText(event.target.value)}
-                      placeholder="Add local preferences, identity notes, project context, or writing preferences."
+                      placeholder={'Examples:\n- My name is Mohammed.\n- I prefer concise but technically precise answers.\n- I am working on AEGIS and usually want practical implementation help.\n- When explaining code, prioritize architecture before syntax details.'}
                       value={profileText}
                     />
                     <div className="flex justify-end gap-2">
