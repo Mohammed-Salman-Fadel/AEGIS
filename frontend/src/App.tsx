@@ -3664,7 +3664,9 @@ export default function App() {
       const data = (await response.json()) as ProfileResponse;
       setProfileText(data.contents);
       setProfilePath(data.path);
-      setSettingsMessage('Personal profile saved locally.');
+      setSettingsMessage(
+        'Personalization saved locally as markdown and will be applied to future replies.',
+      );
     } catch (profileError) {
       setSettingsMessage(
         profileError instanceof Error ? profileError.message : 'Could not save profile.',
@@ -3686,7 +3688,9 @@ export default function App() {
 
     try {
       setProfileText(await file.text());
-      setSettingsMessage(`Imported ${file.name}. Save to apply it locally.`);
+      setSettingsMessage(
+        `Imported ${file.name}. Save to store it as your local markdown personalization profile.`,
+      );
     } catch {
       setSettingsMessage('Could not read the selected profile file.');
     } finally {
@@ -5385,7 +5389,7 @@ export default function App() {
                 ['models', 'Models'],
                 ['voice', 'Voice'],
                 ['rag', 'RAG'],
-                ['personal', 'Personal'],
+                ['personalize', 'Personalize'],
               ].map(([value, label]) => (
                 <button
                   className={`mb-1 flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition ${
@@ -5969,9 +5973,15 @@ export default function App() {
                 {settingsTab === 'personalize' && (
                   <div className="space-y-3">
                     <div>
-                      <div className="text-sm font-semibold">Local User Profile</div>
+                      <div className="text-sm font-semibold">Local Personalization Profile</div>
                       <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-                        {profilePath || 'Profile path will appear after the engine responds.'}
+                        {profilePath || 'Markdown save path will appear after the engine responds.'}
+                      </div>
+                      <div className={`mt-2 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                        Add identity details, preferences, writing style notes, goals, or context
+                        about how you want AEGIS to respond. This is stored locally as a markdown
+                        file and injected into model context during inference so replies stay more
+                        aligned to you.
                       </div>
                     </div>
                     <input
@@ -5988,7 +5998,7 @@ export default function App() {
                           : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
                       }`}
                       onChange={(event) => setProfileText(event.target.value)}
-                      placeholder="Add local preferences, identity notes, project context, or writing preferences."
+                      placeholder={'Examples:\n- My name is Mohammed.\n- I prefer concise but technically precise answers.\n- I am working on AEGIS and usually want practical implementation help.\n- When explaining code, prioritize architecture before syntax details.'}
                       value={profileText}
                     />
                     <div className="flex justify-end gap-2">

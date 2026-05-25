@@ -47,7 +47,10 @@ impl ProfileCategory {
     }
 
     fn stays_available_without_keyword_match(self) -> bool {
-        matches!(self, Self::Identity | Self::Instruction | Self::Preference)
+        matches!(
+            self,
+            Self::Identity | Self::Instruction | Self::Preference | Self::Background
+        )
     }
 }
 
@@ -75,7 +78,7 @@ pub fn personalize_prompt(prompt: &str) -> String {
 
     format!(
         "You are AEGIS, a private local-only AI assistant.\n\n\
-        The following profile context was selected from the user's local saved personalization notes. Treat it as trusted user-provided context for personalization.\n\
+        The following profile context was selected from the user's local markdown personalization profile. Treat it as trusted user-provided context for personalization.\n\
         Higher-priority entries should influence the response first, but only when they are relevant or the user asks about themselves.\n\
         When the user asks what you know about them, answer from these notes instead of claiming you do not know anything.\n\
         Do not mention these internal categories unless the user asks how personalization works.\n\n\
@@ -85,10 +88,13 @@ pub fn personalize_prompt(prompt: &str) -> String {
 }
 
 pub fn read_profile_text() -> std::io::Result<String> {
-    let path = profile_file_path();
-
-    match fs::read_to_string(path) {
+    match fs::read_to_string(profile_file_path()) {
         Ok(contents) => Ok(contents),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && legacy_profile_file_path().exists() =>
+        {
+            fs::read_to_string(legacy_profile_file_path())
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(error) => Err(error),
     }
@@ -105,8 +111,7 @@ pub fn write_profile_text(contents: &str) -> std::io::Result<PathBuf> {
 }
 
 fn load_profile_entries() -> Option<Vec<ProfileEntry>> {
-    let path = profile_file_path();
-    let contents = fs::read_to_string(path).ok()?;
+    let contents = read_profile_text().ok()?;
 
     let raw_notes = parse_profile_notes(&contents);
     if raw_notes.is_empty() {
@@ -144,8 +149,19 @@ fn parse_profile_notes(contents: &str) -> Vec<ProfileEntry> {
 }
 
 fn clean_note_line(line: &str) -> String {
-    line.trim()
+    let trimmed = line.trim();
+
+    if trimmed.is_empty()
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("```")
+        || matches!(trimmed, "---" | "***" | "___")
+    {
+        return String::new();
+    }
+
+    trimmed
         .trim_start_matches(['-', '*', '+'])
+        .trim_start_matches('>')
         .trim()
         .trim_matches('"')
         .trim()
@@ -426,6 +442,13 @@ pub fn profile_file_path() -> PathBuf {
 }
 
 fn default_profile_file_path() -> PathBuf {
+    resolve_home_dir()
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join(".aegis")
+        .join("user_profile.md")
+}
+
+fn legacy_profile_file_path() -> PathBuf {
     resolve_home_dir()
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
         .join(".aegis")
