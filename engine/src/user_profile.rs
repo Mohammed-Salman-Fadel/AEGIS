@@ -485,4 +485,25 @@ mod tests {
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].0.category, ProfileCategory::Instruction);
     }
+
+    #[test]
+    fn cleans_bullets_quotes_and_whitespace_from_note_lines() {
+        assert_eq!(
+            clean_note_line("  -   \"remember the CLI first\"  "),
+            "remember the CLI first"
+        );
+    }
+
+    #[test]
+    fn extract_keywords_deduplicates_terms_and_skips_stop_words() {
+        let keywords = extract_keywords("About AEGIS, aegis and local tooling for the repo");
+
+        assert_eq!(keywords, vec!["aegis", "local", "tooling", "repo"]);
+    }
+
+    #[test]
+    fn profile_query_detection_matches_saved_notes_requests() {
+        assert!(is_profile_query("What have I told you in my saved notes?"));
+        assert!(!is_profile_query("Explain the retry logic in the engine."));
+    }
 }

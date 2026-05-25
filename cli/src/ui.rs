@@ -908,4 +908,18 @@ mod tests {
 
         assert_eq!(rendered, "Use bold, italic, and code.");
     }
+
+    #[test]
+    fn collapses_repeated_blank_lines_during_normalization() {
+        let normalized = normalize_model_response("First line\n\n\nSecond line");
+
+        assert_eq!(normalized, "First line\n\nSecond line");
+    }
+
+    #[test]
+    fn normalizes_common_code_fence_aliases() {
+        assert_eq!(normalized_code_language("ts"), "typescript");
+        assert_eq!(normalized_code_language("py"), "python");
+        assert_eq!(normalized_code_language("txt"), "code");
+    }
 }
