@@ -1819,6 +1819,18 @@ mod tests {
     }
 
     #[test]
+    fn tokenizes_escaped_spaces() {
+        let tokens = tokenize_command_line("chat hello\\ world").unwrap();
+        assert_eq!(tokens, vec!["chat", "hello world"]);
+    }
+
+    #[test]
+    fn rejects_unclosed_quotes() {
+        let error = tokenize_command_line("chat \"unfinished").unwrap_err();
+        assert_eq!(error, "The shell command has an unclosed quote.");
+    }
+
+    #[test]
     fn tokenizes_prefixed_shell_commands() {
         let parsed = parse_shell_cli("aegis session use todo-session-001").unwrap();
         let Some(cli) = parsed else {
@@ -1830,6 +1842,36 @@ mod tests {
                 command: SessionCommand::Use(args),
             }) => assert_eq!(args.id.as_deref(), Some("todo-session-001")),
             _ => panic!("expected session use command"),
+        }
+    }
+
+    #[test]
+    fn parses_model_download_command() {
+        let parsed = parse_shell_cli("model download qwen3:4b").unwrap();
+        let Some(cli) = parsed else {
+            panic!("shell parser should produce a CLI command");
+        };
+
+        match cli.command {
+            Some(CommandKind::Model {
+                command: Some(ModelCommand::Download(args)),
+            }) => assert_eq!(args.name.as_deref(), Some("qwen3:4b")),
+            _ => panic!("expected model download command"),
+        }
+    }
+
+    #[test]
+    fn parses_prefixed_provider_select_command() {
+        let parsed = parse_shell_cli("aegis provider select lmstudio").unwrap();
+        let Some(cli) = parsed else {
+            panic!("shell parser should produce a CLI command");
+        };
+
+        match cli.command {
+            Some(CommandKind::Provider {
+                command: ProviderCommand::Select(args),
+            }) => assert_eq!(args.name.as_deref(), Some("lmstudio")),
+            _ => panic!("expected provider select command"),
         }
     }
 

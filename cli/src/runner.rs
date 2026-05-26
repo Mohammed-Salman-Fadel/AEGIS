@@ -569,6 +569,55 @@ fn npm_program() -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_preview_includes_arguments() {
+        let plan = LaunchPlan {
+            label: "Engine".to_string(),
+            program: "cargo".to_string(),
+            args: vec![
+                "run".to_string(),
+                "-p".to_string(),
+                "aegis-engine".to_string(),
+            ],
+            cwd: PathBuf::from("."),
+            env: Vec::new(),
+        };
+
+        assert_eq!(plan.command_preview(), "cargo run -p aegis-engine");
+    }
+
+    #[test]
+    fn command_preview_handles_no_arguments() {
+        let plan = LaunchPlan {
+            label: "AEGIS".to_string(),
+            program: "aegis".to_string(),
+            args: Vec::new(),
+            cwd: PathBuf::from("."),
+            env: Vec::new(),
+        };
+
+        assert_eq!(plan.command_preview(), "aegis");
+    }
+
+    #[test]
+    fn join_url_handles_extra_slashes() {
+        assert_eq!(
+            join_url("http://127.0.0.1:8000/", "/health"),
+            "http://127.0.0.1:8000/health"
+        );
+    }
+
+    #[test]
+    fn sanitize_label_makes_log_safe_names() {
+        assert_eq!(sanitize_label("RAG Engine #1"), "rag-engine--1");
+        assert_eq!(sanitize_label("  Engine  "), "engine");
+    }
+}
+
 fn render_runtime_report(ui: &Ui, report: &RuntimeStartReport) {
     if !report.started.is_empty() {
         println!(

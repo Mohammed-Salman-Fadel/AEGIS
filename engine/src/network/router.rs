@@ -414,7 +414,12 @@ async fn handle_voice_transcribe(
         }
     }
 
-    let audio_data = audio_data.ok_or_else(|| (StatusCode::BAD_REQUEST, "No audio file provided.".to_string()))?;
+    let audio_data = audio_data.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "No audio file provided.".to_string(),
+        )
+    })?;
 
     let text = state
         .orchestrator
@@ -464,7 +469,9 @@ async fn handle_voice_config(
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
 
-    Ok(Json(json!({ "status": "ok", "keep_cached": payload.keep_cached })))
+    Ok(Json(
+        json!({ "status": "ok", "keep_cached": payload.keep_cached }),
+    ))
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -495,6 +502,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/models/ollama", get(handlers::models::list_ollama_models))
         .route("/models/current", get(handlers::models::current_model))
         .route("/models/select", post(handlers::models::select_model))
+        .route("/models/download", post(handlers::models::download_model))
         .route("/models/pull", post(handlers::models::pull_ollama_model))
         .route(
             "/profile",

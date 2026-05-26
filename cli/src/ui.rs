@@ -891,4 +891,22 @@ mod tests {
 
         assert_eq!(rendered, "Use bold, italic, and code.");
     }
+
+    #[test]
+    fn parses_ordered_and_unordered_list_parts() {
+        assert_eq!(
+            ordered_list_parts("12. Prepare release"),
+            Some(("12.", "Prepare release"))
+        );
+        assert_eq!(unordered_list_part("- Review tests"), Some("Review tests"));
+        assert_eq!(unordered_list_part("plain text"), None);
+    }
+
+    #[test]
+    fn normalizes_code_fence_languages() {
+        assert_eq!(code_fence_language("```ts"), Some("ts"));
+        assert_eq!(normalized_code_language("ts"), "typescript");
+        assert_eq!(normalized_code_language("py"), "python");
+        assert_eq!(normalized_code_language(""), "code");
+    }
 }

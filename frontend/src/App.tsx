@@ -38,6 +38,13 @@ import {
 } from 'lucide-react';
 import { VoiceOrb } from './components/VoiceOrb';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
+import {
+  installedModelsLabel,
+  modelDownloadPercent,
+  modelReadyMessage,
+  modelSearchPlaceholder,
+  type PullModelChunk,
+} from './lib/modelDownload';
 
 type Role = 'user' | 'assistant';
 type ThemeMode = 'dark' | 'light';
@@ -51,7 +58,7 @@ type MarkdownBlock =
   | { type: 'code'; text: string; language: string };
 
 type ChatMode = 'general' | 'coder' | 'academic';
-type SettingsTab = 'general' | 'inference' | 'models' | 'personalize';
+type SettingsTab = 'general' | 'inference' | 'models' | 'personalize' | 'voice' | 'rag';
 type ResponseStyle = 'default' | 'friendly' | 'concise' | 'elaborate' | 'technical';
 type ModelDownloadState = 'idle' | 'downloading' | 'paused';
 
@@ -192,14 +199,6 @@ interface ProviderListResponse {
 interface ProfileResponse {
   contents: string;
   path: string;
-}
-
-interface PullModelChunk {
-  status?: string;
-  digest?: string;
-  total?: number;
-  completed?: number;
-  error?: string;
 }
 
 interface FileSystemHandlePermissionDescriptor {
@@ -1179,18 +1178,6 @@ function profileDisplayName(profileText: string) {
 
 function personalizeWelcomeMessage(message: string, profileText: string) {
   return message.replace(/\[insert_name\]/gi, profileDisplayName(profileText));
-}
-
-function modelDownloadPercent(chunk: PullModelChunk) {
-  if (chunk.total && chunk.total > 0 && typeof chunk.completed === 'number') {
-    return Math.max(0, Math.min(100, Math.round((chunk.completed / chunk.total) * 100)));
-  }
-
-  if (chunk.status === 'success') {
-    return 100;
-  }
-
-  return null;
 }
 
 function projectFileExtension(path: string) {
@@ -2380,7 +2367,7 @@ export default function App() {
 
     try {
       const [modelsResult, providersResult, profileResult] = await Promise.allSettled([
-        fetch(`${API_BASE}/models/ollama`),
+        fetch(`${API_BASE}/models`),
         fetch(`${API_BASE}/providers`),
         fetch(`${API_BASE}/profile`),
       ]);
@@ -3508,16 +3495,16 @@ export default function App() {
     }
   }
 
-  async function downloadOllamaModel(modelNameOverride?: string) {
+  async function downloadModel(modelNameOverride?: string) {
     const modelName = (modelNameOverride ?? modelSearch).trim();
     if (!modelName || modelDownloadState === 'downloading') {
       return;
     }
 
+    const providerName = activeProvider?.name ?? 'active provider';
     const controller = new AbortController();
     modelDownloadAbortRef.current = controller;
     modelDownloadAbortReasonRef.current = null;
-    setModelSearch(modelName);
     setDownloadingModel(modelName);
     setPausedModelDownload(null);
     setModelDownloadState('downloading');
@@ -3526,7 +3513,7 @@ export default function App() {
     setSettingsMessage(null);
 
     try {
-      const response = await fetch(`${API_BASE}/models/pull`, {
+      const response = await fetch(`${API_BASE}/models/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: modelName }),
@@ -3574,7 +3561,7 @@ export default function App() {
       setModelDownloadProgress(100);
       setModelDownloadStatus('Download complete');
       await loadSettingsData();
-      setSettingsMessage(`${modelName} is ready in Ollama.`);
+      setSettingsMessage(modelReadyMessage(modelName, providerName));
     } catch (downloadError) {
       if (controller.signal.aborted) {
         return;
@@ -3638,7 +3625,7 @@ export default function App() {
       return;
     }
 
-    void downloadOllamaModel(pausedModelDownload);
+    void downloadModel(pausedModelDownload);
   }
 
   async function saveProfileSettings() {
@@ -5678,7 +5665,7 @@ export default function App() {
                   <div className="space-y-4">
                     <div>
                       <label className="mb-2 block text-sm font-semibold" htmlFor="model-search">
-                        Search or Download Ollama Model
+                        Search or Download Model
                       </label>
                       <div className="flex gap-2">
                         <input
@@ -5689,13 +5676,13 @@ export default function App() {
                           }`}
                           id="model-search"
                           onChange={(event) => setModelSearch(event.target.value)}
-                          placeholder="Search catalog or enter an exact model tag"
+                          placeholder={modelSearchPlaceholder(activeProvider?.name)}
                           value={modelSearch}
                         />
                         <button
                           className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:opacity-60"
                           disabled={!modelSearch.trim() || modelDownloadState === 'downloading'}
-                          onClick={() => void downloadOllamaModel()}
+                          onClick={() => void downloadModel()}
                           type="button"
                         >
                           Download
@@ -5778,7 +5765,7 @@ export default function App() {
                                       : 'text-slate-500'
                                 }`}
                                 disabled={modelDownloadState === 'downloading'}
-                                onClick={() => void downloadOllamaModel(model.name)}
+                                onClick={() => void downloadModel(model.name)}
                                 type="button"
                               >
                                 <Download size={15} />
@@ -5851,7 +5838,7 @@ export default function App() {
 
                     <div>
                       <label className="mb-2 block text-sm font-semibold" htmlFor="installed-model-select">
-                        Installed Ollama Models
+                        {installedModelsLabel(activeProvider?.name)}
                       </label>
                       <select
                         className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${

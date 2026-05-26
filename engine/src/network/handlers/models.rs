@@ -13,8 +13,10 @@ use axum::{
 };
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::convert::Infallible;
 use tokio::sync::mpsc;
+use tokio::time::{Duration, sleep};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::network::state::AppState;
@@ -32,6 +34,7 @@ pub struct SelectModelRequest {
 #[derive(Deserialize)]
 pub struct PullModelRequest {
     name: String,
+    quantization: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -47,6 +50,24 @@ struct OllamaPullChunk {
     total: Option<u64>,
     completed: Option<u64>,
     error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LmStudioDownloadRequest<'a> {
+    model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quantization: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct LmStudioDownloadStatus {
+    job_id: Option<String>,
+    status: String,
+    total_size_bytes: Option<u64>,
+    downloaded_bytes: Option<u64>,
+    bytes_per_second: Option<u64>,
+    error: Option<String>,
+    message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -189,7 +210,8 @@ async fn fetch_ollama_models() -> anyhow::Result<Vec<String>> {
     Ok(payload.models.into_iter().map(|model| model.name).collect())
 }
 
-pub async fn pull_ollama_model(
+pub async fn download_model(
+    State(state): State<AppState>,
     Json(payload): Json<PullModelRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
     let model = payload.name.trim().to_string();
@@ -200,9 +222,26 @@ pub async fn pull_ollama_model(
         ));
     }
 
+    let provider = state.orchestrator.current_provider_name();
+    let quantization = payload
+        .quantization
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let (tx, rx) = mpsc::channel::<String>(32);
     tokio::spawn(async move {
-        if let Err(error) = stream_ollama_pull(&model, tx.clone()).await {
+        let result: anyhow::Result<()> = match provider.as_str() {
+            "ollama" => stream_ollama_pull(&model, tx.clone()).await,
+            "lmstudio" => {
+                stream_lmstudio_download(&model, quantization.as_deref(), tx.clone()).await
+            }
+            other => Err(anyhow::anyhow!(
+                "Model downloads are not supported for provider `{other}`. Switch to Ollama or LM Studio first."
+            )),
+        };
+
+        if let Err(error) = result {
             let _ = tx
                 .send(format!(
                     r#"{{"error":{},"status":"failed"}}"#,
@@ -215,6 +254,13 @@ pub async fn pull_ollama_model(
 
     let stream = ReceiverStream::new(rx).map(|message| Ok(Event::default().data(message)));
     Ok(Sse::new(stream))
+}
+
+pub async fn pull_ollama_model(
+    State(state): State<AppState>,
+    payload: Json<PullModelRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
+    download_model(State(state), payload).await
 }
 
 async fn stream_ollama_pull(model: &str, tx: mpsc::Sender<String>) -> anyhow::Result<()> {
@@ -279,6 +325,155 @@ fn ollama_base_url() -> String {
         .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
         .trim_end_matches('/')
         .to_string()
+}
+
+async fn stream_lmstudio_download(
+    model: &str,
+    quantization: Option<&str>,
+    tx: mpsc::Sender<String>,
+) -> anyhow::Result<()> {
+    let base_url = lmstudio_management_base_url();
+    let client = reqwest::Client::new();
+    let response = with_lmstudio_auth(
+        client
+            .post(format!("{base_url}/api/v1/models/download"))
+            .json(&LmStudioDownloadRequest {
+                model,
+                quantization,
+            }),
+    )
+    .send()
+    .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("LM Studio download error {status} for model `{model}`: {body}");
+    }
+
+    let initial_status = response.json::<LmStudioDownloadStatus>().await?;
+    send_lmstudio_status(&tx, &initial_status).await?;
+
+    if is_lmstudio_terminal_success(&initial_status.status) {
+        send_download_success(&tx).await;
+        return Ok(());
+    }
+
+    if is_lmstudio_terminal_failure(&initial_status.status) {
+        anyhow::bail!("{}", lmstudio_failure_message(model, &initial_status));
+    }
+
+    let Some(job_id) = initial_status.job_id.clone() else {
+        anyhow::bail!(
+            "LM Studio started a model download for `{model}` but did not return a job id."
+        );
+    };
+
+    loop {
+        sleep(Duration::from_secs(1)).await;
+
+        let response = with_lmstudio_auth(
+            client.get(format!("{base_url}/api/v1/models/download/status/{job_id}")),
+        )
+        .send()
+        .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("LM Studio download status error {status} for `{model}`: {body}");
+        }
+
+        let download_status = response.json::<LmStudioDownloadStatus>().await?;
+        send_lmstudio_status(&tx, &download_status).await?;
+
+        if is_lmstudio_terminal_success(&download_status.status) {
+            send_download_success(&tx).await;
+            return Ok(());
+        }
+
+        if is_lmstudio_terminal_failure(&download_status.status) {
+            anyhow::bail!("{}", lmstudio_failure_message(model, &download_status));
+        }
+    }
+}
+
+async fn send_lmstudio_status(
+    tx: &mpsc::Sender<String>,
+    status: &LmStudioDownloadStatus,
+) -> anyhow::Result<()> {
+    let label = match status.status.as_str() {
+        "already_downloaded" => "already downloaded",
+        "completed" => "completed",
+        "downloading" => "downloading",
+        "paused" => "paused",
+        "failed" => "failed",
+        other => other,
+    };
+
+    let payload = json!({
+        "status": label,
+        "total": status.total_size_bytes,
+        "completed": status.downloaded_bytes,
+        "bytes_per_second": status.bytes_per_second,
+        "error": status.error.as_deref().or(status.message.as_deref()).filter(|_| {
+            is_lmstudio_terminal_failure(&status.status)
+        }),
+    });
+
+    if tx.send(payload.to_string()).await.is_err() {
+        anyhow::bail!("download stream closed");
+    }
+
+    Ok(())
+}
+
+async fn send_download_success(tx: &mpsc::Sender<String>) {
+    let _ = tx
+        .send(r#"{"status":"success","completed":1,"total":1}"#.to_string())
+        .await;
+}
+
+fn is_lmstudio_terminal_success(status: &str) -> bool {
+    matches!(status, "completed" | "already_downloaded")
+}
+
+fn is_lmstudio_terminal_failure(status: &str) -> bool {
+    matches!(status, "failed")
+}
+
+fn lmstudio_failure_message(model: &str, status: &LmStudioDownloadStatus) -> String {
+    status
+        .error
+        .as_deref()
+        .or(status.message.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("LM Studio failed to download `{model}`."))
+}
+
+fn lmstudio_management_base_url() -> String {
+    let raw = std::env::var("AEGIS_LM_STUDIO_URL")
+        .or_else(|_| std::env::var("AEGIS_LMSTUDIO_URL"))
+        .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
+
+    raw.trim_end_matches('/')
+        .strip_suffix("/v1")
+        .unwrap_or(raw.trim_end_matches('/'))
+        .to_string()
+}
+
+fn with_lmstudio_auth(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let token = std::env::var("AEGIS_LM_STUDIO_API_TOKEN")
+        .or_else(|_| std::env::var("LM_API_TOKEN"))
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty());
+
+    if let Some(token) = token {
+        builder.bearer_auth(token)
+    } else {
+        builder
+    }
 }
 
 fn model_switch_error(error: anyhow::Error) -> (StatusCode, String) {
