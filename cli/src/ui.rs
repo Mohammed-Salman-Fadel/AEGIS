@@ -7,8 +7,8 @@
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -38,6 +38,8 @@ pub struct StreamedMarkdownRenderer<'a> {
     printed_content: bool,
 }
 
+pub struct LiveTokenRenderer;
+
 impl Ui {
     pub fn new(no_color: bool, verbose: bool) -> Self {
         Self { no_color, verbose }
@@ -65,6 +67,10 @@ impl Ui {
             code_line_number: 1,
             printed_content: false,
         }
+    }
+
+    pub fn live_token_renderer(&self) -> LiveTokenRenderer {
+        LiveTokenRenderer
     }
 
     pub fn clear_screen(&self) {
@@ -497,6 +503,17 @@ impl Drop for LoadingAnimation {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+impl LiveTokenRenderer {
+    pub fn push(&mut self, token: &str) -> io::Result<()> {
+        print!("{token}");
+        io::stdout().flush()
+    }
+
+    pub fn finish(&mut self) -> io::Result<()> {
+        io::stdout().flush()
     }
 }
 

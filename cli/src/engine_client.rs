@@ -8,6 +8,7 @@
 use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::thread;
 use std::time::Duration;
 
 use crate::AppResult;
@@ -18,6 +19,7 @@ pub struct EngineClient {
     base_url: String,
     ollama_url: String,
     lm_studio_url: String,
+    rag_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -118,12 +120,194 @@ impl EngineClient {
         let lm_studio_url = env::var("AEGIS_LM_STUDIO_URL")
             .or_else(|_| env::var("AEGIS_LMSTUDIO_URL"))
             .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
+        let rag_url =
+            env::var("AEGIS_RAG_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string());
 
         Self {
             base_url,
             ollama_url,
             lm_studio_url,
+            rag_url,
         }
+    }
+
+    pub fn warm_active_model_in_background(&self) {
+        let client = self.clone();
+        let _ = thread::Builder::new()
+            .name("aegis-active-model-warmup".to_string())
+            .spawn(move || {
+                let _ = client.warm_active_model_silently();
+            });
+    }
+
+    fn warm_active_model_silently(&self) -> AppResult<()> {
+        let client = warmup_client();
+        let mut last_error = None;
+
+        for attempt in 0..6 {
+            match self.try_warm_active_model_once(&client) {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+
+            if attempt < 5 {
+                thread::sleep(Duration::from_millis(750));
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            "Could not warm the active model for an unknown reason.".to_string()
+        }))
+    }
+
+    fn try_warm_active_model_once(&self, client: &reqwest::blocking::Client) -> AppResult<()> {
+        let model = self.current_model_with_client(client)?;
+        let provider = self
+            .current_provider_with_client(client)
+            .unwrap_or_else(|_| "ollama".to_string());
+
+        match normalized_provider_name(&provider).as_str() {
+            "ollama" => self.warm_ollama_model(client, &model),
+            "lmstudio" => self.warm_lm_studio_model(client, &model),
+            _ => Ok(()),
+        }
+    }
+
+    fn current_model_with_client(&self, client: &reqwest::blocking::Client) -> AppResult<String> {
+        let request_path = format!("{}/models/current", self.base_url.trim_end_matches('/'));
+        let response = client
+            .get(&request_path)
+            .send()
+            .map_err(|error| format!("Could not fetch the active model from engine: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Engine current model request failed with HTTP {}.",
+                response.status()
+            ));
+        }
+
+        let response = response
+            .json::<CurrentModelResponse>()
+            .map_err(|error| format!("Could not parse current model response: {error}"))?;
+
+        Ok(response.model)
+    }
+
+    fn current_provider_with_client(
+        &self,
+        client: &reqwest::blocking::Client,
+    ) -> AppResult<String> {
+        let request_path = format!("{}/providers/current", self.base_url.trim_end_matches('/'));
+        let response = client
+            .get(&request_path)
+            .send()
+            .map_err(|error| format!("Could not fetch the active provider from engine: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Engine current provider request failed with HTTP {}.",
+                response.status()
+            ));
+        }
+
+        let response = response
+            .json::<CurrentProviderResponse>()
+            .map_err(|error| format!("Could not parse current provider response: {error}"))?;
+
+        Ok(response.provider)
+    }
+
+    fn warm_ollama_model(&self, client: &reqwest::blocking::Client, model: &str) -> AppResult<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Ok(());
+        }
+
+        let request_path = format!("{}/api/generate", self.ollama_url.trim_end_matches('/'));
+        let response = client
+            .post(&request_path)
+            .json(&OllamaWarmupRequest {
+                model,
+                prompt: "",
+                stream: false,
+                keep_alive: -1,
+            })
+            .send()
+            .map_err(|error| format!("Could not warm Ollama model `{model}`: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Ollama warmup failed with HTTP {} for `{model}`. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response
+            .json::<OllamaWarmupResponse>()
+            .map_err(|error| format!("Could not parse Ollama warmup response: {error}"))?;
+
+        if let Some(error) = response.error {
+            return Err(format!("Ollama warmup failed for `{model}`: {error}"));
+        }
+
+        Ok(())
+    }
+
+    fn warm_lm_studio_model(
+        &self,
+        client: &reqwest::blocking::Client,
+        model: &str,
+    ) -> AppResult<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Ok(());
+        }
+
+        let request_path = format!(
+            "{}/v1/chat/completions",
+            self.lm_studio_url.trim_end_matches('/')
+        );
+        let response = client
+            .post(&request_path)
+            .json(&LmStudioWarmupRequest {
+                model,
+                messages: vec![LmStudioWarmupMessage {
+                    role: "user",
+                    content: "warm up",
+                }],
+                stream: false,
+                max_tokens: 1,
+                temperature: 0.0,
+            })
+            .send()
+            .map_err(|error| format!("Could not warm LM Studio model `{model}`: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "LM Studio warmup failed with HTTP {} for `{model}`. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let response = response
+            .json::<LmStudioWarmupResponse>()
+            .map_err(|error| format!("Could not parse LM Studio warmup response: {error}"))?;
+
+        if let Some(error) = response.error {
+            return Err(format!(
+                "LM Studio warmup failed for `{model}`: {}",
+                error.message
+            ));
+        }
+
+        Ok(())
     }
 
     pub fn health(&self) -> EngineHealth {
@@ -170,6 +354,30 @@ impl EngineClient {
                 request_path,
                 reachable: false,
                 note: format!("Could not reach Ollama serve: {error}"),
+            },
+        }
+    }
+
+    pub fn rag_health(&self) -> EngineHealth {
+        let request_path = format!("{}/health", self.rag_url.trim_end_matches('/'));
+        match health_probe_client().get(&request_path).send() {
+            Ok(response) if response.status().is_success() => EngineHealth {
+                base_url: self.rag_url.clone(),
+                request_path,
+                reachable: true,
+                note: "RAG /health responded successfully.".to_string(),
+            },
+            Ok(response) => EngineHealth {
+                base_url: self.rag_url.clone(),
+                request_path,
+                reachable: false,
+                note: format!("RAG /health returned HTTP {}.", response.status()),
+            },
+            Err(error) => EngineHealth {
+                base_url: self.rag_url.clone(),
+                request_path,
+                reachable: false,
+                note: format!("Could not reach RAG service: {error}"),
             },
         }
     }
@@ -817,6 +1025,44 @@ struct ChatRequestBody {
 }
 
 #[derive(Serialize)]
+struct OllamaWarmupRequest<'a> {
+    model: &'a str,
+    prompt: &'a str,
+    stream: bool,
+    keep_alive: i64,
+}
+
+#[derive(Deserialize)]
+struct OllamaWarmupResponse {
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LmStudioWarmupRequest<'a> {
+    model: &'a str,
+    messages: Vec<LmStudioWarmupMessage<'a>>,
+    stream: bool,
+    max_tokens: u8,
+    temperature: f32,
+}
+
+#[derive(Serialize)]
+struct LmStudioWarmupMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Deserialize)]
+struct LmStudioWarmupResponse {
+    error: Option<LmStudioWarmupError>,
+}
+
+#[derive(Deserialize)]
+struct LmStudioWarmupError {
+    message: String,
+}
+
+#[derive(Serialize)]
 struct CalendarPromptRequest {
     prompt: String,
 }
@@ -1003,4 +1249,21 @@ fn health_probe_client() -> reqwest::blocking::Client {
         .timeout(Duration::from_secs(2))
         .build()
         .expect("health probe client should build")
+}
+
+fn warmup_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .expect("model warmup client should build")
+}
+
+fn normalized_provider_name(provider: &str) -> String {
+    match provider.trim().to_lowercase().as_str() {
+        "lm-studio" | "lm_studio" => "lmstudio".to_string(),
+        "openai-compatible" | "openai_compatible" | "openai-compat" | "openai_compat" => {
+            "openai-compatible".to_string()
+        }
+        other => other.to_string(),
+    }
 }

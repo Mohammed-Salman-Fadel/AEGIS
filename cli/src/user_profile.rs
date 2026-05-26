@@ -1,4 +1,4 @@
-//! Role: local personalization note storage shared by the CLI and engine via a text file path convention.
+//! Role: local personalization note storage shared by the CLI and engine via a markdown file path convention.
 //! Called by: `commands.rs` when the user runs `save "<note>"`.
 //! Calls into: the local filesystem only.
 //! Owns: resolving the note file path and appending new user notes.
@@ -58,7 +58,7 @@ fn default_profile_file_path() -> PathBuf {
     resolve_home_dir()
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
         .join(".aegis")
-        .join("user_notes.txt")
+        .join("user_profile.md")
 }
 
 fn resolve_home_dir() -> Option<PathBuf> {
