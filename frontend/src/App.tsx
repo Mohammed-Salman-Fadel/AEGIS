@@ -133,6 +133,7 @@ export default function App() {
   const [editingTitle, setEditingTitle] = useState('');
   const [deletingSessionIds, setDeletingSessionIds] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const isDark = theme === 'dark';
 
   const activeSession = useMemo(
@@ -494,6 +495,7 @@ export default function App() {
     setInput('');
     setError(null);
     setStatus('Inference');
+    abortControllerRef.current = new AbortController();
     setIsStreaming(true);
     setMessages((current) => [
       ...current,
@@ -504,6 +506,7 @@ export default function App() {
     try {
       const sessionId = activeSessionId ?? (await createSession()).session_id;
       const response = await fetch(`${API_BASE}/chat`, {
+        signal: abortControllerRef.current?.signal,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -767,6 +770,17 @@ export default function App() {
               {isDark ? 'Light mode' : 'Dark mode'}
             </button>
             <div
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-medium ${
+                isDark
+                  ? 'border-emerald-900/30 bg-emerald-500/10 text-emerald-400'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              }`}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              Local-Only
+            </div>
+
+            <div
               className={`rounded-lg border px-3 py-1 text-xs ${
                 isDark
                   ? 'border-zinc-800 text-zinc-400'
@@ -787,6 +801,31 @@ export default function App() {
             }`}
           >
             {error}
+          </div>
+        )}
+
+        {error && (error.includes('HTTP 503') || error.includes('HTTP 500') || error.includes('[ERROR]')) && (
+          <div
+            className={`border-b px-6 py-3 text-sm flex items-center justify-between ${
+              isDark
+                ? 'border-amber-950 bg-amber-950/40 text-amber-200'
+                : 'border-amber-200 bg-amber-50 text-amber-700'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span>
+                ⚠️ {error.includes('503') 
+                  ? 'System Error (SYS-04): MCP connection lost. Local tools are temporarily unavailable.' 
+                  : 'Model Error (CHAT-07): Local model crash or inference failure detected.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="underline text-xs hover:text-amber-300 font-medium transition-colors"
+            >
+              Reload System
+            </button>
           </div>
         )}
 
@@ -843,6 +882,30 @@ export default function App() {
         <footer
           className={`shrink-0 border-t p-4 ${isDark ? 'border-zinc-800' : 'border-stone-300'}`}
         >
+          {isStreaming && (
+            <div className="mx-auto max-w-3xl flex items-center justify-between gap-3 p-2 bg-zinc-900/50 border border-zinc-800 rounded-lg mb-2">
+              <div className="flex items-center gap-2 text-xs text-zinc-400">
+                <div className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                <span>Rust orchestration engine is processing...</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (abortControllerRef.current) {
+                    abortControllerRef.current.abort();
+                  }
+                  setIsStreaming(false);
+                  setStatus('Ready');
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 rounded border border-rose-500/30 text-xs font-medium transition-colors"
+              >
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                </svg>
+                Stop Generation
+              </button>
+            </div>
+          )}
           <form className="mx-auto flex max-w-3xl gap-3" onSubmit={handleSubmit}>
             <input
               className={`min-w-0 flex-1 rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${
