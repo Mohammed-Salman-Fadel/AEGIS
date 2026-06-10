@@ -1,8 +1,8 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 Push-Location "$PSScriptRoot\.."
 try {
-    $env:PYTHONPATH = (Resolve-Path "rag-python").Path
+    $env:PYTHONPATH = (Resolve-Path "python-services").Path
 
     python -m unittest discover -s testing/python -p "test_*.py"
 

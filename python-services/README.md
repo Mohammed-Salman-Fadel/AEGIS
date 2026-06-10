@@ -1,6 +1,6 @@
 # AEGIS Python RAG Subsystem
 
-The `rag-python` module is the document retrieval subsystem of AEGIS. Its purpose is to enable document-grounded responses by ingesting local files, preparing them for semantic retrieval, and returning relevant content when requested by the central Rust orchestration engine.
+The `python-services` module is the document retrieval subsystem of AEGIS. Its purpose is to enable document-grounded responses by ingesting local files, preparing them for semantic retrieval, and returning relevant content when requested by the central Rust orchestration engine.
 
 This subsystem operates as a local, persistent service and is responsible exclusively for retrieval-related tasks. It does not manage user interaction or model inference.
 
@@ -8,9 +8,9 @@ This subsystem operates as a local, persistent service and is responsible exclus
 
 AEGIS follows a modular architecture where responsibilities are clearly separated:
 
-- Rust Engine → orchestration, routing, inference control
-- Python RAG Subsystem → document indexing & retrieval
-- Local LLM (e.g., Ollama) → response generation
+- Rust Engine â†’ orchestration, routing, inference control
+- Python RAG Subsystem â†’ document indexing & retrieval
+- Local LLM (e.g., Ollama) â†’ response generation
 
 The RAG subsystem acts as a specialized retrieval worker, enabling the system to ground responses in user-provided data rather than relying solely on model knowledge.
 
@@ -41,7 +41,7 @@ Instead, it is invoked by the Rust engine when retrieval is required.
 
 1. User sends request (CLI or Web UI)
 2. Rust engine receives and analyzes request
-3. If retrieval is needed → calls RAG subsystem
+3. If retrieval is needed â†’ calls RAG subsystem
 4. RAG subsystem:
    - processes request (index or query)
    - returns relevant chunks + metadata
@@ -78,7 +78,6 @@ The subsystem exposes a REST API for integration with the Rust engine.
 - `POST /init` → initialize system
 - `POST /index` → index documents from a folder
 - `POST /query` → retrieve relevant chunks
-- `POST /store` → store user memory
 - `POST /shutdown` → clean shutdown
 
 ### Key Design Rules
@@ -93,7 +92,7 @@ Each stored entry (document or memory) includes:
 - `text` → chunk content
 - `source` → file name or `"user"`
 - `page` → page number (if applicable)
-- `type` → `"document"` or `"memory"`
+- `type` → `"document"`
 
 This enables:
 
@@ -101,19 +100,7 @@ This enables:
 - filtering
 - future extensibility
 
-## Memory Support
 
-The subsystem also supports long-term user memory:
-
-- Stored via `/store` endpoint
-- Treated as lightweight semantic entries
-- Retrieved alongside documents
-
-Memory is:
-
-- persistent
-- queryable
-- integrated into retrieval results
 
 ## Vector Store Design
 
@@ -134,16 +121,16 @@ This ensures:
 
 The system is designed with the following guarantees:
 
-#### ✔ Concurrency Safety
+#### âœ” Concurrency Safety
 - Thread-safe access to vector store and state using locks
-#### ✔ Path Normalization
+#### âœ” Path Normalization
 - All file paths handled via `pathlib` for cross-platform compatibility
-#### ✔ Duplicate Protection
+#### âœ” Duplicate Protection
 - Prevents re-indexing the same document
-#### ✔ Resource Awareness
+#### âœ” Resource Awareness
 - Designed for low-resource machines
 - No GPU required
-#### ✔ Error Handling
+#### âœ” Error Handling
 - Clean JSON error responses
 - Validation of inputs and file paths
 
@@ -164,7 +151,7 @@ Possible enhancements:
 - Improved ranking and retrieval strategies
 - Advanced metadata filtering
 - Hybrid search (keyword + vector)
-- Smarter memory management
+- Implement user memory storage and retrieval
 - Streaming responses
 
 

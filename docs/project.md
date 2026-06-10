@@ -1,4 +1,4 @@
-### Directory Roles
+﻿### Directory Roles
 
 - engine/
   - Central orchestration engine
@@ -6,7 +6,7 @@
   - Session handling
   - Ollama integration
   - RAG/MCP client communication
-- rag-python/
+- python-services/
   - RAG worker process
   - Document indexing and retrieval
   - Citation support

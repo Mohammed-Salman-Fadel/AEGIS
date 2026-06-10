@@ -1,4 +1,4 @@
-import os
+﻿import os
 import logging
 import tempfile
 from faster_whisper import WhisperModel
@@ -15,7 +15,7 @@ class VoiceService:
         self.keep_cached = True  # If False, models are unloaded after each query
         
         # Paths for Kokoro
-        # Note: We look in rag-python/models/kokoro
+        # Note: We look in python-services/models/kokoro
         base_path = os.path.join(os.getcwd(), "models", "kokoro")
         self.kokoro_model_path = os.path.join(base_path, "kokoro-v0_19.onnx")
         self.kokoro_voices_path = os.path.join(base_path, "voices.json")

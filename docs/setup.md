@@ -1,6 +1,6 @@
-# AEGIS Setup Guide
+﻿# AEGIS Setup Guide
 
-## 🚀 Quick Start (5 Minutes)
+## Quick Start (5 Minutes)
 
 1. **Prepare Environment**:
    ```powershell
@@ -11,7 +11,7 @@
 
 2. **Start RAG Service**:
    ```powershell
-   cd rag-python
+   cd python-services
    python -m uvicorn app.main:app --port 8000
    ```
 
@@ -24,7 +24,7 @@
 
 ---
 
-## 🛠️ Detailed Configuration
+## Detailed Configuration
 
 ### Subsystem Prerequisites
 
@@ -52,4 +52,4 @@
 ---
 
 > [!IMPORTANT]
-> **Legacy Environment Cleanup**: If you have an old `rag-python/rag-env` folder, please delete it. AEGIS now uses the unified `.venv` in the root directory for all Python services to ensure version consistency.
+> **Legacy Environment Cleanup**: If you have an old `python-services/rag-env` folder, please delete it. AEGIS now uses the unified `.venv` in the root directory for all Python services to ensure version consistency.

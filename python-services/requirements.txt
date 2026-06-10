@@ -1,0 +1,11 @@
+fastapi==0.136.1
+uvicorn==0.46.0
+pydantic==2.13.3
+pydantic-settings==2.14.0
+chromadb==1.5.8
+PyMuPDF==1.27.2.3
+
+# Semantic embedding backend.
+# This requires downloading the model weights on the first run or placing them in the models directory.
+sentence-transformers==5.4.1
+semble[mcp]

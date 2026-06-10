@@ -1,4 +1,4 @@
-//! Role: repository and component path discovery for the CLI scaffold.
+﻿//! Role: repository and component path discovery for the CLI scaffold.
 //! Called by: `main.rs`, `doctor.rs`, `install.rs`, and `runner.rs`.
 //! Calls into: the local filesystem only.
 //! Owns: workspace root detection, component location, and component scaffold/readiness notes.
@@ -61,8 +61,8 @@ impl Workspace {
             .unwrap_or_else(|| root.join("frontend"));
         let installer_dir =
             Self::resolve_existing(&root, &["installer"]).unwrap_or_else(|| root.join("installer"));
-        let rag_dir = Self::resolve_existing(&root, &["rag-python", "src/rag-python"])
-            .unwrap_or_else(|| root.join("rag-python"));
+        let rag_dir = Self::resolve_existing(&root, &["python-services", "src/python-services"])
+            .unwrap_or_else(|| root.join("python-services"));
 
         Self {
             root,

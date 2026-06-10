@@ -1,10 +1,10 @@
-import pathlib
+﻿import pathlib
 import sys
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-RAG_ROOT = ROOT / "rag-python"
+RAG_ROOT = ROOT / "python-services"
 if str(RAG_ROOT) not in sys.path:
     sys.path.insert(0, str(RAG_ROOT))
 

@@ -48,7 +48,7 @@ __pycache__/
 *$py.class
 .pytest_cache/
 *.log
-rag-python/models
+python-services/models
 
 # Data & Database
 .aegis/

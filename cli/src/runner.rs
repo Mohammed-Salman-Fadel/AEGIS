@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+﻿#![allow(dead_code)]
 
 //! Role: subprocess scaffolding for future engine startup, installer steps, and model downloads.
 //! Called by: `commands.rs` for status previews and later by `install.rs` when real execution is approved.
@@ -99,7 +99,7 @@ fn ensure_rag_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Runti
 
     if !workspace.rag_dir.join("app").exists() {
         report.warnings.push(format!(
-            "RAG service was not started because `{}` does not look like the rag-python folder.",
+            "RAG service was not started because `{}` does not look like the python-services folder.",
             workspace.rag_dir.display()
         ));
         return;

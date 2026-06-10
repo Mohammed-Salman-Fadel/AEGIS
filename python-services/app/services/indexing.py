@@ -5,8 +5,7 @@ import logging
 import fitz  # PyMuPDF
 from typing import Tuple, List
 
-from ..core.config import CHUNK_SIZE_WORDS, CHUNK_OVERLAP_WORDS
-from ..utils.text_splitter import split_text_by_words
+from ..utils.text_splitter import recursive_token_splitter
 from ..core.lifecycle import state
 
 logger = logging.getLogger(__name__)
@@ -35,7 +34,13 @@ class IndexingService:
             if not text.strip():
                 return chunks
                 
-            text_chunks = split_text_by_words(text, CHUNK_SIZE_WORDS, CHUNK_OVERLAP_WORDS)
+            # Using tokenizer to perfectly pack 510 tokens per chunk
+            text_chunks = recursive_token_splitter(
+                text, 
+                tokenizer=state.embedding_service.tokenizer, 
+                chunk_size=510, 
+                chunk_overlap=50
+            )
             source = str(file_path.resolve())
             
             for i, chunk_text in enumerate(text_chunks):
@@ -59,26 +64,62 @@ class IndexingService:
             doc = fitz.open(file_path)
             source = str(file_path.resolve())
             
-            chunk_global_index = 0
+            full_text = ""
+            page_map = []  # List of tuples: (start_char, end_char, page_num)
+            
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
-                text = page.get_text("text")
-                if not text.strip():
-                    continue
+                page_text = page.get_text("text")
+                
+                # Prevent merging words across pages
+                if page_text and not page_text[-1].isspace():
+                    page_text += "\n"
+                
+                start_char = len(full_text)
+                full_text += page_text
+                end_char = len(full_text)
+                
+                page_map.append((start_char, end_char, page_num + 1))
+                
+            if not full_text.strip():
+                return chunks
+
+            # Split the entire document text at once for perfect packing
+            text_chunks = recursive_token_splitter(
+                full_text, 
+                tokenizer=state.embedding_service.tokenizer, 
+                chunk_size=510, 
+                chunk_overlap=50
+            )
+            
+            search_start = 0
+            for i, chunk_text in enumerate(text_chunks):
+                # Find where this chunk occurs in the full text
+                chunk_index = full_text.find(chunk_text, search_start)
+                
+                if chunk_index == -1:
+                    chunk_index = search_start
                     
-                text_chunks = split_text_by_words(text, CHUNK_SIZE_WORDS, CHUNK_OVERLAP_WORDS)
-                for chunk_text in text_chunks:
-                    chunks.append({
-                        "id": self._generate_chunk_id(source, chunk_global_index, session_id),
-                        "text": chunk_text,
-                        "metadata": {
-                            "source": source,
-                            "page": page_num + 1,
-                            "type": "document",
-                            "session_id": session_id
-                        }
-                    })
-                    chunk_global_index += 1
+                # Advance search_start (accounting for overlap)
+                search_start = max(0, chunk_index + len(chunk_text) // 2)
+                
+                # Determine the page number mathematically
+                assigned_page = -1
+                for start_char, end_char, page_num in page_map:
+                    if start_char <= chunk_index < end_char:
+                        assigned_page = page_num
+                        break
+                        
+                chunks.append({
+                    "id": self._generate_chunk_id(source, i, session_id),
+                    "text": chunk_text,
+                    "metadata": {
+                        "source": source,
+                        "page": assigned_page,
+                        "type": "document",
+                        "session_id": session_id
+                    }
+                })
         except Exception as e:
             logger.error(f"Error processing PDF file {file_path}: {e}")
         return chunks

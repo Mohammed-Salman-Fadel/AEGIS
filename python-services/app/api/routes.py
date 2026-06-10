@@ -5,12 +5,11 @@ import signal
 
 from ..models.schemas import (
     StatusResponse, ErrorResponse, IndexRequest, IndexResponse, 
-    QueryRequest, QueryResponse, StoreRequest, DeleteResponse, DeleteDocumentRequest
+    QueryRequest, QueryResponse, DeleteResponse, DeleteDocumentRequest
 )
 from ..core.lifecycle import state
 from ..core.config import MAX_TOP_K
 from ..services.indexing import indexing_service
-from ..services.memory import memory_service
 from ..services.retrieval import retrieval_service
 from ..services.voice import voice_service
 
@@ -27,16 +26,25 @@ def check_initialized():
 
 @router.get("/health", response_model=StatusResponse)
 def health_check():
+    """Returns the current health status of the service."""
     return {"status": "ok"}
 
 @router.post("/init", response_model=StatusResponse)
 def initialize_service():
+    """
+    Initializes the local models and vector store. 
+    Must be called before performing any indexing or queries.
+    """
     if state.initialize():
         return {"status": "initialized"}
     return {"status": "already_initialized"}
 
 @router.post("/index", response_model=IndexResponse, dependencies=[Depends(check_initialized)])
 def index_documents(request: IndexRequest):
+    """
+    Ingests, chunks, and creates vector embeddings for a given document or folder.
+    Associates the embeddings with a specific user session.
+    """
     try:
         chunks_added = indexing_service.index_path(request.path, request.session_id)
         return {"status": "indexed", "chunks_added": chunks_added}
@@ -48,6 +56,10 @@ def index_documents(request: IndexRequest):
 
 @router.post("/query", response_model=QueryResponse, dependencies=[Depends(check_initialized)])
 def query_documents(request: QueryRequest):
+    """
+    Performs a semantic search against the vector store using the provided query.
+    Returns the top_k most relevant document chunks.
+    """
     try:
         top_k = min(request.top_k, MAX_TOP_K)
         return retrieval_service.query(request.query, top_k, request.session_id)
@@ -56,6 +68,10 @@ def query_documents(request: QueryRequest):
 
 @router.post("/delete/{session_id}", response_model=DeleteResponse, dependencies=[Depends(check_initialized)])
 def delete_documents(session_id: str):
+    """
+    Deletes all document embeddings associated with a specific session ID.
+    Used for cleanup when a session is closed.
+    """
     try:
         count = state.vector_store.delete_session_documents(session_id)
         return {"status": "deleted", "deleted_count": count}
@@ -64,17 +80,20 @@ def delete_documents(session_id: str):
 
 @router.post("/delete-document", response_model=DeleteResponse, dependencies=[Depends(check_initialized)])
 def delete_document(request: DeleteDocumentRequest):
+    """
+    Deletes a specific document (by source path) from a given session.
+    """
     try:
         count = state.vector_store.delete_document(request.session_id, request.source)
         return {"status": "deleted", "deleted_count": count}
     except Exception as e:
         raise HTTPException(status_code=500, detail={"error": f"Document deletion failed: {str(e)}"})
 
-# TODO: The memory /store endpoint is temporarily hidden for the demo.
-# We will integrate this feature with the Rust engine in the next milestone.
-
 @router.post("/shutdown", response_model=StatusResponse)
 def shutdown_service():
+    """
+    Safely shuts down the vector store and terminates the Python process.
+    """
     state.shutdown()
     
     # Schedule process term signal asynchronously so the HTTP response goes through
