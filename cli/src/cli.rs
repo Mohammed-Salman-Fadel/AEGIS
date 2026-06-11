@@ -1,10 +1,3 @@
-//! Role: public Clap command tree for the scaffolded AEGIS CLI.
-//! Called by: `main.rs` during argument parsing.
-//! Calls into: shared argument structs from `args.rs`.
-//! Owns: user-facing command names, nesting, help text, and examples.
-//! Does not own: command behavior, menus, backend calls, or installation steps.
-//! Next TODOs: refine help text once the engine endpoints and installer flow stabilize.
-
 use clap::{Parser, Subcommand};
 
 use crate::args::{
@@ -12,32 +5,12 @@ use crate::args::{
     RequiredSessionIdArg, SaveArgs,
 };
 
-pub const HELP_EXAMPLES: &str = "\
-Examples:
-  aegis
-  aegis install
-  aegis install --path D:\\AEGIS
-  aegis chat \"What can you do?\"
-  aegis load 1189578c-9c96-4b4c-8015-4d0673544a6a
-  aegis repl
-  aegis ask --stdin
-  aegis session new
-  aegis save \"my name is Sam\"
-    aegis provider list
-    aegis model
-    aegis model list
-    aegis model switch qwen3:4b
-    aegis model download qwen3:4b
-    aegis status
-    aegis doctor";
-
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "aegis",
     version = "0.0.1",
     about = "AEGIS is your local privacy first tool!",
     long_about = None,
-    after_help = HELP_EXAMPLES
 )]
 
 pub struct Cli {

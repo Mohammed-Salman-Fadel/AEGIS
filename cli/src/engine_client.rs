@@ -1,10 +1,3 @@
-//! Role: placeholder localhost HTTP boundary between the CLI and the Rust orchestrator.
-//! Called by: `commands.rs` for chat, session, provider, model, and status flows.
-//! Calls into: future engine endpoints such as `/chat`, `/health`, `/sessions`, `/providers`, and `/models`.
-//! Owns: CLI-side request intent and placeholder response shapes for the future HTTP client.
-//! Does not own: orchestration logic, session history, provider state, or model state.
-//! Next TODOs: replace placeholder returns with real HTTP requests and source endpoint paths from shared engine config.
-
 use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -1267,3 +1260,5 @@ fn normalized_provider_name(provider: &str) -> String {
         other => other.to_string(),
     }
 }
+
+

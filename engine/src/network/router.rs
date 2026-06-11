@@ -79,9 +79,6 @@ async fn handle_chat_ws(
                 edit_from_turn_index: None,
                 mode,
                 response_style: None,
-                code_project_name: None,
-                code_project_path: None,
-                code_project_context: None,
                 rag_enabled,
                 rag_top_k,
                 rag_similarity_threshold,
@@ -414,7 +411,12 @@ async fn handle_voice_transcribe(
         }
     }
 
-    let audio_data = audio_data.ok_or_else(|| (StatusCode::BAD_REQUEST, "No audio file provided.".to_string()))?;
+    let audio_data = audio_data.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "No audio file provided.".to_string(),
+        )
+    })?;
 
     let text = state
         .orchestrator
@@ -464,7 +466,9 @@ async fn handle_voice_config(
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
 
-    Ok(Json(json!({ "status": "ok", "keep_cached": payload.keep_cached })))
+    Ok(Json(
+        json!({ "status": "ok", "keep_cached": payload.keep_cached }),
+    ))
 }
 
 pub fn create_router(state: AppState) -> Router {

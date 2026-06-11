@@ -5998,7 +5998,7 @@ export default function App() {
                           : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'
                       }`}
                       onChange={(event) => setProfileText(event.target.value)}
-                      placeholder={'Examples:\n- My name is Mohammed.\n- I prefer concise but technically precise answers.\n- I am working on AEGIS and usually want practical implementation help.\n- When explaining code, prioritize architecture before syntax details.'}
+                      placeholder={'Add your preferences, identity, and context here...'}
                       value={profileText}
                     />
                     <div className="flex justify-end gap-2">

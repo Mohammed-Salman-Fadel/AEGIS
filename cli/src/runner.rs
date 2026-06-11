@@ -4,8 +4,6 @@
 //! Called by: `commands.rs` for status previews and later by `install.rs` when real execution is approved.
 //! Calls into: the host operating system through `std::process::Command`.
 //! Owns: generic launch-plan descriptions and process execution helpers.
-//! Does not own: command routing, dependency decisions, or CLI argument parsing.
-//! Next TODOs: map installer and engine flows onto these helpers once the approved OS-specific commands are finalized.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader};
@@ -14,9 +12,9 @@ use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::AppResult;
 use crate::ui::Ui;
 use crate::workspace::Workspace;
+use crate::AppResult;
 
 const ENGINE_HEALTH_PATH: &str = "/health";
 const RAG_HEALTH_PATH: &str = "/health";

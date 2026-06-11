@@ -9,10 +9,12 @@ use crate::compactor::Compactor;
 use crate::config::InferenceProvider;
 use crate::context::RequestContext;
 use crate::inference::InferenceBackend;
+use crate::inference::backends::openai_compat::OpenAiCompatBackend;
 use crate::memory_store::{MemoryStore, Session, SessionSummary};
 use crate::model_registry::ModelRegistry;
 use crate::network::handlers::chat::ChatRequest;
 use crate::plan_parser::{PlanParser, StepResult};
+use crate::process_manager;
 use crate::prompt_builder::PromptBuilder;
 use crate::provider_registry::ProviderRegistry;
 use crate::rag_client::RagClient;
@@ -21,7 +23,7 @@ use crate::tool_registry::ToolRegistry;
 use crate::user_profile;
 use crate::workflow::registry::WorkflowRegistry;
 
-const MAX_CODE_PROJECT_CONTEXT_CHARS: usize = 180_000;
+
 
 /// The central orchestrator — coordinates every subsystem.
 /// This is the primary entry point for all incoming chat requests.
@@ -87,21 +89,6 @@ fn format_active_documents(attachments: &[String]) -> String {
         .map(|attachment| format!("- {attachment}"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn truncate_code_project_context(context: &str) -> String {
-    let trimmed = context.trim();
-    if trimmed.len() <= MAX_CODE_PROJECT_CONTEXT_CHARS {
-        return trimmed.to_string();
-    }
-
-    let mut truncated = trimmed
-        .chars()
-        .take(MAX_CODE_PROJECT_CONTEXT_CHARS)
-        .collect::<String>();
-    truncated
-        .push_str("\n\n[AEGIS truncated the selected project context to fit the prompt budget.]");
-    truncated
 }
 
 fn is_code_scoped_request(message: &str) -> bool {
@@ -347,6 +334,35 @@ fn clean_generated_session_title(raw: &str) -> Option<String> {
     }
 }
 
+fn lm_studio_base_url() -> String {
+    std::env::var("AEGIS_LM_STUDIO_URL")
+        .or_else(|_| std::env::var("AEGIS_LMSTUDIO_URL"))
+        .or_else(|_| std::env::var("AEGIS_OPENAI_COMPAT_URL"))
+        .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string())
+}
+
+fn lm_studio_api_key() -> Option<String> {
+    std::env::var("AEGIS_LM_STUDIO_API_KEY")
+        .ok()
+        .or_else(|| std::env::var("AEGIS_OPENAI_COMPAT_API_KEY").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn openai_compat_base_url() -> String {
+    std::env::var("AEGIS_OPENAI_COMPAT_URL")
+        .or_else(|_| std::env::var("AEGIS_LM_STUDIO_URL"))
+        .or_else(|_| std::env::var("AEGIS_LMSTUDIO_URL"))
+        .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string())
+}
+
+fn openai_compat_api_key() -> Option<String> {
+    std::env::var("AEGIS_OPENAI_COMPAT_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 impl Orchestrator {
     pub fn new(
         inference: Box<dyn InferenceBackend + Send + Sync>,
@@ -440,6 +456,96 @@ impl Orchestrator {
         self.provider_registry.current_provider_name()
     }
 
+    pub async fn prepare_lm_studio_provider(&self) -> anyhow::Result<String> {
+        self.ensure_lm_studio_model_ready(true).await
+    }
+
+    async fn prepare_lm_studio_backend(&self) -> anyhow::Result<OpenAiCompatBackend> {
+        let base_url = lm_studio_base_url();
+        process_manager::ensure_lm_studio_server(&base_url).await?;
+        Ok(OpenAiCompatBackend::new(base_url, lm_studio_api_key()))
+    }
+
+    async fn ensure_named_lm_studio_model_ready(
+        &self,
+        backend: &OpenAiCompatBackend,
+        model: &str,
+    ) -> anyhow::Result<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            anyhow::bail!("The LM Studio model name cannot be empty.");
+        }
+
+        if let Err(warm_error) = backend.warm_model_for_local_runtime(model).await {
+            process_manager::load_lm_studio_model(model, None)
+                .await
+                .with_context(|| {
+                    format!(
+                        "LM Studio could not serve `{model}` yet, and AEGIS could not load it automatically after the initial warmup failed: {warm_error}"
+                    )
+                })?;
+
+            backend
+                .warm_model_for_local_runtime(model)
+                .await
+                .with_context(|| {
+                    format!(
+                        "LM Studio loaded `{model}`, but the OpenAI-compatible API still could not use it"
+                    )
+                })?;
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_lm_studio_model_ready(&self, allow_fallback: bool) -> anyhow::Result<String> {
+        let backend = self.prepare_lm_studio_backend().await?;
+        let active_model = self.model_registry.current_model_name();
+
+        match self
+            .ensure_named_lm_studio_model_ready(&backend, &active_model)
+            .await
+        {
+            Ok(()) => return Ok(active_model),
+            Err(active_error) if !allow_fallback => return Err(active_error),
+            Err(active_error) => {
+                let mut candidates = backend.list_models().await.unwrap_or_default();
+                if candidates.is_empty() {
+                    candidates = process_manager::list_lm_studio_downloaded_models()
+                        .await
+                        .unwrap_or_default();
+                }
+
+                for candidate in candidates {
+                    if candidate.eq_ignore_ascii_case(&active_model) {
+                        continue;
+                    }
+
+                    if self
+                        .ensure_named_lm_studio_model_ready(&backend, &candidate)
+                        .await
+                        .is_ok()
+                    {
+                        tracing::info!(
+                            previous_model = %active_model,
+                            fallback_model = %candidate,
+                            "LM Studio active model was replaced with the first usable local model"
+                        );
+                        self.model_registry.seed_active_model(candidate.clone());
+                        return Ok(candidate);
+                    }
+                }
+
+                Err(anyhow::anyhow!(
+                    "LM Studio is running, but AEGIS could not make the active model `{}` usable. {} If the model is installed locally, AEGIS already tried `lms load {}` automatically. Otherwise, download a model with `lms get <model>` or update `AEGIS_MODEL` to a valid LM Studio model key.",
+                    active_model,
+                    active_error,
+                    active_model
+                ))
+            }
+        }
+    }
+
     pub async fn context_usage(
         &self,
         session_id: Option<&str>,
@@ -480,13 +586,17 @@ impl Orchestrator {
 
     pub async fn list_available_models(&self) -> anyhow::Result<(String, Vec<String>)> {
         let provider = self.current_provider_name();
-        let models = self
-            .inference
-            .read()
-            .await
-            .list_models()
-            .await
-            .unwrap_or_default();
+        let mut models = {
+            let inference = self.inference.read().await;
+            inference.list_models().await.unwrap_or_default()
+        };
+
+        if provider == "lmstudio" && models.is_empty() {
+            models = process_manager::list_lm_studio_downloaded_models()
+                .await
+                .unwrap_or_default();
+        }
+
         Ok((provider, models))
     }
 
@@ -629,7 +739,9 @@ impl Orchestrator {
             });
         }
 
-        let _ = self.provider_registry.set_active_provider(provider.clone());
+        if matches!(provider, InferenceProvider::LmStudio) {
+            let _ = self.ensure_lm_studio_model_ready(true).await?;
+        }
 
         let new_backend: Box<dyn InferenceBackend + Send + Sync> = match &provider {
             InferenceProvider::Ollama => {
@@ -637,22 +749,26 @@ impl Orchestrator {
                     .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
                 Box::new(crate::inference::backends::ollama::OllamaBackend::new(url))
             }
-            InferenceProvider::LmStudio | InferenceProvider::OpenAiCompatible => {
-                let url = std::env::var("AEGIS_LM_STUDIO_URL")
-                    .or_else(|_| std::env::var("AEGIS_LMSTUDIO_URL"))
-                    .or_else(|_| std::env::var("AEGIS_OPENAI_COMPAT_URL"))
-                    .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
-                let api_key = std::env::var("AEGIS_OPENAI_COMPAT_API_KEY").ok();
-                Box::new(
-                    crate::inference::backends::openai_compat::OpenAiCompatBackend::new(
-                        url, api_key,
-                    ),
-                )
-            }
+            InferenceProvider::LmStudio => Box::new(
+                crate::inference::backends::openai_compat::OpenAiCompatBackend::new(
+                    lm_studio_base_url(),
+                    lm_studio_api_key(),
+                ),
+            ),
+            InferenceProvider::OpenAiCompatible => Box::new(
+                crate::inference::backends::openai_compat::OpenAiCompatBackend::new(
+                    openai_compat_base_url(),
+                    openai_compat_api_key(),
+                ),
+            ),
         };
 
-        let mut backend = self.inference.write().await;
-        *backend = new_backend;
+        {
+            let mut backend = self.inference.write().await;
+            *backend = new_backend;
+        }
+
+        let _ = self.provider_registry.set_active_provider(provider.clone());
 
         Ok(ProviderSwitchOutcome {
             previous_provider: current.as_str().to_string(),
@@ -667,6 +783,15 @@ impl Orchestrator {
 
     pub async fn warm_active_model(&self) -> anyhow::Result<()> {
         let model_name = self.model_registry.current_model_name();
+
+        if matches!(
+            self.provider_registry.current_provider(),
+            InferenceProvider::LmStudio
+        ) {
+            let _ = self.ensure_lm_studio_model_ready(true).await?;
+            return Ok(());
+        }
+
         self.inference
             .read()
             .await
@@ -693,25 +818,52 @@ impl Orchestrator {
             });
         }
 
-        self.inference
-            .read()
-            .await
-            .warm_model(next_model)
-            .await
-            .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
+        let current_provider = self.provider_registry.current_provider();
+        match current_provider {
+            InferenceProvider::LmStudio => {
+                let backend = self.prepare_lm_studio_backend().await?;
+                self.ensure_named_lm_studio_model_ready(&backend, next_model)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Could not make the requested LM Studio model `{next_model}` ready."
+                        )
+                    })?;
+            }
+            _ => {
+                self.inference
+                    .read()
+                    .await
+                    .warm_model(next_model)
+                    .await
+                    .with_context(|| {
+                        format!("Could not warm the requested model `{next_model}`.")
+                    })?;
+            }
+        }
 
         let previous_model = self.model_registry.set_active_model(next_model);
-        let unload_warning = match self
-            .inference
-            .read()
-            .await
-            .unload_model(&previous_model)
-            .await
-        {
-            Ok(()) => None,
-            Err(error) => Some(format!(
-                "Switched successfully, but could not unload `{previous_model}`: {error}"
-            )),
+        let unload_warning = match current_provider {
+            InferenceProvider::LmStudio => {
+                match process_manager::unload_lm_studio_model(&previous_model).await {
+                    Ok(()) => None,
+                    Err(error) => Some(format!(
+                        "Switched successfully, but could not unload `{previous_model}`: {error}"
+                    )),
+                }
+            }
+            _ => match self
+                .inference
+                .read()
+                .await
+                .unload_model(&previous_model)
+                .await
+            {
+                Ok(()) => None,
+                Err(error) => Some(format!(
+                    "Switched successfully, but could not unload `{previous_model}`: {error}"
+                )),
+            },
         };
 
         Ok(ModelSwitchOutcome {
@@ -761,6 +913,13 @@ impl Orchestrator {
             && req.edit_from_turn_index.is_none()
             && session.history.turns.is_empty();
 
+        if matches!(
+            self.provider_registry.current_provider(),
+            InferenceProvider::LmStudio
+        ) {
+            let _ = self.ensure_lm_studio_model_ready(true).await?;
+        }
+
         let model = self.model_registry.get_active();
         let mut ctx = RequestContext::new(
             working_session_id.clone(),
@@ -806,12 +965,20 @@ impl Orchestrator {
         // 1. RAG is strictly session-scoped. If this turn has no current-session
         // attachments, or RAG is disabled, do not query the global RAG store at all.
         let (relevant_chunks, rag_metrics) = if req.attachments.is_empty() || !rag_enabled {
-            ctx.trace_summary("rag", "no current-session document attachments or RAG disabled");
+            ctx.trace_summary(
+                "rag",
+                "no current-session document attachments or RAG disabled",
+            );
             (Vec::new(), None)
         } else {
             match self
                 .rag_client
-                .retrieve(&ctx.original_query, rag_top_k, rag_threshold, &working_session_id)
+                .retrieve(
+                    &ctx.original_query,
+                    rag_top_k,
+                    rag_threshold,
+                    &working_session_id,
+                )
                 .await
             {
                 Ok(outcome) => (outcome.chunks, Some(outcome.metrics)),
@@ -877,7 +1044,7 @@ impl Orchestrator {
             ctx.trace_summary("code_search", "invoking Semble");
             match self
                 .tool_registry
-                .execute_code_search(&req.message, req.code_project_path.as_deref())
+                .execute_code_search(&req.message, None)
                 .await
             {
                 Ok(context) => {
@@ -895,20 +1062,6 @@ impl Orchestrator {
         } else {
             String::new()
         };
-
-        let context_from_project = req
-            .code_project_context
-            .as_deref()
-            .map(truncate_code_project_context)
-            .filter(|context| !context.is_empty())
-            .unwrap_or_default();
-
-        if !context_from_project.is_empty() {
-            ctx.trace_summary(
-                "project_context",
-                "injecting selected local code project snapshot",
-            );
-        }
 
         // 1.6 Zotero Search: If the query is research-related, use Zotero MCP
         // Optimization: In Academic mode, always try zotero search
@@ -939,7 +1092,6 @@ impl Orchestrator {
         // 2. Prompt Synthesis: Perform "Context Injection" if data is available
         let synthesis_prompt = if !context_from_docs.is_empty()
             || !context_from_code.is_empty()
-            || !context_from_project.is_empty()
             || !context_from_zotero.is_empty()
         {
             ctx.trace_summary("synthesis", "context found and injected into prompt");
@@ -973,21 +1125,6 @@ impl Orchestrator {
                 prompt.push_str(&format!(
                     "CODEBASE EXCERPTS (from Semble):\n{}\n\n",
                     context_from_code
-                ));
-            }
-
-            if !context_from_project.is_empty() {
-                let project_name = req
-                    .code_project_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("selected local project");
-                prompt.push_str(&format!(
-                    "SELECTED LOCAL CODE PROJECT: {project_name}\n\
-                    Use this project snapshot as read-only workspace context. When the user asks for edits, explain the exact file-level changes or provide a patch; do not claim files were modified unless a write tool confirms it.\n\n\
-                    PROJECT SNAPSHOT:\n{}\n\n",
-                    context_from_project
                 ));
             }
 
@@ -1086,7 +1223,12 @@ impl Orchestrator {
                         .await;
 
                     match outcome {
-                        Ok(o) if !o.chunks.is_empty() => o.chunks.into_iter().map(|c| c.text).collect::<Vec<_>>().join("\n---\n"),
+                        Ok(o) if !o.chunks.is_empty() => o
+                            .chunks
+                            .into_iter()
+                            .map(|c| c.text)
+                            .collect::<Vec<_>>()
+                            .join("\n---\n"),
                         _ => "No relevant information was found in the document.".to_string(),
                     }
                 }

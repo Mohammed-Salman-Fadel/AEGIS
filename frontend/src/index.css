@@ -73,6 +73,8 @@
 }
 
 .aegis-wordmark {
+  font-family: Georgia, serif;
+  font-weight: 700;
   font-size: 1.28rem;
   letter-spacing: 0.12em;
   line-height: 1;
@@ -211,8 +213,15 @@
 }
 
 .aegis-wordmark {
-  color: #050505;
-  text-shadow: 0 0 1px rgba(255, 255, 255, 0.2);
+  text-shadow: none;
+}
+
+.aegis-shell.aegis-mode-light .aegis-wordmark {
+  color: #000;
+}
+
+.aegis-shell.aegis-mode-dark .aegis-wordmark {
+  color: #fff;
 }
 
 .aegis-accent-solid {

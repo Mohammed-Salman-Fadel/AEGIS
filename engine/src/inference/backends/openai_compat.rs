@@ -40,6 +40,44 @@ impl OpenAiCompatBackend {
     fn models_url(&self) -> String {
         format!("{}/v1/models", self.base_url)
     }
+
+    pub async fn warm_model_for_local_runtime(&self, model: &str) -> anyhow::Result<()> {
+        let response = self
+            .request_builder()
+            .json(&ChatCompletionRequest {
+                model,
+                messages: vec![ChatMessage {
+                    role: "user",
+                    content: "warm up",
+                }],
+                stream: false,
+                max_tokens: Some(1),
+            })
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("openai-compatible warmup error {status} for model `{model}`: {body}");
+        }
+
+        let response = response.json::<ChatCompletionResponse>().await?;
+        if let Some(error) = response.error {
+            anyhow::bail!(
+                "openai-compatible warmup error for model `{model}`: {}",
+                error.message
+            );
+        }
+
+        if response.choices.is_empty() {
+            anyhow::bail!(
+                "openai-compatible warmup for model `{model}` returned no choices from the backend"
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Serialize)]
@@ -47,6 +85,8 @@ struct ChatCompletionRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage<'a>>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -136,6 +176,7 @@ impl InferenceBackend for OpenAiCompatBackend {
                     content: prompt,
                 }],
                 stream: false,
+                max_tokens: None,
             })
             .send()
             .await?
@@ -170,6 +211,7 @@ impl InferenceBackend for OpenAiCompatBackend {
                     content: prompt,
                 }],
                 stream: true,
+                max_tokens: None,
             })
             .send()
             .await?

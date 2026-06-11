@@ -24,13 +24,7 @@ pub struct ChatRequest {
     pub mode: Option<String>,
     #[serde(default)]
     pub response_style: Option<String>,
-    #[serde(default)]
-    pub code_project_name: Option<String>,
-    #[serde(default)]
-    pub code_project_path: Option<String>,
-    #[serde(default)]
-    pub code_project_context: Option<String>,
-    
+
     // RAG Settings
     #[serde(default)]
     pub rag_enabled: Option<bool>,

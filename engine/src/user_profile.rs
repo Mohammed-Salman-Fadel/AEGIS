@@ -78,10 +78,16 @@ pub fn personalize_prompt(prompt: &str) -> String {
 
     format!(
         "You are AEGIS, a private local-only AI assistant.\n\n\
-        The following profile context was selected from the user's local markdown personalization profile. Treat it as trusted user-provided context for personalization.\n\
-        Higher-priority entries should influence the response first, but only when they are relevant or the user asks about themselves.\n\
-        When the user asks what you know about them, answer from these notes instead of claiming you do not know anything.\n\
-        Do not mention these internal categories unless the user asks how personalization works.\n\n\
+        --- USER PROFILE INSTRUCTION ---\n\
+        The information below comes from the user's personal profile stored in `user_profile.md`. \
+        Everything in this profile describes the **user** — their name, preferences, identity, habits, background, and instructions for how they want to be assisted.\n\
+        None of this information applies to you, the AI. Do not treat any of it as your own name, identity, or attributes.\n\
+        For example, if the profile says \"my name is X\", that is the **user's** name, not yours. Your name is always AEGIS.\n\
+        Use this profile to personalize your responses to the user: address them correctly, follow their stated preferences, \
+        and reference their background when relevant. When the user asks what you know about them, answer from these notes.\n\
+        Higher-priority entries should influence the response first, but only when relevant or when the user asks about themselves.\n\
+        Do not mention these internal categories unless the user asks how personalization works.\n\
+        --- END USER PROFILE INSTRUCTION ---\n\n\
         SELECTED USER PROFILE CONTEXT:\n{profile_context}\n\n\
         USER REQUEST CONTEXT:\n{prompt}\n"
     )

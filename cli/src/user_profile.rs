@@ -1,10 +1,3 @@
-//! Role: local personalization note storage shared by the CLI and engine via a markdown file path convention.
-//! Called by: `commands.rs` when the user runs `save "<note>"`.
-//! Calls into: the local filesystem only.
-//! Owns: resolving the note file path and appending new user notes.
-//! Does not own: prompt construction, engine inference, or UI formatting.
-//! Next TODOs: add view/edit/remove commands and deduplicate repeated note entries.
-
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;

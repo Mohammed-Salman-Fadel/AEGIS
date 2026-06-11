@@ -75,8 +75,8 @@ impl AppConfig {
             },
             inference: InferenceConfig {
                 base_url: inference_base_url(&provider),
-                provider,
-                api_key: non_empty_env("AEGIS_OPENAI_COMPAT_API_KEY"),
+                provider: provider.clone(),
+                api_key: inference_api_key(&provider),
             },
             rag: RagConfig {
                 base_url: env::var("AEGIS_RAG_URL")
@@ -104,6 +104,15 @@ fn inference_base_url(provider: &InferenceProvider) -> String {
             .unwrap_or_else(|| "http://127.0.0.1:1234".to_string()),
         InferenceProvider::OpenAiCompatible => non_empty_env("AEGIS_OPENAI_COMPAT_URL")
             .unwrap_or_else(|| "http://127.0.0.1:1234".to_string()),
+    }
+}
+
+fn inference_api_key(provider: &InferenceProvider) -> Option<String> {
+    match provider {
+        InferenceProvider::LmStudio => non_empty_env("AEGIS_LM_STUDIO_API_KEY")
+            .or_else(|| non_empty_env("AEGIS_OPENAI_COMPAT_API_KEY")),
+        InferenceProvider::OpenAiCompatible => non_empty_env("AEGIS_OPENAI_COMPAT_API_KEY"),
+        InferenceProvider::Ollama => None,
     }
 }
 

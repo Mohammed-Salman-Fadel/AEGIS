@@ -96,6 +96,20 @@ AEGIS_LM_STUDIO_URL=http://127.0.0.1:1234
 AEGIS_MODEL=<lm-studio-model-id>
 ```
 
+When `lmstudio` is active, the engine now attempts to start LM Studio automatically through the
+`lms` CLI, waits for the local API server, and tries to make the configured model usable before the
+first request. A few optional overrides are available:
+
+```bash
+AEGIS_LM_STUDIO_CLI=<path-to-lms>
+AEGIS_LM_STUDIO_API_KEY=<optional-api-token>
+AEGIS_LM_STUDIO_AUTOSTART=true
+```
+
+One-time prerequisite: LM Studio still needs to be installed and launched once so `lms` is
+initialized on the machine. If the configured model cannot be used, AEGIS will try `lms load
+<model>` automatically and will otherwise return an actionable error.
+
 Other OpenAI-compatible local servers can use:
 
 ```bash

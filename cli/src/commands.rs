@@ -1,10 +1,3 @@
-//! Role: the only command-dispatch layer below `main.rs`.
-//! Called by: `main.rs` after parsing and banner rendering.
-//! Calls into: `doctor`, `engine_client`, `install`, `menu`, `runner`, `ui`, and `workspace`.
-//! Owns: thin handler stubs, placeholder output, and CLI-side validation for interactive selection.
-//! Does not own: engine orchestration, session history, provider/model state, or dependency installation internals.
-//! Next TODOs: replace placeholder prints with real HTTP calls and move repeated text into richer UI helpers.
-
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::mem;
@@ -17,7 +10,7 @@ use crossterm::event::{
     MouseButton, MouseEventKind,
 };
 use crossterm::style::{Attribute, Print, SetAttribute};
-use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use crossterm::{execute, queue};
 
 use crate::banner;
@@ -81,21 +74,12 @@ fn dispatch_command(
 
 //? PRIMARY HOME INTERFACE
 fn show_home(ctx: &AppContext) -> AppResult<()> {
-    let report = DoctorReport::collect(&ctx.workspace);
     let web_ui_url = ctx.workspace.web_ui_url();
     println!("{}", ctx.ui.header("AEGIS CLI"));
     println!("Private, local-first assistant built to serve only you.");
     println!();
     println!("Workspace : {}", ctx.workspace.root.display());
     println!("Web UI URL: {web_ui_url}");
-    println!();
-    println!("{}", ctx.ui.header("Readiness Snapshot"));
-    println!(
-        "{} blocking issue(s), {} warning(s), {} missing item(s)",
-        report.blocking_issues(),
-        report.warnings(),
-        report.missing()
-    );
     if io::stdin().is_terminal() {
         println!();
         println!("{}", ctx.ui.header("Live Shell"));
@@ -198,7 +182,8 @@ fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {
 
 fn handle_chat(ctx: &AppContext, prompt: &str, session_id: Option<&str>) -> AppResult<()> {
     let reply = stream_llm_response(ctx, |on_token| {
-        ctx.engine.chat(prompt, session_id, on_token)
+        ctx.engine
+            .chat(prompt, session_id, on_token)
     })?;
     if ctx.ui.verbose {
         println!();
@@ -241,7 +226,8 @@ fn handle_ask(ctx: &AppContext, read_from_stdin: bool, session_id: Option<&str>)
     }
 
     let reply = stream_llm_response(ctx, |on_token| {
-        ctx.engine.chat_from_stdin(prompt, session_id, on_token)
+        ctx.engine
+            .chat_from_stdin(prompt, session_id, on_token)
     })?;
     if ctx.ui.verbose {
         println!("Endpoint: {}", reply.request_path);
@@ -292,7 +278,8 @@ fn handle_repl(ctx: &AppContext, session_id: Option<&str>) -> AppResult<()> {
         }
 
         let _reply = stream_llm_response(ctx, |on_token| {
-            ctx.engine.repl_turn(prompt, session_id, on_token)
+            ctx.engine
+                .repl_turn(prompt, session_id, on_token)
         })?;
     }
 
@@ -761,7 +748,11 @@ fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
     let report = DoctorReport::collect_live(&ctx.workspace, &ctx.engine);
 
     println!("{}", ctx.ui.header("Doctor"));
-    println!("Workspace: {}", ctx.workspace.root.display());
+    println!();
+    println!("{}", ctx.ui.header("System"));
+    for item in &report.system {
+        print_check(ctx, item);
+    }
     println!();
     println!("{}", ctx.ui.header("Dependencies"));
     for item in &report.dependencies {
@@ -787,12 +778,6 @@ fn show_doctor(ctx: &AppContext, strict: bool) -> AppResult<()> {
         report.warnings(),
         report.missing()
     );
-    println!();
-    println!("{}", ctx.ui.header("Next TODOs"));
-    for (index, action) in report.setup_actions().iter().enumerate() {
-        println!("{}. {}", index + 1, action);
-    }
-
     if strict && report.blocking_issues() > 0 {
         return Err(format!(
             "Strict doctor failed because {} blocking issue(s) still remain.",
@@ -1804,7 +1789,11 @@ fn run_session_prompt_loop(
         }
 
         let _reply = stream_llm_response(ctx, |on_token| {
-            ctx.engine.chat(&prompt, Some(session_id), on_token)
+            ctx.engine.chat(
+                &prompt,
+                Some(session_id),
+                on_token,
+            )
         })?;
     }
 

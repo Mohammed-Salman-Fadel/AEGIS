@@ -58,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let memory_store = memory_store::MemoryStore::new().await;
 
+    let startup_provider = config.inference.provider.clone();
     let orchestrator = orchestrator::Orchestrator::new(
         inference,
         rag_client,
@@ -68,10 +69,21 @@ async fn main() -> anyhow::Result<()> {
         config.semble_path,
         config.python_path,
     );
-    orchestrator
-        .warm_active_model()
-        .await
-        .context("AEGIS engine startup aborted because the active model could not be warmed.")?;
+    match startup_provider {
+        InferenceProvider::LmStudio => {
+            if let Err(error) = orchestrator.prepare_lm_studio_provider().await {
+                tracing::warn!(
+                    "LM Studio was selected as the active provider, but startup could not fully prepare it yet: {}",
+                    error
+                );
+            }
+        }
+        _ => {
+            orchestrator.warm_active_model().await.context(
+                "AEGIS engine startup aborted because the active model could not be warmed.",
+            )?;
+        }
+    }
 
     let state = network::state::AppState::new(orchestrator);
     let app = network::router::create_router(state);

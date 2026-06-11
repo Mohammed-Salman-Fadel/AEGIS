@@ -1,10 +1,3 @@
-//! Role: crate entrypoint for the TODO-first AEGIS CLI scaffold.
-//! Called by: the compiled `aegis` binary at process startup.
-//! Calls into: `banner`, `commands`, `engine_client`, `ui`, and `workspace`.
-//! Owns: `AppContext` construction, banner policy, and top-level error handling.
-//! Does not own: command-specific behavior, backend orchestration, or installation logic.
-//! Next TODOs: load real CLI config, persist CLI-local state pointers, and source the engine URL from shared config.
-
 mod args;
 mod banner;
 mod cli;
@@ -47,20 +40,22 @@ impl AppContext {
 
 fn main() {
     let cli = Cli::parse();
-    let ctx = AppContext {
-        ui: Ui::new(cli.no_color, cli.verbose),
-        workspace: Workspace::discover(),
-        engine: EngineClient::from_env(),
-    };
+    let ui = Ui::new(cli.no_color, cli.verbose);
 
     if let Err(error) = signals::install_handler() {
         eprintln!(
             "{}",
-            ctx.ui.warning(&format!(
+            ui.warning(&format!(
                 "Warning: could not install the Ctrl+C exit handler: {error}"
             ))
         );
     }
+
+    let ctx = AppContext {
+        ui,
+        workspace: Workspace::discover(),
+        engine: EngineClient::from_env(),
+    };
 
     // Keep the local-first runtime warm for normal CLI usage:
     // - Python RAG service on 127.0.0.1:8000

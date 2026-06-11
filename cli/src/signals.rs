@@ -1,10 +1,3 @@
-//! Role: process-level Ctrl+C signal handling for graceful CLI shutdown.
-//! Called by: `main.rs`, `commands.rs`, and `menu.rs`.
-//! Calls into: the host operating system signal APIs on Windows and standard IO error inspection.
-//! Owns: the Ctrl+C requested flag, graceful-exit sentinel, and interruption helpers.
-//! Does not own: terminal rendering, command routing, or business logic.
-//! Next TODOs: add Unix signal support if the CLI becomes a first-class multi-platform interactive shell.
-
 use std::io;
 
 const CTRL_C_EXIT_SENTINEL: &str = "__AEGIS_CTRL_C_EXIT__";

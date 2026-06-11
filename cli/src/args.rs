@@ -1,9 +1,3 @@
-//! Role: shared Clap argument structs reused across the CLI command tree.
-//! Called by: `cli.rs` when composing subcommands.
-//! Calls into: Clap derive macros only.
-//! Owns: positional arguments and reusable flag groups for scaffold commands.
-//! Does not own: top-level command routing, validation side effects, or backend calls.
-//! Next TODOs: add richer prompt/session flags once the engine contract and config format are finalized.
 use std::path::PathBuf;
 
 use clap::Args;
