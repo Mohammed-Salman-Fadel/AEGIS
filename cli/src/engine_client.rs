@@ -997,7 +997,7 @@ impl EngineClient {
         for line in reader.lines() {
             let line =
                 line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
-            if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = line.strip_prefix("data:").map(|s| s.trim()) {
                 event_lines.push(data.to_string());
                 continue;
             }
