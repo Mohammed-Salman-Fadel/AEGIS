@@ -13,6 +13,7 @@ export {
   RAG_ENABLED_STORAGE_KEY,
   RAG_TOP_K_STORAGE_KEY,
   RAG_THRESHOLD_STORAGE_KEY,
+  LANGUAGE_STORAGE_KEY,
 } from './storage';
 
 export {

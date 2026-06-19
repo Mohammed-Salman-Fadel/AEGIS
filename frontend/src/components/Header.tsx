@@ -1,6 +1,7 @@
 // Top header bar with session info, mode selector, status, and metrics toggle
 import { Activity, Bot, Cpu, GraduationCap } from 'lucide-react';
 import type { ChatMode } from '../types';
+import { useT } from '../lib/i18n';
 
 interface HeaderProps {
   isDark: boolean;
@@ -15,15 +16,16 @@ interface HeaderProps {
 
 export function Header({
   isDark, activeSessionTitle, activeSessionId, chatMode,
-  isMetricsOpen, status, onSetChatMode, onToggleMetrics,
+  isMetricsOpen, status, onSetChatMode,   onToggleMetrics,
 }: HeaderProps) {
+  const t = useT();
   return (
     <header className={`flex h-16 shrink-0 items-center justify-between border-b px-6 ${isDark ? 'border-zinc-800' : 'border-stone-300'}`}>
       <div className="flex min-w-0 items-center gap-3">
         <div className="min-w-0">
-          <div className="truncate text-sm font-medium">{activeSessionTitle ?? 'New chat'}</div>
+          <div className="truncate text-sm font-medium">{activeSessionTitle ?? t('header.new_chat')}</div>
           <div className={`truncate text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-            Session: {activeSessionId ?? 'Not started yet'}
+            Session: {activeSessionId ?? t('header.not_started')}
           </div>
         </div>
       </div>
@@ -52,7 +54,7 @@ export function Header({
           type="button"
         >
           <Activity size={14} />
-          Metrics
+          {t('metrics.live_stats')}
         </button>
         <div className={`rounded-lg border px-3 py-1 text-xs ${isDark ? 'border-zinc-800 text-zinc-400' : 'border-stone-300 bg-white text-slate-500'}`}>
           {status}

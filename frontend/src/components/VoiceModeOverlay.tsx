@@ -2,6 +2,7 @@
 import { X, Mic, Volume2, VolumeX } from 'lucide-react';
 import { VoiceOrb } from './VoiceOrb';
 import type { Message } from '../types';
+import { useT } from '../lib/i18n';
 
 interface VoiceModeOverlayProps {
   isDark: boolean;
@@ -32,6 +33,7 @@ export function VoiceModeOverlay({
   onStartRecording,
   onStopDictation,
 }: VoiceModeOverlayProps) {
+  const t = useT();
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
   const lastAssistantMessage = [...messages].reverse().find((m) => m.role === 'assistant');
 
@@ -81,8 +83,8 @@ export function VoiceModeOverlay({
             onClick={onToggleTts}
             className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-medium transition ${isDark ? 'bg-zinc-900 text-zinc-400 hover:text-zinc-200' : 'bg-stone-100 text-slate-500 hover:text-slate-800'}`}
           >
-            {isTtsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-            {isTtsEnabled ? 'Speech On' : 'Speech Off'}
+                  {isTtsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                  {isTtsEnabled ? t('voice.speech_on') : t('voice.speech_off')}
           </button>
         </div>
       </div>

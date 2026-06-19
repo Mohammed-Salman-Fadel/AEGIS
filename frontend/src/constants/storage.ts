@@ -10,3 +10,4 @@ export const VOICE_TTS_ENABLED_STORAGE_KEY = 'aegis-voice-tts-enabled';
 export const RAG_ENABLED_STORAGE_KEY = 'aegis-rag-enabled';
 export const RAG_TOP_K_STORAGE_KEY = 'aegis-rag-top-k';
 export const RAG_THRESHOLD_STORAGE_KEY = 'aegis-rag-threshold';
+export const LANGUAGE_STORAGE_KEY = 'aegis-ui-language';

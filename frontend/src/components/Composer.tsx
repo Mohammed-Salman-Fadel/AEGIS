@@ -2,6 +2,8 @@
 import { Upload, Calendar, Download, Wrench, ChevronDown, Mic, Send, Check, FolderOpen, X } from 'lucide-react';
 import type { IndexedDocument, CodeProject, ContextUsage } from '../types';
 import { importPhaseLabel, formatTokenMeter, fitTextareaToContent, personalizeWelcomeMessage } from '../lib';
+import { useTranslate } from '../lib/i18n';
+import { DEFAULT_WELCOME_MESSAGES } from '../constants';
 
 interface ComposerProps {
   isDark: boolean;
@@ -52,6 +54,7 @@ export function Composer({
   onInputChange, onSubmit, onToggleTools, onImportClick, onCalendarOpen, onExportPdf,
   onFileUpload, onClearDocuments, onVoiceModeOpen, onDetachProject,
 }: ComposerProps) {
+  const { t, lang } = useTranslate();
   return (
     <footer className={`px-4 transition-all duration-500 ease-out ${
       showCenteredComposer
@@ -64,7 +67,11 @@ export function Composer({
 
       {showCenteredComposer && (
         <div className={`welcome-message pointer-events-auto mx-auto mb-5 max-w-2xl text-center text-xl font-semibold ${isDark ? 'text-zinc-100' : 'text-slate-900'}`}>
-          {personalizeWelcomeMessage(activeWelcomeMessage, profileText)}
+          {(() => {
+            const idx = DEFAULT_WELCOME_MESSAGES.indexOf(activeWelcomeMessage);
+            const msg = idx >= 0 ? t('welcome.' + idx) : activeWelcomeMessage;
+            return personalizeWelcomeMessage(msg, profileText, lang);
+          })()}
         </div>
       )}
 
@@ -139,7 +146,7 @@ export function Composer({
             onChange={(e) => onInputChange(e.target.value)}
             onInput={(e) => fitTextareaToContent(e.currentTarget)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
-            placeholder="Message your model..."
+                    placeholder={t('composer.placeholder')}
             ref={composerTextareaRef}
             rows={1}
             value={input}
@@ -154,19 +161,19 @@ export function Composer({
                 type="button"
               >
                 <Wrench className={toolsOpen ? 'rotate-12 transition-transform' : 'transition-transform'} size={15} />
-                <span>Tools</span>
+                        <span>{t('composer.tools')}</span>
                 <ChevronDown className={`transition-transform duration-200 ${toolsOpen ? 'rotate-180' : 'rotate-0'}`} size={13} />
               </button>
               {toolsOpen && (
                 <div className={`absolute bottom-full left-0 z-20 mb-2 w-48 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border p-1 shadow-xl ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}>
                   <button className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} disabled={isStreaming || isUploading} onClick={onImportClick} type="button">
-                    <Upload size={15} /> Import
+                    <Upload size={15} /> {t('composer.import')}
                   </button>
                   <button className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onCalendarOpen} type="button">
-                    <Calendar size={15} /> Calendar
+                    <Calendar size={15} /> {t('composer.calendar')}
                   </button>
                   <button className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} disabled={false} onClick={onExportPdf} type="button">
-                    <Download size={15} /> Export Chat
+                    <Download size={15} /> {t('composer.export')}
                   </button>
                 </div>
               )}
@@ -188,8 +195,8 @@ export function Composer({
                 disabled={isStreaming || !input.trim() || isUploading}
                 type="submit"
               >
-                <span>Send</span>
-                <Send size={15} />
+                    <span>{t('composer.send')}</span>
+                    <Send size={15} />
               </button>
             </div>
           </div>

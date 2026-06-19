@@ -1,6 +1,7 @@
-// Full settings panel with tabs: General, Inference, Models, Voice, RAG, Personalize
-import { Settings, X, Download, Pause, Play } from 'lucide-react';
+// Settings panel with tabs: General, Inference, Models, Voice, RAG, Memories
+import { Settings, X, Download, Pause, Play, Plus, Eye, Sun, Moon, Monitor } from 'lucide-react';
 import type { SettingsTab, ThemeMode, ModelResponse, ProviderResponse, CatalogModel, ModelDownloadState } from '../types';
+import { useT, type Language } from '../lib/i18n';
 import {
   OLLAMA_MODEL_CATALOG, MODEL_PROVIDER_TAGS, RESPONSE_STYLE_OPTIONS, APPEARANCE_THEME_OPTIONS,
 } from '../constants';
@@ -34,7 +35,7 @@ interface SettingsPanelProps {
   ragSimilarityThreshold: number;
   profileText: string;
   profilePath: string;
-  profileImportInputRef: React.RefObject<HTMLInputElement | null>;
+  memoryInput: string;
   onClose: () => void;
   onSetSettingsTab: (tab: SettingsTab) => void;
   onSetTheme: (theme: ThemeMode) => void;
@@ -53,9 +54,12 @@ interface SettingsPanelProps {
   onToggleRag: (enabled: boolean) => void;
   onChangeRagTopK: (val: number) => void;
   onChangeRagThreshold: (val: number) => void;
-  onProfileTextChange: (value: string) => void;
+  onMemoryInputChange: (value: string) => void;
+  onAddMemory: () => void;
+  onDisplayMemories: () => void;
   onSaveProfile: () => void;
-  onImportProfile: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  lang: Language;
+  onSetLanguage: (lang: Language) => void;
 }
 
 export function SettingsPanel({
@@ -64,14 +68,18 @@ export function SettingsPanel({
   modelSearch, selectedModelProviderTag, filteredCatalogModels,
   downloadingModel, pausedModelDownload, modelDownloadState, modelDownloadProgress, modelDownloadStatus,
   isVoiceLowRamMode, isTtsEnabled, isRagEnabled, ragTopK, ragSimilarityThreshold,
-  profileText, profilePath, profileImportInputRef,
+  profileText, profilePath, memoryInput,
   onClose, onSetSettingsTab, onSetTheme, onSetAppearanceTheme, onSetResponseStyle,
   onSelectModel, onSelectProvider, onModelSearchChange, onSetModelProviderTag,
   onDownloadModel, onPauseDownload, onCancelDownload, onResumeDownload,
   onToggleVoiceLowRam, onToggleTts, onToggleRag, onChangeRagTopK, onChangeRagThreshold,
-  onProfileTextChange, onSaveProfile, onImportProfile,
+  onMemoryInputChange, onAddMemory, onDisplayMemories, onSaveProfile,
+  lang, onSetLanguage,
 }: SettingsPanelProps) {
+  const t = useT();
   if (!settingsOpen) return null;
+
+  const tabs: SettingsTab[] = ['general', 'inference', 'models', 'personalize', 'voice', 'rag', 'memories'];
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 ${settingsClosing ? 'aegis-modal-backdrop-out' : 'aegis-modal-backdrop'}`} onClick={onClose}>
@@ -79,16 +87,16 @@ export function SettingsPanel({
         <aside className={`w-48 shrink-0 border-r p-4 ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-200 bg-stone-50'}`}>
           <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
             <Settings size={16} />
-            Settings
+            {t('settings.title')}
           </div>
-          {(['general', 'inference', 'models', 'voice', 'rag', 'personalize'] as SettingsTab[]).map((value) => (
+          {tabs.map((value) => (
             <button
               key={value}
               className={`mb-1 flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition ${settingsTab === value ? 'aegis-accent-solid text-white' : isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'}`}
               onClick={() => onSetSettingsTab(value)}
               type="button"
             >
-              {value.charAt(0).toUpperCase() + value.slice(1)}
+              {t(`settings.tab.${value}`)}
             </button>
           ))}
         </aside>
@@ -96,8 +104,8 @@ export function SettingsPanel({
         <section className="flex min-w-0 flex-1 flex-col">
           <div className={`flex h-14 shrink-0 items-center justify-between px-5 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
             <div>
-              <div className="text-sm font-semibold capitalize">{settingsTab}</div>
-              <div className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{settingsLoading ? 'Loading settings...' : 'Local AEGIS preferences'}</div>
+              <div className="text-sm font-semibold capitalize">{t(`settings.tab.${settingsTab}`)}</div>
+              <div className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{settingsLoading ? t('settings.loading') : t('settings.preferences')}</div>
             </div>
             <button aria-label="Close settings" className={`rounded-md p-1 transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onClose} type="button">
               <X size={18} />
@@ -113,11 +121,10 @@ export function SettingsPanel({
           )}
 
           <div className="settings-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-5">
-            {/* General Tab */}
             {settingsTab === 'general' && (
               <div className="space-y-5">
                 <div>
-                  <label className="mb-2 block text-sm font-semibold" htmlFor="general-model">Active Model</label>
+                  <label className="mb-2 block text-sm font-semibold" htmlFor="general-model">{t('settings.general.active_model')}</label>
                   <select
                     className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
                     disabled={availableModels.length === 0 || Boolean(downloadingModel)}
@@ -128,18 +135,44 @@ export function SettingsPanel({
                     <option value="" disabled>{availableModels.length === 0 ? 'No installed models found' : 'Choose active model'}</option>
                     {availableModels.map((m) => (<option key={m.name} value={m.name}>{m.name}</option>))}
                   </select>
-                  <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>Switching warms the selected model before the engine commits to it.</div>
+                  <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{t('settings.general.model_switch_hint')}</div>
                 </div>
                 <div>
-                  <div className="mb-2 text-sm font-semibold">Appearance</div>
-                  <div className="mb-3 flex flex-wrap gap-2">
-                    {(['dark', 'light'] as ThemeMode[]).map((mode) => (
-                      <button key={mode} className={`rounded-lg border px-3 py-2 text-sm transition ${theme === mode ? 'aegis-accent-selected' : isDark ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900' : 'border-stone-300 text-slate-700 hover:bg-stone-100'}`} onClick={() => onSetTheme(mode)} type="button">
-                        {mode === 'dark' ? 'Dark mode' : 'Light mode'}
-                      </button>
-                    ))}
+                  <div className="mb-2 text-sm font-semibold">{t('settings.general.language')}</div>
+                  <select
+                    className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
+                    value={lang}
+                    onChange={(e) => onSetLanguage(e.target.value as Language)}
+                  >
+                    <option value="en">English</option>
+                    <option value="tr">Türkçe</option>
+                  </select>
+                  <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{t('settings.general.language_hint')}</div>
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'personalize' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="mb-2 text-sm font-semibold">{t('settings.personalize.appearance')}</div>
+                  <div className="inline-flex items-center gap-1 rounded-lg p-1 ${isDark ? 'bg-zinc-900' : 'bg-stone-200'}">
+                    {(['light', 'dark', 'system'] as ThemeMode[]).map((mode) => {
+                      const Icon = mode === 'light' ? Sun : mode === 'dark' ? Moon : Monitor;
+                      return (
+                        <button
+                          key={mode}
+                          className={`flex items-center justify-center rounded-md p-1.5 transition-all ${theme === mode ? (isDark ? 'bg-zinc-700 text-zinc-100 shadow-sm' : 'bg-white text-slate-900 shadow-sm') : isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-slate-400 hover:text-slate-700'}`}
+                          onClick={() => onSetTheme(mode)}
+                          type="button"
+                          title={mode === 'light' ? 'Light mode' : mode === 'dark' ? 'Dark mode' : 'System default'}
+                        >
+                          <Icon size={16} />
+                        </button>
+                      );
+                    })}
                   </div>
-                  <div className={`mb-3 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>Pick a base mode and a color profile for the overall interface.</div>
+                  <div className={`mb-3 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{t('settings.personalize.appearance_hint')}</div>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {APPEARANCE_THEME_OPTIONS.map((option) => (
                       <button key={option.value} className={`rounded-xl border p-3 text-left transition ${appearanceTheme === option.value ? 'aegis-accent-selected shadow-lg' : isDark ? 'border-zinc-800 hover:bg-zinc-900' : 'border-stone-300 hover:bg-stone-50'}`} onClick={() => onSetAppearanceTheme(option.value)} type="button">
@@ -154,7 +187,7 @@ export function SettingsPanel({
                   </div>
                 </div>
                 <div>
-                  <div className="mb-2 text-sm font-semibold">Response Style</div>
+                  <div className="mb-2 text-sm font-semibold">{t('settings.personalize.response_style')}</div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {RESPONSE_STYLE_OPTIONS.map((option) => (
                       <button key={option.value} className={`rounded-xl border p-3 text-left transition ${responseStyle === option.value ? 'aegis-accent-selected' : isDark ? 'border-zinc-800 hover:bg-zinc-900' : 'border-stone-300 hover:bg-stone-50'}`} onClick={() => onSetResponseStyle(option.value)} type="button">
@@ -167,23 +200,22 @@ export function SettingsPanel({
               </div>
             )}
 
-            {/* Voice Tab */}
             {settingsTab === 'voice' && (
               <div className="space-y-5">
                 <div>
-                  <div className="mb-2 text-sm font-semibold">Voice Caching & Performance</div>
+                  <div className="mb-2 text-sm font-semibold">{t('settings.voice.caching')}</div>
                   <div className="flex flex-col gap-3">
                     <label className={`flex items-start justify-between rounded-xl border p-4 cursor-pointer transition ${isVoiceLowRamMode ? isDark ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100' : 'border-emerald-500 bg-emerald-50 text-emerald-900' : isDark ? 'border-zinc-800 hover:bg-zinc-900/60' : 'border-stone-300 hover:bg-stone-50'}`}>
                       <div className="flex flex-col gap-1 pr-4">
-                        <span className="text-sm font-semibold">Low RAM Mode</span>
-                        <span className={`text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>Automatically unloads Whisper (STT) and Kokoro (TTS) models from system memory immediately after processing each voice prompt. Reduces RAM usage by up to ~470 MB, but slightly increases latency on the next voice input as models must reload.</span>
+                        <span className="text-sm font-semibold">{t('settings.voice.low_ram')}</span>
+                        <span className={`text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>{t('settings.voice.low_ram_desc')}</span>
                       </div>
                       <input type="checkbox" checked={isVoiceLowRamMode} onChange={(e) => onToggleVoiceLowRam(e.target.checked)} className="mt-1 h-4 w-4 shrink-0 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
                     </label>
                     <label className={`flex items-start justify-between rounded-xl border p-4 cursor-pointer transition ${isTtsEnabled ? isDark ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100' : 'border-emerald-500 bg-emerald-50 text-emerald-900' : isDark ? 'border-zinc-800 hover:bg-zinc-900/60' : 'border-stone-300 hover:bg-stone-50'}`}>
                       <div className="flex flex-col gap-1 pr-4">
-                        <span className="text-sm font-semibold">Read Aloud by Default</span>
-                        <span className={`text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>Automatically speak assistant responses out loud using the local high-quality voice agent.</span>
+                        <span className="text-sm font-semibold">{t('settings.voice.read_aloud')}</span>
+                        <span className={`text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>{t('settings.voice.read_aloud_desc')}</span>
                       </div>
                       <input type="checkbox" checked={isTtsEnabled} onChange={(e) => onToggleTts(e.target.checked)} className="mt-1 h-4 w-4 shrink-0 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
                     </label>
@@ -192,11 +224,10 @@ export function SettingsPanel({
               </div>
             )}
 
-            {/* RAG Tab */}
             {settingsTab === 'rag' && (
               <div className="space-y-5">
                 <div>
-                  <div className="mb-2 text-sm font-semibold">Document Context (RAG)</div>
+                  <div className="mb-2 text-sm font-semibold">{t('settings.rag.title')}</div>
                   <div className="flex flex-col gap-3">
                     <label className={`flex items-start justify-between rounded-xl border p-4 cursor-pointer transition ${isRagEnabled ? isDark ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100' : 'border-emerald-500 bg-emerald-50 text-emerald-900' : isDark ? 'border-zinc-800 hover:bg-zinc-900/60' : 'border-stone-300 hover:bg-stone-50'}`}>
                       <div className="flex flex-col gap-1 pr-4">
@@ -230,7 +261,6 @@ export function SettingsPanel({
               </div>
             )}
 
-            {/* Inference Tab */}
             {settingsTab === 'inference' && (
               <div className="space-y-4">
                 <div>
@@ -254,7 +284,6 @@ export function SettingsPanel({
               </div>
             )}
 
-            {/* Models Tab */}
             {settingsTab === 'models' && (
               <div className="space-y-4">
                 <div>
@@ -352,27 +381,65 @@ export function SettingsPanel({
               </div>
             )}
 
-            {/* Personalize Tab */}
-            {settingsTab === 'personalize' && (
-              <div className="space-y-3">
+            {/* Memories Tab */}
+            {settingsTab === 'memories' && (
+              <div className="space-y-4">
                 <div>
-                  <div className="text-sm font-semibold">Local Personalization Profile</div>
-                  <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{profilePath || 'Markdown save path will appear after the engine responds.'}</div>
-                  <div className={`mt-2 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>Add identity details, preferences, writing style notes, goals, or context about how you want AEGIS to respond. This is stored locally as a markdown file and injected into model context during inference so replies stay more aligned to you.</div>
+                  <div className="text-sm font-semibold">{t('settings.memories.title')}</div>
+                  <div className={`mt-2 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                    {t('settings.memories.desc')}
+                  </div>
                 </div>
-                <input accept=".txt,.md" className="hidden" onChange={onImportProfile} ref={profileImportInputRef} type="file" />
-                <textarea
-                  className={`min-h-52 w-full resize-none rounded-xl border p-3 text-sm leading-6 outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500' : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
-                  onChange={(e) => onProfileTextChange(e.target.value)}
-                  placeholder={'Examples:\n- My name is Mohammed.\n- I prefer concise but technically precise answers.\n- I am working on AEGIS and usually want practical implementation help.\n- When explaining code, prioritize architecture before syntax details.'}
-                  value={profileText}
-                />
-                <div className="flex justify-end gap-2">
-                  <button className={`rounded-lg border px-4 py-2 text-sm transition ${isDark ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900' : 'border-stone-300 text-slate-700 hover:bg-stone-100'}`} onClick={() => profileImportInputRef.current?.click()} type="button">
-                    Import .txt/.md
+
+                <div className="flex gap-2">
+                  <input
+                    className={`min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500' : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
+                    onChange={(e) => onMemoryInputChange(e.target.value)}
+                    placeholder={t('settings.memories.placeholder')}
+                    value={memoryInput}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onAddMemory(); } }}
+                  />
+                  <button
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:opacity-60"
+                    disabled={!memoryInput.trim()}
+                    onClick={onAddMemory}
+                    type="button"
+                  >
+                    <Plus size={16} className="inline-block mr-1" />
+                    {t('settings.memories.add')}
                   </button>
-                  <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500" onClick={onSaveProfile} type="button">
-                    Save Profile
+                </div>
+
+                <div className={`rounded-xl border p-4 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-200 bg-stone-50'}`}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-semibold">{t('settings.memories.saved_profile')}</span>
+                    <span className={`text-[11px] ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                      {profilePath || 'Path will appear after first save'}
+                    </span>
+                  </div>
+                  <textarea
+                    className={`min-h-36 w-full resize-none rounded-lg border p-3 text-sm leading-6 outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100 placeholder:text-zinc-500' : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
+                    readOnly
+                    value={profileText || t('settings.memories.empty')}
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm transition ${isDark ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900' : 'border-stone-300 text-slate-700 hover:bg-stone-100'}`}
+                    onClick={onDisplayMemories}
+                    type="button"
+                  >
+                    <Eye size={15} />
+                    {t('settings.memories.display')}
+                  </button>
+                  <button
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:opacity-60"
+                    disabled={!profileText.trim()}
+                    onClick={onSaveProfile}
+                    type="button"
+                  >
+                    {t('settings.memories.save')}
                   </button>
                 </div>
               </div>

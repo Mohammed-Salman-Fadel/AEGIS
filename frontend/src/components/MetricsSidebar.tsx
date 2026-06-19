@@ -1,6 +1,7 @@
 // Performance metrics sidebar showing system stats, inference metrics, and RAG analysis
 import { PanelLeftClose, BookOpen, FileText } from 'lucide-react';
 import type { SystemStats, RetrievalChunk, InferenceStats } from '../types';
+import { useT } from '../lib/i18n';
 
 interface MetricsSidebarProps {
   isDark: boolean;
@@ -27,15 +28,16 @@ export function MetricsSidebar({
   onSetMetricsTab,
   onClearSelection,
 }: MetricsSidebarProps) {
+  const t = useT();
   return (
     <aside
       className={`flex shrink-0 flex-col border-l transition-all duration-300 ease-in-out ${isMetricsOpen ? 'w-72' : 'w-0 border-transparent p-0'} ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
     >
       <div className={`flex h-full flex-col overflow-hidden ${isMetricsOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
         <div className="flex h-16 shrink-0 items-center justify-between px-6 border-b dark:border-zinc-900 border-stone-200">
-          <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">
-            {metricsTab === 'sources' ? 'Context Sources' : 'Performance Info'}
-          </div>
+            <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">
+              {metricsTab === 'sources' ? t('metrics.sources') : t('metrics.performance')}
+            </div>
           <button
             className={`rounded-md p-1 transition ${isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300' : 'text-slate-400 hover:bg-stone-200 hover:text-slate-600'}`}
             onClick={onClose}
@@ -51,14 +53,14 @@ export function MetricsSidebar({
             onClick={() => onSetMetricsTab('metrics')}
             type="button"
           >
-            Live Stats
-          </button>
-          <button
-            className={`flex-1 py-3 text-center text-[10px] font-bold uppercase tracking-wider transition relative ${metricsTab === 'sources' ? 'border-b-2 border-emerald-500 text-emerald-500' : isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-slate-500 hover:text-slate-700'}`}
-            onClick={() => onSetMetricsTab('sources')}
-            type="button"
-          >
-            Sources
+              {t('metrics.live_stats')}
+            </button>
+            <button
+              className={`flex-1 py-3 text-center text-[10px] font-bold uppercase tracking-wider transition relative ${metricsTab === 'sources' ? 'border-b-2 border-emerald-500 text-emerald-500' : isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-slate-500 hover:text-slate-700'}`}
+              onClick={() => onSetMetricsTab('sources')}
+              type="button"
+            >
+              {t('metrics.sources')}
             {selectedMessageSources && selectedMessageSources.length > 0 && (
               <span className="absolute right-3.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-extrabold text-white">
                 {selectedMessageSources.length}
@@ -135,7 +137,7 @@ export function MetricsSidebar({
               <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">System Resources</div>
               <div>
                 <div className="mb-2 flex justify-between text-xs">
-                  <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>CPU Usage</span>
+                    <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>{t('metrics.cpu')}</span>
                   <span className="font-mono font-medium">{systemStats.cpu}%</span>
                 </div>
                 <div className={`h-1.5 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}>
@@ -144,7 +146,7 @@ export function MetricsSidebar({
               </div>
               <div>
                 <div className="mb-2 flex justify-between text-xs">
-                  <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>RAM Usage</span>
+                    <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>{t('metrics.ram')}</span>
                   <span className="font-mono font-medium">{systemStats.ram}%</span>
                 </div>
                 <div className={`h-1.5 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}>
@@ -159,19 +161,19 @@ export function MetricsSidebar({
               <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">Inference Engine</div>
               <div className="grid grid-cols-2 gap-3">
                 <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">Total Latency</div>
-                  <div className="font-mono text-sm font-semibold">{inferenceStats.latency > 0 ? `${(inferenceStats.latency / 1000).toFixed(2)}s` : '---'}</div>
-                </div>
-                <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">Speed (TPS)</div>
-                  <div className="font-mono text-sm font-semibold">{inferenceStats.tps > 0 ? `${inferenceStats.tps}` : '---'}</div>
-                </div>
-                <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">TTFT</div>
-                  <div className="font-mono text-sm font-semibold">{inferenceStats.ttft > 0 ? `${inferenceStats.ttft}ms` : '---'}</div>
-                </div>
-                <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                  <div className="mb-1 text-[10px] uppercase text-zinc-500">RAG Delay</div>
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">{t('metrics.latency')}</div>
+                    <div className="font-mono text-sm font-semibold">{inferenceStats.latency > 0 ? `${(inferenceStats.latency / 1000).toFixed(2)}s` : '---'}</div>
+                  </div>
+                  <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">{t('metrics.tps')}</div>
+                    <div className="font-mono text-sm font-semibold">{inferenceStats.tps > 0 ? `${inferenceStats.tps}` : '---'}</div>
+                  </div>
+                  <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">{t('metrics.ttft')}</div>
+                    <div className="font-mono text-sm font-semibold">{inferenceStats.ttft > 0 ? `${inferenceStats.ttft}ms` : '---'}</div>
+                  </div>
+                  <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
+                    <div className="mb-1 text-[10px] uppercase text-zinc-500">{t('metrics.rag_delay')}</div>
                   <div className="font-mono text-sm font-semibold">{inferenceStats.ragTime > 0 ? `${inferenceStats.ragTime}ms` : '---'}</div>
                 </div>
               </div>
@@ -184,7 +186,7 @@ export function MetricsSidebar({
               <div className="space-y-4">
                 <div>
                   <div className="mb-1.5 flex justify-between text-[11px]">
-                    <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>Semantic Similarity</span>
+                    <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>{t('metrics.similarity')}</span>
                     <span className="font-mono font-medium">{inferenceStats.similarity > 0 ? `${(inferenceStats.similarity * 100).toFixed(0)}%` : '---'}</span>
                   </div>
                   <div className={`h-1 w-full overflow-hidden rounded-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`}>
@@ -193,11 +195,11 @@ export function MetricsSidebar({
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Chunks</div>
+                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">{t('metrics.chunks')}</div>
                     <div className="font-mono text-xs font-semibold">{inferenceStats.chunks || '0'}</div>
                   </div>
                   <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">Backend</div>
+                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">{t('metrics.backend')}</div>
                     <div className="truncate font-mono text-[10px] font-semibold">{inferenceStats.backend}</div>
                   </div>
                 </div>
@@ -205,7 +207,7 @@ export function MetricsSidebar({
             </div>
 
             <div className={`rounded-lg p-3 text-[11px] leading-relaxed ${isDark ? 'bg-zinc-900/60 text-zinc-500' : 'bg-stone-100 text-slate-500'}`}>
-              Generation speed is estimated based on the average character count per token (approx. 4 chars/token).
+              {t('metrics.disclaimer')}
             </div>
           </div>
         )}

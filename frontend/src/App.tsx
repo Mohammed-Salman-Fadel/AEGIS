@@ -27,7 +27,7 @@ import {
   INDEXED_DOCUMENTS_STORAGE_KEY, PINNED_SESSIONS_STORAGE_KEY,
   RESPONSE_STYLE_STORAGE_KEY, VOICE_LOW_RAM_MODE_STORAGE_KEY,
   VOICE_TTS_ENABLED_STORAGE_KEY, RAG_ENABLED_STORAGE_KEY,
-  RAG_TOP_K_STORAGE_KEY, RAG_THRESHOLD_STORAGE_KEY,
+  RAG_TOP_K_STORAGE_KEY, RAG_THRESHOLD_STORAGE_KEY, LANGUAGE_STORAGE_KEY,
   OLLAMA_MODEL_CATALOG, EMPTY_CONTEXT_USAGE,
 } from './constants';
 
@@ -60,6 +60,9 @@ import { MetricsSidebar } from './components/MetricsSidebar';
 import { VoiceModeOverlay } from './components/VoiceModeOverlay';
 import { ProjectPermissionModal } from './components/ProjectPermissionModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
+import { MemoriesPopup } from './components/MemoriesPopup';
+import { I18nProvider, type Language } from './lib/i18n';
+import translations from './lib/translations';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 import { modelSearchPlaceholder, installedModelsLabel, modelReadyMessage, modelDownloadPercent, type PullModelChunk } from './lib/modelDownload';
 
@@ -74,7 +77,16 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const [lang, setLang] = useState<Language>(() => {
+    if (typeof window === 'undefined') return 'en';
+    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    return stored === 'tr' ? 'tr' : 'en';
+  });
   const [theme, setTheme] = useState<ThemeMode>(loadStoredTheme);
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
   const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(loadStoredAppearanceTheme as AppearanceTheme);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -130,10 +142,12 @@ export default function App() {
   const [responseStyle, setResponseStyle] = useState<ResponseStyle>(loadStoredResponseStyle);
   const [profileText, setProfileText] = useState('');
   const [profilePath, setProfilePath] = useState('');
+  const [memoryInput, setMemoryInput] = useState('');
+  const [memoriesPopupOpen, setMemoriesPopupOpen] = useState(false);
   const [welcomeMessages, setWelcomeMessages] = useState(parseWelcomeMessages(''));
   const [activeWelcomeMessage, setActiveWelcomeMessage] = useState(() => randomWelcomeMessage(parseWelcomeMessages('')));
   const [sessionPendingDeletion, setSessionPendingDeletion] = useState<EngineSessionSummary | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [calendarPrompt, setCalendarPrompt] = useState('');
   const [creatingCalendarEvent, setCreatingCalendarEvent] = useState(false);
@@ -162,14 +176,13 @@ export default function App() {
   const [chatMode, setChatMode] = useState<ChatMode>('general');
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const profileImportInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const modelDownloadAbortRef = useRef<AbortController | null>(null);
   const modelDownloadAbortReasonRef = useRef<'pause' | 'cancel' | null>(null);
   const settingsCloseTimeoutRef = useRef<number | null>(null);
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   const streamingMessagesBySessionRef = useRef<Record<string, Message[]>>({});
-  const isDark = theme === 'dark';
+  const isDark = theme === 'system' ? systemPrefersDark : theme === 'dark';
   const activeSession = useMemo(() => sessions.find((s) => s.session_id === activeSessionId), [activeSessionId, sessions]);
   const activeProject = useMemo(() => codeProjects.find((p) => p.id === activeProjectId) ?? null, [activeProjectId, codeProjects]);
   const pinnedSessionIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
@@ -207,14 +220,14 @@ export default function App() {
   const loadSessions = useCallback(async () => {
     setError(null);
     const res = await fetch(`${API_BASE}/sessions`);
-    if (!res.ok) throw new Error(`Engine returned HTTP ${res.status} while loading sessions.`);
+    if (!res.ok) throw new Error(engineErr('engine.sessions_load', res.status));
     setSessions(((await res.json()) as EngineSessionsResponse).sessions);
   }, []);
 
   const createSession = useCallback(async () => {
     setError(null);
     const res = await fetch(`${API_BASE}/sessions`, { method: 'POST' });
-    if (!res.ok) throw new Error(`Engine returned HTTP ${res.status} while creating a session.`);
+    if (!res.ok) throw new Error(engineErr('engine.session_create', res.status));
     const session = (await res.json()) as EngineSession;
     activeSessionIdRef.current = session.session_id;
     setActiveSessionId(session.session_id);
@@ -223,14 +236,14 @@ export default function App() {
 
   const loadSession = useCallback(async (sessionId: string) => {
     setError(null);
-    setStatus('Loading session');
+    setStatus(t('status.loading_session'));
     const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}`);
-    if (!res.ok) throw new Error(`Engine returned HTTP ${res.status} while loading the session.`);
+    if (!res.ok) throw new Error(engineErr('engine.session_load', res.status));
     const session = (await res.json()) as EngineSession;
     activeSessionIdRef.current = session.session_id;
     setActiveSessionId(session.session_id);
     setMessages(turnsToMessages(session.history.turns, session.session_id));
-    setStatus('Ready');
+    setStatus(t('status.ready'));
   }, []);
 
   const loadSettingsData = useCallback(async () => {
@@ -248,7 +261,7 @@ export default function App() {
         setProfilePath(data.path);
       }
     } catch (e) {
-      setSettingsMessage(e instanceof Error ? e.message : 'Could not load settings.');
+      setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_load_settings'));
     } finally {
       setSettingsLoading(false);
     }
@@ -263,7 +276,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => { loadSessions().catch((e) => { setError(e instanceof Error ? e.message : 'Could not load sessions.'); setStatus('Engine unavailable'); }); }, [loadSessions]);
+  useEffect(() => { loadSessions().catch((e) => { setError(e instanceof Error ? e.message : t('error.could_not_load_sessions')); setStatus(t('error.engine_unavailable')); }); }, [loadSessions]);
 
   useEffect(() => {
     fetch(`${API_BASE}/profile`).then((r) => (r.ok ? r.json() : null)).then((d: ProfileResponse | null) => { if (d) { setProfileText(d.contents); setProfilePath(d.path); } }).catch(() => {});
@@ -300,9 +313,25 @@ export default function App() {
     return () => { cancelled = true; window.clearInterval(id); };
   }, [activeSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches);
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, []);
+
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(THEME_STORAGE_KEY, theme); }, [theme]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(APPEARANCE_THEME_STORAGE_KEY, appearanceTheme); }, [appearanceTheme]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(RESPONSE_STYLE_STORAGE_KEY, responseStyle); }, [responseStyle]);
+  useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang); }, [lang]);
+  const t = useCallback((key: string) => translations[lang]?.[key] ?? translations.en[key] ?? key, [lang]);
+  const engineErr = useCallback((key: string, status: number, file?: string) => {
+    let msg = t(key);
+    msg = msg.replace('{status}', status.toString());
+    if (file !== undefined) msg = msg.replace('{file}', file);
+    return msg;
+  }, [t]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(PINNED_SESSIONS_STORAGE_KEY, JSON.stringify(pinnedSessionIds));
@@ -388,7 +417,7 @@ export default function App() {
         const ts = new Date().toISOString();
         await streamPrompt(prompt, [...messages, { role: 'user', content: prompt, timestamp: ts }, { role: 'assistant', content: '' }]);
       }
-    } catch (err) { console.error('Dictation error:', err); setError('Could not transcribe audio. Is the RAG service running?'); }
+    } catch (err) { console.error('Dictation error:', err); setError(t('error.could_not_transcribe')); }
     finally { setIsTranscribing(false); }
   };
 
@@ -402,9 +431,9 @@ export default function App() {
     setMetricsTab('metrics');
     if (streamingSessionId === sessionId) {
       const msgs = streamingMessagesBySession[sessionId];
-      if (msgs) { activeSessionIdRef.current = sessionId; setActiveSessionId(sessionId); setMessages(msgs); setStatus('Inference'); return; }
+      if (msgs) { activeSessionIdRef.current = sessionId; setActiveSessionId(sessionId); setMessages(msgs); setStatus(t('status.inference')); return; }
     }
-    try { await loadSession(sessionId); } catch (e) { setError(e instanceof Error ? e.message : 'Could not load the session.'); setStatus('Session load failed'); }
+    try { await loadSession(sessionId); } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_load_session')); setStatus(t('error.session_load_failed')); }
   };
 
   const handleNewSession = () => {
@@ -417,7 +446,7 @@ export default function App() {
     setEditingSessionId(null); setEditingTitle(''); setImportPhase('idle');
     setImportProgress(0); setImportFileLabel('');
     setActiveWelcomeMessage(randomWelcomeMessage(welcomeMessages));
-    setStatus('Ready');
+    setStatus(t('status.ready'));
   };
 
   const toggleVoiceLowRamMode = useCallback(async (enabled: boolean) => {
@@ -449,11 +478,11 @@ export default function App() {
   // --- Project Actions ---
 
   const handleAddProject = async () => {
-    if (!window.showDirectoryPicker) { setError('Your browser does not support local folder access. Use Chrome or Edge for AEGIS Projects.'); return; }
+    if (!window.showDirectoryPicker) { setError(t('error.no_folder_support')); return; }
     setScanningProject(true);
     setProjectEditMessage(null);
     setError(null);
-    setStatus('Scanning project');
+    setStatus(t('status.scanning_project'));
     try {
       const rootHandle = await window.showDirectoryPicker();
       const files = await scanProjectDirectory(rootHandle);
@@ -469,8 +498,8 @@ export default function App() {
       setProjectPermissionRequestId(project.id);
       setStatus(`Project ${project.name} scanned`);
     } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') setStatus('Ready');
-      else { setError(e instanceof Error ? e.message : 'Could not scan project.'); setStatus('Project scan failed'); }
+      if (e instanceof DOMException && e.name === 'AbortError') setStatus(t('status.ready'));
+      else { setError(e instanceof Error ? e.message : t('error.could_not_scan_project')); setStatus(t('error.project_scan_failed')); }
     } finally { setScanningProject(false); }
   };
 
@@ -481,7 +510,7 @@ export default function App() {
       const permission = (await project.rootHandle.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
       setCodeProjects((cur) => cur.map((p) => p.id === projectId ? { ...p, writable: permission === 'granted' } : p));
       setProjectEditMessage(permission === 'granted' ? `AEGIS can apply approved patches inside ${project.name}.` : `${project.name} remains read-only until write access is granted.`);
-    } catch (e) { setProjectEditMessage(e instanceof Error ? e.message : 'Could not request project write permission.'); }
+    } catch (e) { setProjectEditMessage(e instanceof Error ? e.message : t('error.could_not_request_permission')); }
     finally { setProjectPermissionRequestId(null); }
   };
 
@@ -492,14 +521,14 @@ export default function App() {
   };
 
   const applyAssistantPatch = async (messageContent: string) => {
-    if (!activeProject) { setError('Open a project before applying code patches.'); return; }
-    if (!activeProject.writable) { setError('Project edits are disabled. Grant edit permission before applying a patch.'); return; }
+    if (!activeProject) { setError(t('error.no_active_project')); return; }
+    if (!activeProject.writable) { setError(t('error.project_readonly')); return; }
     const diff = extractUnifiedDiff(messageContent);
     const changedFiles = diff.split('\n').filter((l) => l.startsWith('+++ ') && !l.includes('/dev/null'));
     const targetPath = parsePatchTarget(diff);
     const targetFile = targetPath ? findProjectFile(activeProject, targetPath) : null;
-    if (changedFiles.length > 1) { setError('Automatic patch apply currently supports one file at a time.'); return; }
-    if (!diff || !targetFile?.handle.createWritable) { setError('AEGIS could not find a supported unified diff for the active project.'); return; }
+    if (changedFiles.length > 1) { setError(t('error.patch_single_file')); return; }
+    if (!diff || !targetFile?.handle.createWritable) { setError(t('error.patch_no_diff')); return; }
     try {
       const nextContent = applySimpleUnifiedDiff(targetFile.content, diff);
       const writable = await targetFile.handle.createWritable();
@@ -509,8 +538,8 @@ export default function App() {
       const nextProject = { ...activeProject, files: nextFiles, fileCount: nextFiles.length, totalBytes: nextFiles.reduce((t, f) => t + f.size, 0), snapshot: buildProjectSnapshot(activeProject.name, nextFiles), updatedAt: new Date().toISOString() };
       setCodeProjects((cur) => cur.map((p) => p.id === nextProject.id ? nextProject : p));
       setProjectEditMessage(`Applied patch to ${targetFile.path}.`);
-      setStatus('Project patch applied');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not apply project patch.'); setStatus('Patch failed'); }
+      setStatus(t('status.project_patch_applied'));
+    } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_apply_patch')); setStatus(t('error.patch_failed')); }
   };
 
   // --- Delete Session ---
@@ -526,10 +555,10 @@ export default function App() {
     if (!session || deletingSessionIds.includes(session.session_id)) return;
     setSessionPendingDeletion(null);
     setError(null);
-    setStatus('Deleting session');
+    setStatus(t('status.deleting_session'));
     try {
       const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(session.session_id)}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(`Engine returned HTTP ${res.status} while deleting the session.`);
+      if (!res.ok) throw new Error(engineErr('engine.session_delete', res.status));
       setDeletingSessionIds((cur) => [...cur, session.session_id]);
       if (session.session_id === activeSessionId) { setActiveSessionId(null); setMessages([]); }
       setIndexedDocumentsBySession((cur) => { const n = { ...cur }; delete n[session.session_id]; return n; });
@@ -537,11 +566,11 @@ export default function App() {
       await new Promise((r) => window.setTimeout(r, 320));
       await loadSessions();
       setDeletingSessionIds((cur) => cur.filter((id) => id !== session.session_id));
-      setStatus('Ready');
+      setStatus(t('status.ready'));
     } catch (e) {
       setDeletingSessionIds((cur) => cur.filter((id) => id !== session.session_id));
-      setError(e instanceof Error ? e.message : 'Could not delete the session.');
-      setStatus('Session deletion failed');
+      setError(e instanceof Error ? e.message : t('error.could_not_delete_session'));
+      setStatus(t('error.could_not_delete_session'));
     }
   };
 
@@ -559,15 +588,15 @@ export default function App() {
     const nextTitle = editingTitle.trim();
     if (!nextTitle || nextTitle === session.title) { setEditingSessionId(null); setEditingTitle(''); return; }
     setError(null);
-    setStatus('Renaming session');
+    setStatus(t('status.renaming_session'));
     try {
       const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(session.session_id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: nextTitle }) });
-      if (!res.ok) throw new Error(`Engine returned HTTP ${res.status} while renaming the session.`);
+      if (!res.ok) throw new Error(engineErr('engine.session_rename', res.status));
       await loadSessions();
-      setStatus('Ready');
+      setStatus(t('status.ready'));
       setEditingSessionId(null);
       setEditingTitle('');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not rename the session.'); setStatus('Session rename failed'); }
+    } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_rename_session')); setStatus(t('error.could_not_rename_session')); }
   };
 
   // --- File Upload ---
@@ -582,13 +611,13 @@ export default function App() {
     setImportPhase('uploading');
     setImportProgress(3);
     setImportFileLabel(selected.length === 1 ? selected[0].name : `${selected.length} documents`);
-    setStatus(activeSessionId ? 'Indexing documents' : 'Starting document session');
+    setStatus(activeSessionId ? t('status.indexing_documents') : t('status.starting_document_session'));
     setError(null);
     try {
       let sessionId = activeSessionId;
       let createdSessionId: string | null = null;
       if (!sessionId) { const s = await createSession(); sessionId = s.session_id; createdSessionId = s.session_id; setNewSessionPulseId(s.session_id); setMessages([]); }
-      setStatus('Indexing documents');
+      setStatus(t('status.indexing_documents'));
       const fd = new FormData();
       fd.append('session_id', sessionId);
       selected.forEach((f) => fd.append('file', f));
@@ -602,9 +631,9 @@ export default function App() {
         req.upload.onload = () => { setImportPhase('indexing'); setImportProgress(72); };
         req.onload = () => {
           if (req.status >= 200 && req.status < 300) { try { resolve(JSON.parse(req.responseText)); } catch { reject(new Error('Engine indexed the document but returned an unreadable response.')); } return; }
-          reject(new Error(req.responseText || `Engine returned HTTP ${req.status} while uploading.`));
+          reject(new Error(req.responseText || engineErr('engine.upload', req.status)));
         };
-        req.onerror = () => reject(new Error('Could not reach the engine while importing documents.'));
+        req.onerror = () => reject(new Error(t('error.could_not_reach_engine')));
         req.onabort = () => reject(new Error('Document import was cancelled.'));
         req.send(fd);
       });
@@ -616,13 +645,13 @@ export default function App() {
       await loadSessions();
       if (createdSessionId) window.setTimeout(() => setNewSessionPulseId((c) => c === createdSessionId ? null : c), 1400);
       setStatus(`Indexed ${ingestRes.total_chunks} document chunks`);
-    } catch (e) { setImportPhase('error'); setImportProgress(100); setError(e instanceof Error ? e.message : 'Upload failed'); setStatus('Upload failed'); }
+    } catch (e) { setImportPhase('error'); setImportProgress(100); setError(e instanceof Error ? e.message : t('error.upload_failed')); setStatus(t('error.upload_failed')); }
     finally { setIsUploading(false); event.target.value = ''; window.setTimeout(() => { setImportPhase('idle'); setImportProgress(0); setImportFileLabel(''); }, 1800); }
   };
 
   const deleteIndexedDocumentFromRag = async (sessionId: string, document: IndexedDocument): Promise<DeleteIndexedDocumentResponse> => {
     const res = await fetch(`${API_BASE}/ingest/document`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId, stored_path: document.stored_path }) });
-    if (!res.ok) { const body = await res.text(); throw new Error(body || `Engine returned HTTP ${res.status} while removing ${document.file_name}.`); }
+    if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.document_remove', res.status, document.file_name)); }
     return (await res.json()) as DeleteIndexedDocumentResponse;
   };
 
@@ -633,7 +662,7 @@ export default function App() {
     setIsClearingIndexedDocuments(true);
     setDocumentContextNotice(null);
     setError(null);
-    setStatus('Removing document context');
+    setStatus(t('status.removing_document_context'));
     try {
       const results = await Promise.allSettled(docs.map((d) => deleteIndexedDocumentFromRag(sessionId, d)));
       const removedPaths = new Set<string>();
@@ -653,7 +682,7 @@ export default function App() {
         });
       }
       setImportPhase('idle'); setImportProgress(0); setImportFileLabel('');
-      if (failures.length > 0) { setError(`Could not remove ${failures.length} imported document${failures.length === 1 ? '' : 's'} from RAG memory. ${failures[0]}`); setStatus('Document removal incomplete'); return; }
+      if (failures.length > 0) { setError(`Could not remove ${failures.length} imported document${failures.length === 1 ? '' : 's'} from RAG memory. ${failures[0]}`); setStatus(t('error.document_removal_incomplete')); return; }
       setStatus(deletedChunks > 0 ? `Removed ${deletedChunks} document chunks` : 'Removed document context');
       setDocumentContextNotice('Imported document cleared.');
     } finally { setIsClearingIndexedDocuments(false); }
@@ -665,12 +694,12 @@ export default function App() {
     setLoadingOutlookCalendars(true);
     try {
       const res = await fetch(`${API_BASE}/calendar/outlook/calendars`);
-      if (!res.ok) { const body = await res.text(); throw new Error(body || `Engine returned HTTP ${res.status} while loading Outlook calendars.`); }
+      if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.calendars_load', res.status)); }
       const data = (await res.json()) as OutlookCalendarsResponse;
       const visible = data.calendars.filter(isVisibleOutlookCalendar);
       setOutlookCalendars(visible);
       setSelectedOutlookCalendarId(visible.find((c) => c.is_selected)?.id ?? '');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not load Outlook calendars.'); }
+    } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_load_calendars')); }
     finally { setLoadingOutlookCalendars(false); }
   };
 
@@ -680,11 +709,11 @@ export default function App() {
     if (!calendarId) return;
     try {
       const res = await fetch(`${API_BASE}/calendar/outlook/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ calendar_id: calendarId }) });
-      if (!res.ok) { const body = await res.text(); throw new Error(body || `Engine returned HTTP ${res.status} while selecting an Outlook calendar.`); }
+      if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.calendar_select', res.status)); }
       const data = (await res.json()) as OutlookCalendarSelectionResponse;
       setCalendarMessage(`Outlook calendar selected: ${outlookCalendarLabel(data.calendar)}`);
       setOutlookCalendars((cur) => cur.map((c) => ({ ...c, is_selected: c.id === data.calendar.id })));
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not select Outlook calendar.'); }
+    } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_select_calendar')); }
   };
 
   const openCalendarTool = () => {
@@ -704,15 +733,15 @@ export default function App() {
     setError(null);
     setCalendarResult(null);
     setCalendarMessage(null);
-    setStatus('Creating calendar event');
+    setStatus(t('status.creating_calendar_event'));
     try {
       const res = await fetch(`${API_BASE}/calendar/create-from-prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
-      if (!res.ok) { const body = await res.text(); throw new Error(body || `Engine returned HTTP ${res.status} while creating the calendar event.`); }
+      if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.calendar_create', res.status)); }
       const data = (await res.json()) as CalendarCreateResponse;
       setCalendarResult(data.parsed);
       setCalendarMessage(data.message);
       setStatus(data.saved_to_calendar ? 'Calendar event saved' : 'Calendar event created');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not create calendar event.'); setStatus('Calendar failed'); }
+    } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_create_calendar_event')); setStatus(t('error.calendar_failed')); }
     finally { setCreatingCalendarEvent(false); }
   };
 
@@ -728,14 +757,14 @@ export default function App() {
     if (isStreaming) return;
     setSessionMenuOpenId(null);
     setError(null);
-    setStatus('Preparing export');
+    setStatus(t('status.preparing_export'));
     try {
       const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionSummary.session_id)}`);
-      if (!res.ok) throw new Error(`Engine returned HTTP ${res.status} while loading the session export.`);
+      if (!res.ok) throw new Error(engineErr('engine.session_export', res.status));
       const session = (await res.json()) as EngineSession;
       downloadConversationPdf({ title: session.title || sessionSummary.title || 'AEGIS Chat Export', sessionId: session.session_id, messages: turnsToMessages(session.history.turns, session.session_id), indexedDocuments: indexedDocumentsBySession[session.session_id] ?? [] });
-      setStatus('Export ready');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not export the session.'); setStatus('Export failed'); }
+      setStatus(t('status.export_ready'));
+    } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_export_session')); setStatus(t('error.export_failed')); }
   };
 
   const togglePinnedSession = (sessionId: string) => {
@@ -764,20 +793,20 @@ export default function App() {
     setSettingsMessage(null);
     try {
       const res = await fetch(`${API_BASE}/providers/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: providerName }) });
-      if (!res.ok) { const body = await res.text(); throw new Error(body || `Engine returned HTTP ${res.status} while switching provider.`); }
+      if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.provider_switch', res.status)); }
       await loadSettingsData();
       setSettingsMessage(`Inference provider switched to ${providerName}.`);
-    } catch (e) { setSettingsMessage(e instanceof Error ? e.message : 'Could not switch provider.'); }
+    } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_switch_provider')); }
   };
 
   const selectModel = async (modelName: string) => {
     setSettingsMessage(null);
     try {
       const res = await fetch(`${API_BASE}/models/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelName }) });
-      if (!res.ok) { const body = await res.text(); throw new Error(body || `Engine returned HTTP ${res.status} while switching model.`); }
+      if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.model_switch', res.status)); }
       await loadSettingsData();
       setSettingsMessage(`Active model switched to ${modelName}.`);
-    } catch (e) { setSettingsMessage(e instanceof Error ? e.message : 'Could not switch model.'); }
+    } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_switch_model')); }
   };
 
   const downloadModel = async (modelNameOverride?: string) => {
@@ -795,7 +824,7 @@ export default function App() {
     setSettingsMessage(null);
     try {
       const res = await fetch(`${API_BASE}/models/download`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelName }), signal: controller.signal });
-      if (!res.ok || !res.body) { const body = await res.text(); throw new Error(body || `Engine returned HTTP ${res.status} while downloading model.`); }
+      if (!res.ok || !res.body) { const body = await res.text(); throw new Error(body || engineErr('engine.model_download', res.status)); }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let pending = '';
@@ -822,7 +851,7 @@ export default function App() {
     } catch (e) {
       if (controller.signal.aborted) return;
       setModelDownloadStatus('Download failed');
-      setSettingsMessage(e instanceof Error ? e.message : 'Could not download model.');
+      setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_download_model'));
     } finally {
       const reason = modelDownloadAbortReasonRef.current;
       modelDownloadAbortRef.current = null;
@@ -845,37 +874,41 @@ export default function App() {
     modelDownloadAbortReasonRef.current = 'cancel';
     modelDownloadAbortRef.current?.abort();
     setPausedModelDownload(null); setDownloadingModel(null); setModelDownloadState('idle'); setModelDownloadProgress(0); setModelDownloadStatus('');
-    setSettingsMessage('Model download cancelled.');
+    setSettingsMessage(t('error.model_download_cancelled'));
   };
 
   const resumeModelDownload = () => { if (pausedModelDownload) void downloadModel(pausedModelDownload); };
+
+  const handleAddMemory = () => {
+    const memory = memoryInput.trim();
+    if (!memory) return;
+    const timestamp = new Date().toLocaleString();
+    const entry = `- ${memory} (remembered on ${timestamp})`;
+    setProfileText((prev) => {
+      const text = prev.trim();
+      return text ? `${text}\n${entry}` : entry;
+    });
+    setMemoryInput('');
+    setSettingsMessage(t('error.memory_added'));
+  };
 
   const saveProfileSettings = async () => {
     setSettingsMessage(null);
     try {
       const res = await fetch(`${API_BASE}/profile`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: profileText }) });
-      if (!res.ok) { const body = await res.text(); throw new Error(body || `Engine returned HTTP ${res.status} while saving profile.`); }
+      if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.profile_save', res.status)); }
       const data = (await res.json()) as ProfileResponse;
       setProfileText(data.contents);
       setProfilePath(data.path);
-      setSettingsMessage('Personalization saved locally as markdown and will be applied to future replies.');
-    } catch (e) { setSettingsMessage(e instanceof Error ? e.message : 'Could not save profile.'); }
-  };
-
-  const importProfileFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.txt') && !file.name.toLowerCase().endsWith('.md')) { setSettingsMessage('Only .txt and .md profile files are supported.'); event.target.value = ''; return; }
-    try { setProfileText(await file.text()); setSettingsMessage(`Imported ${file.name}. Save to store it as your local markdown personalization profile.`); }
-    catch { setSettingsMessage('Could not read the selected profile file.'); }
-    finally { event.target.value = ''; }
+      setSettingsMessage(t('error.memories_saved'));
+    } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_save_profile')); }
   };
 
   // --- Core Streaming ---
 
   async function streamPrompt(prompt: string, nextMessages: Message[], editFromTurnIndex?: number) {
     setError(null);
-    setStatus('Inference');
+    setStatus(t('status.inference'));
     setIsStreaming(true);
 
     let targetSessionId: string | null = null;
@@ -934,7 +967,7 @@ export default function App() {
           rag_top_k: ragTopK, rag_similarity_threshold: ragSimilarityThreshold,
         }),
       });
-      if (!res.ok || !res.body) throw new Error(`Engine returned HTTP ${res.status} while sending chat.`);
+      if (!res.ok || !res.body) throw new Error(engineErr('engine.chat_send', res.status));
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -958,7 +991,7 @@ export default function App() {
             try { const parsedSources = JSON.parse(data.replace('[RAG_SOURCES] ', '')) as RetrievalChunk[]; updateTarget((cur) => { const n = [...cur]; const l = n[n.length - 1]; if (l?.role === 'assistant') n[n.length - 1] = { ...l, sources: parsedSources }; return n; }); } catch {}
             continue;
           }
-          if (data === '[DONE]') { setStatus('Complete'); continue; }
+          if (data === '[DONE]') { setStatus(t('status.complete')); continue; }
           if (data.startsWith('[ERROR]')) throw new Error(data);
           if (accumulated === '' && inferenceStartTime.current) setInferenceStats((p) => ({ ...p, ttft: Date.now() - (inferenceStartTime.current ?? 0) }));
           accumulated += data;
@@ -980,7 +1013,7 @@ export default function App() {
       const totalLatency = Date.now() - (inferenceStartTime.current ?? Date.now());
       const charCount = accumulated.length;
       setInferenceStats((p) => ({ ...p, latency: totalLatency, tps: totalLatency > 0 ? parseFloat(((Math.max(1, Math.floor(charCount / 4)) / totalLatency) * 1000).toFixed(1)) : 0 }));
-      setStatus('Complete');
+      setStatus(t('status.complete'));
       await loadSessions();
       if (isTtsEnabled && accumulated) speakAssistantResponse(accumulated, false, messages.length - 1);
       try { setContextUsage(await fetchContextUsage(sessionId)); } catch {}
@@ -988,8 +1021,8 @@ export default function App() {
     } catch (e) {
       if (pendingSegments.length > 0) flushSegments(true);
       if (streamFlushTimer !== null) { window.clearTimeout(streamFlushTimer); streamFlushTimer = null; }
-      setError(e instanceof Error ? e.message : 'Could not send chat request.');
-      setStatus('Chat failed');
+      setError(e instanceof Error ? e.message : t('error.could_not_send_chat'));
+      setStatus(t('error.chat_failed'));
       updateTarget((cur) => cur.filter((m) => m.content.length > 0));
     } finally {
       if (streamFlushTimer !== null) window.clearTimeout(streamFlushTimer);
@@ -1038,6 +1071,7 @@ export default function App() {
   };
 
   return (
+    <I18nProvider lang={lang}>
     <div className={`aegis-shell aegis-mode-${theme} aegis-theme-${appearanceTheme} flex h-screen overflow-hidden ${isDark ? 'bg-zinc-950 text-zinc-100' : 'bg-stone-100 text-slate-900'}`} onClick={() => setSessionMenuOpenId(null)}>
       {/* Left Icon Bar */}
       <nav aria-label="Sidebar controls" className={`flex w-14 shrink-0 flex-col items-center border-r ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}>
@@ -1121,7 +1155,7 @@ export default function App() {
         {visibleResourceWarning && (
           <div className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm font-medium ${isDark ? 'border-amber-900/60 bg-amber-950/30 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
             <span className="min-w-0 flex-1">Warning: {visibleResourceWarning}</span>
-            <button aria-label="Dismiss resource warning" className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100' : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'}`} onClick={() => setDismissedResourceWarning(visibleResourceWarning)} type="button">
+            <button aria-label={t('error.dismiss_warning')} className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100' : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'}`} onClick={() => setDismissedResourceWarning(visibleResourceWarning)} type="button">
               <X size={15} />
             </button>
           </div>
@@ -1132,18 +1166,24 @@ export default function App() {
           <div className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm ${isDark ? 'border-red-900/60 bg-red-950/30 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`} role="alert">
             <span className="min-w-0 flex-1">{error}</span>
             {errorDismissible && (
-              <button aria-label="Dismiss error" className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100' : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'}`} onClick={() => setError(null)} type="button">
+              <button aria-label={t('error.dismiss')} className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100' : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'}`} onClick={() => setError(null)} type="button">
                 <X size={15} />
               </button>
             )}
           </div>
         )}
 
+        {/* AEGIS heading — fixed position, unaffected by error banners */}
+        {messages.length === 0 && (
+          <div className={`absolute left-1/2 top-[calc(25vh+32px)] z-10 -translate-x-1/2 text-center text-8xl font-black tracking-[0.15em] transition-all duration-700 ${isDark ? 'text-white' : 'text-black'}`} style={{ textShadow: '0 0 1px currentColor' }}>
+            AEGIS
+          </div>
+        )}
+
         {/* Messages Area */}
         <div ref={scrollRef} className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 ${isDark ? 'bg-zinc-950' : 'bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.75),_rgba(245,245,244,0)_42%)]'}`}>
           <div className="mx-auto flex max-w-4xl flex-col gap-4">
-            {messages.length === 0 ? null : (
-              messages.map((message, index) => (
+            {messages.map((message, index) => (
                 <MessageBubble
                   key={`${message.role}-${index}`}
                   message={message}
@@ -1176,8 +1216,7 @@ export default function App() {
                   onSpeak={speakAssistantResponse}
                   onApplyPatch={() => applyAssistantPatch(message.content)}
                 />
-              ))
-            )}
+              ))}
           </div>
         </div>
 
@@ -1287,7 +1326,7 @@ export default function App() {
         ragSimilarityThreshold={ragSimilarityThreshold}
         profileText={profileText}
         profilePath={profilePath}
-        profileImportInputRef={profileImportInputRef}
+        memoryInput={memoryInput}
         onClose={closeSettings}
         onSetSettingsTab={setSettingsTab}
         onSetTheme={setTheme}
@@ -1306,9 +1345,20 @@ export default function App() {
         onToggleRag={toggleRagEnabled}
         onChangeRagTopK={changeRagTopK}
         onChangeRagThreshold={changeRagThreshold}
-        onProfileTextChange={setProfileText}
+        onMemoryInputChange={setMemoryInput}
+        onAddMemory={handleAddMemory}
+        onDisplayMemories={() => setMemoriesPopupOpen(true)}
         onSaveProfile={saveProfileSettings}
-        onImportProfile={importProfileFile}
+        lang={lang}
+        onSetLanguage={setLang}
+      />
+
+      {/* Memories Popup */}
+      <MemoriesPopup
+        isDark={isDark}
+        isOpen={memoriesPopupOpen}
+        memories={profileText.split('\n').filter((l) => l.trim().startsWith('- ')).map((l) => l.replace(/^-\s+/, ''))}
+        onClose={() => setMemoriesPopupOpen(false)}
       />
 
       {/* Calendar Modal */}
@@ -1342,5 +1392,6 @@ export default function App() {
         onClearSelection={() => { setSelectedMessageSources(null); setSelectedMessageSourcesIndex(null); }}
       />
     </div>
+    </I18nProvider>
   );
 }

@@ -3,6 +3,7 @@ import { Bot, User, Edit3, Copy, Check, BookOpen, Volume2, VolumeX, FileCode } f
 import type { Message, CodeProject } from '../types';
 import { copyTextToClipboard, extractUnifiedDiff, fitTextareaToContent } from '../lib';
 import { AssistantMarkdown } from './AssistantMarkdown';
+import { useT } from '../lib/i18n';
 
 interface MessageBubbleProps {
   message: Message;
@@ -29,8 +30,9 @@ export function MessageBubble({
   message, index, isDark, isStreaming, editingMessageIndex, editingMessageText,
   copiedMessageIndex, selectedMessageSourcesIndex, speakingMessageIndex, activeProject,
   onBeginEditing, onCancelEditing, onEditingTextChange, onResendEdited,
-  onCopyMessage, onToggleSources, onSpeak, onApplyPatch,
+  onCopyMessage, onToggleSources, onSpeak,   onApplyPatch,
 }: MessageBubbleProps) {
+  const t = useT();
   return (
     <div className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
       {message.role === 'assistant' && (
@@ -50,8 +52,8 @@ export function MessageBubble({
               value={editingMessageText}
             />
             <div className="flex justify-end gap-2">
-              <button className={`rounded-md border px-3 py-1.5 text-xs ${isDark ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-800' : 'border-stone-300 text-slate-700 hover:bg-stone-100'}`} onClick={onCancelEditing} type="button">Cancel</button>
-              <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={!editingMessageText.trim() || isStreaming} onClick={() => onResendEdited(index)} type="button">Resend</button>
+                          <button className={`rounded-md border px-3 py-1.5 text-xs ${isDark ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-800' : 'border-stone-300 text-slate-700 hover:bg-stone-100'}`} onClick={onCancelEditing} type="button">{t('messages.editing_cancel')}</button>
+                          <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={!editingMessageText.trim() || isStreaming} onClick={() => onResendEdited(index)} type="button">{t('messages.editing_resend')}</button>
             </div>
           </div>
         ) : (
@@ -77,7 +79,7 @@ export function MessageBubble({
                   ? isDark ? 'text-emerald-400 bg-zinc-900 border border-emerald-500/20' : 'text-emerald-600 bg-stone-200 border border-emerald-300/30'
                   : isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-emerald-300' : 'text-slate-500 hover:bg-stone-200 hover:text-emerald-700'}`}
                 onClick={() => onToggleSources(index, message.sources || [])}
-                title={`Inspect ${message.sources.length} retrieved sources`}
+                title={t('messages.sources')}
                 type="button"
               >
                 <BookOpen size={13} className={selectedMessageSourcesIndex === index ? 'animate-pulse' : ''} />

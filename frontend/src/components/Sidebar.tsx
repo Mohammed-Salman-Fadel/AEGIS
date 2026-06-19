@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import type { EngineSessionSummary, CodeProject } from '../types';
 import { formatSessionLastAccessed } from '../lib';
+import { useT } from '../lib/i18n';
 
 interface SidebarProps {
   isDark: boolean;
@@ -51,6 +52,7 @@ export function Sidebar({
   onCancelRenaming, onEditingTitleChange, onExportSession, onTogglePinned, onDeleteSession,
   onSetSessionMenuOpen,
 }: SidebarProps) {
+  const t = useT();
   return (
     <aside
       aria-hidden={!sidebarOpen}
@@ -68,7 +70,7 @@ export function Sidebar({
           type="button"
         >
           <MessageSquare className="absolute left-3" size={15} />
-          <span>NEW CONVERSATION</span>
+            <span>{t('sidebar.new_conversation')}</span>
         </button>
 
         {/* Projects Section */}
@@ -80,7 +82,7 @@ export function Sidebar({
               type="button"
             >
               <ChevronDown className={`shrink-0 transition-transform ${projectsOpen ? '' : '-rotate-90'}`} size={15} />
-              <span>Projects</span>
+              <span>{t('sidebar.projects')}</span>
             </button>
             <button
               aria-label="Open project folder"
@@ -99,13 +101,13 @@ export function Sidebar({
               {codeProjects.length === 0 ? (
                 <button
                   className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition ${isDark ? 'border-zinc-800 text-zinc-500 hover:bg-zinc-900' : 'border-stone-300 text-slate-500 hover:bg-stone-100'}`}
-                  disabled={scanningProject}
-                  onClick={onAddProject}
-                  type="button"
-                >
-                  <FolderOpen size={15} />
-                  {scanningProject ? 'Scanning folder...' : 'Open project folder'}
-                </button>
+                    disabled={scanningProject}
+                    onClick={onAddProject}
+                    type="button"
+                  >
+                    <FolderOpen size={15} />
+                    {scanningProject ? t('sidebar.scanning') : t('sidebar.open_project')}
+                  </button>
               ) : (
                 codeProjects.map((project) => {
                   const isActiveProject = activeProjectId === project.id;
@@ -154,15 +156,15 @@ export function Sidebar({
             type="button"
           >
             <ChevronDown className={`transition-transform ${sessionsOpen ? '' : '-rotate-90'}`} size={15} />
-            <span>Sessions</span>
+            <span>{t('sidebar.sessions')}</span>
           </button>
         </div>
 
         <div className={`sessions-scroll -ml-1.5 -mr-3 min-h-0 flex-1 space-y-1 overflow-y-auto py-1.5 pl-2 pr-3 ${sessionsOpen ? '' : 'hidden'}`}>
           {sessions.length === 0 ? (
-            <div className={`rounded-lg border p-3 text-sm ${isDark ? 'border-zinc-800 text-zinc-500' : 'border-stone-300 text-slate-500'}`}>
-              No saved sessions yet.
-            </div>
+              <div className={`rounded-lg border p-3 text-sm ${isDark ? 'border-zinc-800 text-zinc-500' : 'border-stone-300 text-slate-500'}`}>
+                {t('sidebar.no_sessions')}
+              </div>
           ) : (
             sortedSessions.map((session, sessionIndex) => {
               const isDeleting = deletingSessionIds.includes(session.session_id);

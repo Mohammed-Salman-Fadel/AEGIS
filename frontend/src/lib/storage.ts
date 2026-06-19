@@ -13,10 +13,12 @@ import {
   RAG_THRESHOLD_STORAGE_KEY,
 } from '../constants';
 
-export function loadStoredTheme(): 'dark' | 'light' {
+export function loadStoredTheme(): 'dark' | 'light' | 'system' {
   if (typeof window === 'undefined') return 'dark';
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return stored === 'light' ? 'light' : 'dark';
+  if (stored === 'system') return 'system';
+  if (stored === 'light') return 'light';
+  return 'dark';
 }
 
 export function loadStoredVoiceLowRamMode(): boolean {
