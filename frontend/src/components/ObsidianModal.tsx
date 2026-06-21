@@ -5,6 +5,51 @@ import { API_BASE } from '../constants';
 
 type ObsidianTab = 'search' | 'read' | 'create' | 'list' | 'graph';
 
+interface TreeNode {
+  name: string;
+  children: Map<string, TreeNode>;
+  isFile: boolean;
+}
+
+function buildTree(paths: string[]): TreeNode {
+  const root: TreeNode = { name: '', children: new Map(), isFile: false };
+  for (const p of paths) {
+    const parts = p.replace(/\\/g, '/').split('/');
+    let node = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!node.children.has(part)) {
+        node.children.set(part, { name: part, children: new Map(), isFile: i === parts.length - 1 });
+      }
+      node = node.children.get(part)!;
+    }
+  }
+  return root;
+}
+
+function sortEntries(node: TreeNode): [string, TreeNode][] {
+  return [...node.children.entries()].sort((a, b) => {
+    if (a[1].isFile !== b[1].isFile) return a[1].isFile ? 1 : -1;
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+function renderTree(node: TreeNode, prefix = '', isLast = true): string {
+  let result = '';
+  const entries = sortEntries(node);
+  for (let i = 0; i < entries.length; i++) {
+    const [name, child] = entries[i];
+    const last = i === entries.length - 1;
+    const connector = last ? '└── ' : '├── ';
+    result += prefix + connector + (child.isFile ? name.replace(/\.md$/i, '') : '📁 ' + name) + '\n';
+    if (!child.isFile) {
+      const childPrefix = prefix + (last ? '    ' : '│   ');
+      result += renderTree(child, childPrefix, last);
+    }
+  }
+  return result;
+}
+
 interface ObsidianModalProps {
   isDark: boolean;
   isOpen: boolean;
@@ -56,7 +101,31 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
   async function handleSearch() { if (!query.trim()) return; await callObsidian('search-vault', { query: query.trim() }); }
   async function handleRead() { if (!notePath.trim()) return; await callObsidian('read-note', { path: notePath.trim() }); }
   async function handleCreate() { if (!newNotePath.trim() || !newNoteContent.trim()) return; await callObsidian('create-note', { path: newNotePath.trim(), content: newNoteContent.trim() }); }
-  async function handleList() { await callObsidian('list-available-vaults', {}); }
+  async function handleList() {
+    if (!vaultPath?.trim()) return;
+    setLoading(true); setError(null);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const res = await fetch(`${API_BASE}/mcp/obsidian/list-notes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vault_path: vaultPath.trim(), max_notes: 5000 }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) { const text = await res.text(); throw new Error(text || 'Failed to list notes'); }
+      const data = await res.json();
+      if (data.notes?.length === 0) {
+        setResults('No .md files found in this vault.');
+      } else {
+        setResults(renderTree(buildTree(data.notes.map((n: any) => n.id))));
+      }
+    } catch (e: any) {
+      if (e.name === 'AbortError') setError('Request timed out.');
+      else setError(e instanceof Error ? e.message : 'An error occurred');
+      setResults('');
+    } finally { setLoading(false); }
+  }
   async function handleLoadGraph() {
     if (!vaultPath?.trim()) return;
     setGraphLoading(true); setError(null);
@@ -89,7 +158,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
   const tabBtn = (t: ObsidianTab, label: string, Icon: any) => (
     <button
       className={`flex-1 px-3 py-2.5 text-xs font-semibold uppercase tracking-wider transition ${tab === t ? 'border-b-2 border-emerald-500 text-emerald-500' : isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-slate-500 hover:text-slate-700'}`}
-      onClick={() => { setTab(t); if (t === 'graph' && !graphData) handleLoadGraph(); }}
+      onClick={() => { setTab(t); if (t === 'list') setResults(''); if (t === 'graph' && !graphData) handleLoadGraph(); }}
       type="button"
     ><Icon size={14} className="inline mr-1" />{label}</button>
   );
@@ -106,7 +175,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
           {tabBtn('search', 'Search', Search)}{tabBtn('read', 'Read', FileText)}{tabBtn('create', 'Create', Plus)}{tabBtn('list', 'List', List)}{tabBtn('graph', 'Graph', Share2)}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto space-y-4 px-6 py-4">
           {error && <div className={`rounded-lg border px-3 py-2 text-xs ${isDark ? 'border-red-900/60 bg-red-950/30 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>{error}</div>}
           {!vaultPath?.trim() && <p className="text-sm text-amber-500">No vault path configured. Set it in Settings → Tools → Obsidian.</p>}
 
@@ -142,11 +211,20 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
             </div>
           )}
 
-          {tab === 'list' && (
+          {tab === 'list' && !results && (
             <div className="space-y-3">
               <button className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={loading} onClick={handleList} type="button">{loading ? 'Loading...' : 'List All Notes'}</button>
-              {results && <div className={resultClass}>{results}</div>}
-              {!results && <p className={`text-sm italic ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Click the button to list all notes in your vault.</p>}
+              <p className={`text-sm italic ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Click the button to list all notes in your vault.</p>
+            </div>
+          )}
+          {/* List tree — fills content area when results are loaded */}
+          {tab === 'list' && results && (
+            <div style={{ height: 'calc(100% - 20px)' }} className="flex flex-col space-y-3">
+              <div className="flex items-center justify-between shrink-0">
+                <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>Vault tree</span>
+                <button className={`text-xs transition ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setResults('')} type="button">Back</button>
+              </div>
+              <div className={`flex-1 overflow-y-auto rounded-lg border p-4 text-sm leading-6 whitespace-pre font-mono ${isDark ? 'border-zinc-800 bg-zinc-900/60 text-zinc-200' : 'border-stone-200 bg-stone-50 text-slate-800'}`}>{results}</div>
             </div>
           )}
 

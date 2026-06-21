@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Mutex};
 use tracing::{info, warn};
 
 use super::client::McpClient;
@@ -13,6 +13,7 @@ use super::types::{McpProvider, McpProviderKind, McpToolResult, McpTool};
 pub struct McpRegistry {
     providers: RwLock<Vec<McpProvider>>,
     clients: RwLock<HashMap<String, Arc<RwLock<McpClient>>>>,
+    reg_lock: Mutex<()>,
 }
 
 impl McpRegistry {
@@ -20,17 +21,28 @@ impl McpRegistry {
         Self {
             providers: RwLock::new(Vec::new()),
             clients: RwLock::new(HashMap::new()),
+            reg_lock: Mutex::new(()),
         }
     }
 
     /// Register a new MCP provider. This will spawn its subprocess
     /// and discover its available tools.
+    /// Uses a mutex to prevent concurrent registrations of the same provider
+    /// which would leak multiple subprocesses.
     pub async fn register_provider(
         &self,
         name: &str,
         kind: McpProviderKind,
         enabled: bool,
     ) -> anyhow::Result<()> {
+        let _guard = self.reg_lock.lock().await;
+
+        // Double-check: another task may have registered this provider
+        // while we were waiting for the lock
+        if self.has_provider(name).await {
+            return Ok(());
+        }
+
         match &kind {
             McpProviderKind::Subprocess { command, args } => {
                 let mut client = McpClient::new(command, args.clone());

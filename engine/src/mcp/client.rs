@@ -195,18 +195,25 @@ impl McpClient {
         stdin.write_all(req_str.as_bytes()).await?;
         stdin.flush().await?;
 
-        let resp_json = loop {
+        let resp_json = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             let mut line = String::new();
-            let n = reader.read_line(&mut line).await?;
-            if n == 0 {
-                anyhow::bail!("EOF while listing MCP tools");
-            }
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                if val.get("id").and_then(|id| id.as_u64()) == Some(req_id) {
-                    break val;
+            loop {
+                line.clear();
+                let n = reader.read_line(&mut line).await
+                    .map_err(|e| anyhow::anyhow!("Failed to read MCP tools response: {}", e))?;
+                if n == 0 {
+                    anyhow::bail!("EOF while listing MCP tools");
+                }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if val.get("id").and_then(|id| id.as_u64()) == Some(req_id) {
+                        return Ok::<_, anyhow::Error>(val);
+                    }
                 }
             }
-        };
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("MCP list_tools timed out after 30 seconds"))?
+        .map_err(|e: anyhow::Error| e)?;
 
         let response: JsonRpcResponse = serde_json::from_value(resp_json)?;
         if let Some(error) = response.error {
@@ -236,8 +243,25 @@ impl McpClient {
 
 impl Drop for McpClient {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
+        if let Some(child) = self.child.take() {
+            let pid = child.id();
+            #[cfg(windows)]
+            {
+                // On Windows, cmd /c spawns a process tree (cmd → npx → node).
+                // start_kill() only kills cmd.exe, leaving npx/node orphaned.
+                // Use taskkill /T to terminate the entire tree.
+                if let Some(id) = pid {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(&["/F", "/T", "/PID", &id.to_string()])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = child.start_kill();
+            }
         }
     }
 }

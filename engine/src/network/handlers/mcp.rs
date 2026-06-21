@@ -209,6 +209,76 @@ pub async fn build_obsidian_graph(
     }))
 }
 
+/// List all .md notes in a vault (Rust-native, no MCP subprocess needed).
+/// Called by: `POST /mcp/obsidian/list-notes`
+#[derive(Deserialize)]
+pub struct ListNotesRequest {
+    pub vault_path: String,
+    #[serde(default = "default_max_notes")]
+    pub max_notes: usize,
+}
+
+#[derive(Serialize)]
+pub struct ListNotesResponse {
+    pub notes: Vec<ListNotesEntry>,
+    pub total: usize,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Serialize)]
+pub struct ListNotesEntry {
+    pub id: String,
+    pub name: String,
+}
+
+pub async fn list_vault_notes(
+    Json(payload): Json<ListNotesRequest>,
+) -> Result<Json<ListNotesResponse>, (StatusCode, String)> {
+    let start = std::time::Instant::now();
+    let vault = Path::new(&payload.vault_path);
+
+    if !vault.exists() || !vault.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, "Vault path does not exist or is not a directory.".to_string()));
+    }
+
+    let mut notes = Vec::new();
+    let mut total = 0usize;
+    let mut walk_stack = vec![vault.to_path_buf()];
+
+    while let Some(dir) = walk_stack.pop() {
+        let mut entries = match fs::read_dir(&dir).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
+            if total >= payload.max_notes {
+                break;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with('.')).unwrap_or(false) {
+                    continue;
+                }
+                walk_stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            total += 1;
+            let rel_path = path.strip_prefix(vault).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+            notes.push(ListNotesEntry { id: rel_path, name });
+        }
+        if total >= payload.max_notes {
+            break;
+        }
+    }
+
+    let elapsed = start.elapsed().as_millis() as u64;
+    Ok(Json(ListNotesResponse { notes, total, elapsed_ms: elapsed }))
+}
+
 /// Derive the vault name that obsidian-mcp computes from a vault path.
 /// obsidian-mcp's sanitizeVaultName takes the basename, lowercases it,
 /// replaces non-alphanumeric chars with hyphens, collapses runs, and trims.

@@ -542,6 +542,10 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::mcp::build_obsidian_graph),
         )
         .route(
+            "/mcp/obsidian/list-notes",
+            post(handlers::mcp::list_vault_notes),
+        )
+        .route(
             "/mcp/{provider}/{tool}",
             post(handlers::mcp::call_mcp_tool),
         )
