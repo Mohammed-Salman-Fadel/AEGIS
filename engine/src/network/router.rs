@@ -554,6 +554,10 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::mcp::serve_vault_file),
         )
         .route(
+            "/mcp/obsidian/search",
+            post(handlers::mcp::search_vault_notes),
+        )
+        .route(
             "/mcp/{provider}/{tool}",
             post(handlers::mcp::call_mcp_tool),
         )

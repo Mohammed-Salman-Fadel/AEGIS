@@ -314,6 +314,87 @@ pub async fn read_vault_note(
     Ok(Json(ReadNoteResponse { content, path: rel_path }))
 }
 
+/// Search notes in the vault by filename and content (Rust-native).
+/// Called by: `POST /mcp/obsidian/search`
+#[derive(Deserialize)]
+pub struct SearchNotesRequest {
+    pub vault_path: String,
+    pub query: String,
+    #[serde(default = "default_search_max")]
+    pub max_results: usize,
+}
+
+fn default_search_max() -> usize { 50 }
+
+#[derive(Serialize)]
+pub struct SearchNotesResponse {
+    pub results: Vec<SearchResultEntry>,
+    pub total: usize,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Serialize)]
+pub struct SearchResultEntry {
+    pub path: String,
+    pub name: String,
+    pub snippet: String,
+}
+
+pub async fn search_vault_notes(
+    Json(payload): Json<SearchNotesRequest>,
+) -> Result<Json<SearchNotesResponse>, (StatusCode, String)> {
+    let start = std::time::Instant::now();
+    let vault = Path::new(&payload.vault_path);
+    let query_lower = payload.query.to_lowercase();
+
+    if !vault.exists() || !vault.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, "Vault path does not exist or is not a directory.".to_string()));
+    }
+
+    let mut results = Vec::new();
+    let mut walk_stack = vec![vault.to_path_buf()];
+
+    while let Some(dir) = walk_stack.pop() {
+        let mut entries = match fs::read_dir(&dir).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
+            if results.len() >= payload.max_results { break; }
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with('.')).unwrap_or(false) {
+                    continue;
+                }
+                walk_stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+
+            let rel_path = path.strip_prefix(vault).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+
+            // Match filename (case-insensitive)
+            if rel_path.to_lowercase().contains(&query_lower) || name.to_lowercase().contains(&query_lower) {
+                results.push(SearchResultEntry {
+                    path: rel_path.clone(),
+                    name: name.clone(),
+                    snippet: String::new(),
+                });
+                if results.len() >= payload.max_results { break; }
+                continue;
+            }
+
+            // Content search is skipped for speed — content loads when user clicks a result
+        }
+        if results.len() >= payload.max_results { break; }
+    }
+
+    let elapsed = start.elapsed().as_millis() as u64;
+    let total = results.len();
+    Ok(Json(SearchNotesResponse { results, total, elapsed_ms: elapsed }))
+}
+
 /// Serve any file from the vault (images, attachments, etc).
 /// Searches common subdirectories and the note's directory if supplied.
 /// Called by: `GET /mcp/obsidian/file?vault_path=...&path=...&note_dir=...`

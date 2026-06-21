@@ -72,6 +72,11 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
   const [readTree, setReadTree] = useState<TreeNode | null>(null);
   const [treeData, setTreeData] = useState<TreeNode | null>(null);
   const [treeLoading, setTreeLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [selectedNoteContent, setSelectedNoteContent] = useState<string | null>(null);
+  const [selectedNotePath, setSelectedNotePath] = useState<string | null>(null);
+  const searchTimer = useRef<any>(null);
 
   if (!isOpen) return null;
 
@@ -160,6 +165,48 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
       else setError(e instanceof Error ? e.message : 'An error occurred');
     } finally { setTreeLoading(false); }
   }
+
+  function handleSearchInput(val: string) {
+    setQuery(val);
+    setSelectedNoteContent(null);
+    setSelectedNotePath(null);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (!val.trim()) { setSearchResults(null); return; }
+    setSearchLoading(true);
+    searchTimer.current = setTimeout(async () => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(`${API_BASE}/mcp/obsidian/search`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vault_path: vaultPath?.trim(), query: val.trim(), max_results: 30 }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (!res.ok) return;
+        const data = await res.json();
+        setSearchResults(data.results || []);
+      } catch (_) {
+        setSearchResults([]);
+      } finally { setSearchLoading(false); }
+    }, 200);
+  }
+
+  async function loadSearchNote(path: string) {
+    if (!vaultPath?.trim()) return;
+    try {
+      const res = await fetch(`${API_BASE}/mcp/obsidian/read`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vault_path: vaultPath.trim(), path }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setSelectedNoteContent(data.content || '');
+      setSelectedNotePath(path);
+      setSearchResults(null);
+    } catch (_) {}
+  }
+
   async function handleLoadGraph() {
     if (!vaultPath?.trim()) return;
     setGraphLoading(true); setError(null);
@@ -214,13 +261,26 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
           {!vaultPath?.trim() && <p className="text-sm text-amber-500">No vault path configured. Set it in Settings → Tools → Obsidian.</p>}
 
           {tab === 'search' && (
-            <div className="space-y-3">
-              <div className="flex gap-2">
-                <input className={inputClass} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search your vault..." onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }} />
-                <button className="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={loading || !query.trim()} onClick={handleSearch} type="button">{loading ? <Loader size={16} className="animate-spin" /> : <Search size={16} />}</button>
-              </div>
-              {results && <div className={resultClass}>{results}</div>}
-              {!results && <p className={`text-sm italic ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Search your Obsidian vault for notes.</p>}
+            <div className="space-y-3 relative">
+              <input className={inputClass} value={query} onChange={(e) => handleSearchInput(e.target.value)} placeholder="Search your vault..." autoFocus />
+              {searchLoading && <Loader size={14} className="animate-spin text-emerald-500 absolute right-3 top-3" />}
+              {searchResults && searchResults.length > 0 && (
+                <div className={`absolute z-10 left-0 right-0 top-12 rounded-lg border shadow-lg max-h-64 overflow-y-auto ${isDark ? 'border-zinc-700 bg-zinc-900' : 'border-stone-200 bg-white'}`}>
+                  {searchResults.map((r: any) => (
+                    <div key={r.path} className={`px-3 py-2 text-sm cursor-pointer border-b last:border-0 ${isDark ? 'border-zinc-800 hover:bg-zinc-800' : 'border-stone-100 hover:bg-stone-100'}`} onClick={() => loadSearchNote(r.path)}>
+                      <div className={`font-medium ${isDark ? 'text-zinc-200' : 'text-slate-800'}`}>{r.name}</div>
+                      <div className={`text-xs truncate ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>{r.path}{r.snippet ? ` — ${r.snippet}` : ''}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {selectedNoteContent && (
+                <div className={`rounded-lg border p-3 text-sm leading-6 ${isDark ? 'border-zinc-800 bg-zinc-900/60' : 'border-stone-200 bg-stone-50'}`}>
+                  <div className={`text-xs mb-2 ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>{selectedNotePath}</div>
+                  <AssistantMarkdown content={selectedNoteContent} isDark={isDark} vaultPath={vaultPath} noteDir={selectedNotePath?.includes('/') ? selectedNotePath.slice(0, selectedNotePath.lastIndexOf('/')) : undefined} />
+                </div>
+              )}
+              {!query.trim() && !selectedNoteContent && <p className={`text-sm italic ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Start typing to search your vault.</p>}
             </div>
           )}
 
