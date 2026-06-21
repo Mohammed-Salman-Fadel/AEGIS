@@ -141,6 +141,10 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
       if (!res.ok) { const text = await res.text(); throw new Error(text || 'Failed to create note'); }
       setCreateSuccess(`Note created successfully.`);
       setTimeout(() => setCreateSuccess(''), 5000);
+      // Reload tree views
+      setTreeData(null);
+      setReadTree(null);
+      setTimeout(() => { handleList(); loadReadTree(); }, 300);
     } catch (e: any) {
       setError(e instanceof Error ? e.message : 'An error occurred');
     } finally { setLoading(false); }
@@ -296,7 +300,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
           {tab === 'search' && (
             <div className="relative">
               <div className="relative mb-3">
-                <input className={`${inputClass} w-full`} value={query} onChange={(e) => handleSearchInput(e.target.value)} placeholder="Search your vault..." autoFocus />
+                <input className={`${inputClass} w-full ${searchResults !== null && searchResults.length === 0 && query.trim() ? 'border-red-500 focus:border-red-500' : ''}`} value={query} onChange={(e) => handleSearchInput(e.target.value)} placeholder="Search your vault..." autoFocus />
                 {searchLoading && <Loader size={14} className="animate-spin text-emerald-500 absolute right-3 top-1/2 -translate-y-1/2" />}
               </div>
               {searchResults && searchResults.length > 0 && !selectedNoteContent && (
@@ -454,13 +458,16 @@ function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
 
+    const dpr = window.devicePixelRatio || 1;
     const rect = container.getBoundingClientRect();
     const w = rect.width || 600;
     const h = rect.height || 400;
-    canvas.width = w;
-    canvas.height = h;
-
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
     const ctx = canvas.getContext('2d')!;
+    ctx.scale(dpr, dpr);
 
     // Build node list with connection counts for sizing
     const edgeCount = new Map<string, number>();
@@ -484,6 +491,8 @@ function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
 
     const nodeMap = new Map(nodes.map((n: any) => [n.id, n]));
     const edges = (data.edges || []).filter((e: any) => nodeMap.has(e.source) && nodeMap.has(e.target));
+    // Update the displayed count to reflect actually rendered edges
+    if (data.edges) data.edges = edges;
 
     // Simulation state — smooth, Obsidian-style expansion from center
     let running = true;
@@ -502,7 +511,7 @@ function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
           let dx = b.x - a.x, dy = b.y - a.y;
           let dist = Math.sqrt(dx * dx + dy * dy) || 1;
           if (dist < 60) {
-            const force = 200 * ease / (dist + 5);
+            const force = 30 * ease / (dist + 5);
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;
             a.vx -= fx; a.vy -= fy;
@@ -525,11 +534,14 @@ function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
         b.vx -= fx; b.vy -= fy;
       }
 
+      // Settle: weak damping early so nodes explode freely, ramps to strong damping in last 80 frames
+      const settling = frame > maxFrames - 80 ? (frame - (maxFrames - 80)) / 80 : 0;
+
       for (const n of nodes) {
         n.vx += (cx - n.x) * 0.001 * ease;
         n.vy += (cy - n.y) * 0.001 * ease;
-        n.vx *= 0.94;
-        n.vy *= 0.94;
+        n.vx *= 0.98 - 0.12 * settling;
+        n.vy *= 0.98 - 0.12 * settling;
         n.x += n.vx;
         n.y += n.vy;
       }
@@ -582,25 +594,24 @@ function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
     const minScale = 0.02, maxScale = 20;
 
     function render() {
-      const w = canvas.width;
-      const h = canvas.height;
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.width / dpr;
+      const h = canvas.height / dpr;
       const sim = simRef.current;
       if (!sim) return;
 
       ctx.fillStyle = isDark ? '#18181b' : '#fafaf9';
       ctx.fillRect(0, 0, w, h);
 
-      // Draw screen-space background dots (fixed pixel spacing, independent of zoom)
+      // Draw screen-space background dots — offset smoothly with pan, fixed spacing regardless of zoom
       const dotSpacing = 20;
       const screenDotRadius = 200;
       const dotMaxAlpha = isDark ? 0.06 : 0.18;
-      const dotStartX = Math.floor(-offsetX / dotSpacing) * dotSpacing - dotSpacing;
-      const dotEndX = Math.ceil((w - offsetX) / dotSpacing) * dotSpacing + dotSpacing;
-      const dotStartY = Math.floor(-offsetY / dotSpacing) * dotSpacing - dotSpacing;
-      const dotEndY = Math.ceil((h - offsetY) / dotSpacing) * dotSpacing + dotSpacing;
+      const startOffX = ((-offsetX % dotSpacing) + dotSpacing) % dotSpacing;
+      const startOffY = ((-offsetY % dotSpacing) + dotSpacing) % dotSpacing;
 
-      for (let sx = dotStartX; sx <= dotEndX; sx += dotSpacing) {
-        for (let sy = dotStartY; sy <= dotEndY; sy += dotSpacing) {
+      for (let sx = startOffX - dotSpacing; sx <= w + dotSpacing; sx += dotSpacing) {
+        for (let sy = startOffY - dotSpacing; sy <= h + dotSpacing; sy += dotSpacing) {
           const sdist = Math.sqrt((sx - mouseScreenX) ** 2 + (sy - mouseScreenY) ** 2);
           if (sdist > screenDotRadius) continue;
           const alpha = dotMaxAlpha * (1 - sdist / screenDotRadius);

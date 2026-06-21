@@ -12,3 +12,4 @@ export const RAG_TOP_K_STORAGE_KEY = 'aegis-rag-top-k';
 export const RAG_THRESHOLD_STORAGE_KEY = 'aegis-rag-threshold';
 export const LANGUAGE_STORAGE_KEY = 'aegis-ui-language';
 export const OBSIDIAN_VAULT_PATH_KEY = 'aegis-obsidian-vault-path';
+export const OBSIDIAN_ENABLED_KEY = 'aegis-obsidian-enabled';

@@ -28,7 +28,7 @@ import {
   RESPONSE_STYLE_STORAGE_KEY, VOICE_LOW_RAM_MODE_STORAGE_KEY,
   VOICE_TTS_ENABLED_STORAGE_KEY, RAG_ENABLED_STORAGE_KEY,
   RAG_TOP_K_STORAGE_KEY, RAG_THRESHOLD_STORAGE_KEY, LANGUAGE_STORAGE_KEY,
-  OBSIDIAN_VAULT_PATH_KEY,
+  OBSIDIAN_VAULT_PATH_KEY, OBSIDIAN_ENABLED_KEY,
   OLLAMA_MODEL_CATALOG, EMPTY_CONTEXT_USAGE,
 } from './constants';
 
@@ -151,6 +151,10 @@ export default function App() {
   const [obsidianVaultPath, setObsidianVaultPath] = useState(() => {
     if (typeof window === 'undefined') return '';
     return window.localStorage.getItem(OBSIDIAN_VAULT_PATH_KEY) || '';
+  });
+  const [obsidianEnabled, setObsidianEnabled] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(OBSIDIAN_ENABLED_KEY) === 'true';
   });
   const [sessionPendingDeletion, setSessionPendingDeletion] = useState<EngineSessionSummary | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -333,6 +337,7 @@ export default function App() {
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(RESPONSE_STYLE_STORAGE_KEY, responseStyle); }, [responseStyle]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang); }, [lang]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(OBSIDIAN_VAULT_PATH_KEY, obsidianVaultPath); }, [obsidianVaultPath]);
+  useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(OBSIDIAN_ENABLED_KEY, String(obsidianEnabled)); }, [obsidianEnabled]);
   const t = useCallback((key: string) => translations[lang]?.[key] ?? translations.en[key] ?? key, [lang]);
   const engineErr = useCallback((key: string, status: number, file?: string) => {
     let msg = t(key);
@@ -1266,6 +1271,7 @@ export default function App() {
           onImportClick={() => { setToolsOpen(false); fileInputRef.current?.click(); }}
           onCalendarOpen={openCalendarTool}
           onExportPdf={exportChatAsPdf}
+          obsidianEnabled={obsidianEnabled}
           onObsidianOpen={openObsidianTool}
           onFileUpload={handleFileUpload}
           onClearDocuments={clearIndexedDocuments}
@@ -1368,6 +1374,8 @@ export default function App() {
         onSetLanguage={setLang}
         obsidianVaultPath={obsidianVaultPath}
         onObsidianVaultPathChange={setObsidianVaultPath}
+        obsidianEnabled={obsidianEnabled}
+        onObsidianEnabledChange={setObsidianEnabled}
       />
 
       {/* Memories Popup */}

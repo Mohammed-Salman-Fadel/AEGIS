@@ -64,6 +64,8 @@ interface SettingsPanelProps {
   onSetLanguage: (lang: Language) => void;
   obsidianVaultPath: string;
   onObsidianVaultPathChange: (value: string) => void;
+  obsidianEnabled: boolean;
+  onObsidianEnabledChange: (value: boolean) => void;
 }
 
 export function SettingsPanel({
@@ -79,12 +81,12 @@ export function SettingsPanel({
   onToggleVoiceLowRam, onToggleTts, onToggleRag, onChangeRagTopK, onChangeRagThreshold,
   onMemoryInputChange, onAddMemory, onDisplayMemories, onSaveProfile,
   lang, onSetLanguage,
-  obsidianVaultPath, onObsidianVaultPathChange,
+  obsidianVaultPath, onObsidianVaultPathChange, obsidianEnabled, onObsidianEnabledChange,
 }: SettingsPanelProps) {
   const t = useT();
   if (!settingsOpen) return null;
 
-  const tabs: SettingsTab[] = ['general', 'models', 'personalize', 'voice', 'rag', 'memories', 'tools'];
+  const tabs: SettingsTab[] = ['general', 'models', 'tools', 'personalize', 'voice', 'rag', 'memories'];
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 ${settingsClosing ? 'aegis-modal-backdrop-out' : 'aegis-modal-backdrop'}`} onClick={onClose}>
@@ -381,6 +383,42 @@ export function SettingsPanel({
               </div>
             )}
 
+            {/* Tools Tab */}
+            {settingsTab === 'tools' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="mb-2 text-sm font-semibold">Obsidian</div>
+
+                  {/* Toggle */}
+                  <div className="flex items-center justify-between mb-3">
+                    <span className={`text-sm ${isDark ? 'text-zinc-300' : 'text-slate-700'}`}>Add Obsidian to tools</span>
+                    <button
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${obsidianEnabled ? 'bg-emerald-500' : isDark ? 'bg-zinc-700' : 'bg-stone-300'}`}
+                      onClick={() => onObsidianEnabledChange(!obsidianEnabled)}
+                      type="button"
+                      role="switch"
+                      aria-checked={obsidianEnabled}
+                    >
+                      <span className={`pointer-events-none inline-block h-4 w-4 translate-y-0 transform rounded-full bg-white shadow transition-transform duration-200 ${obsidianEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide opacity-70" htmlFor="obsidian-vault-path">Vault Path</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="obsidian-vault-path"
+                      className={`flex-1 rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500' : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
+                      value={obsidianVaultPath}
+                      onChange={(e) => onObsidianVaultPathChange(e.target.value)}
+                      placeholder="C:\Users\YourName\Documents\MyVault"
+                      disabled={!obsidianEnabled}
+                    />
+                    <ObsidianPathStatus path={obsidianEnabled ? obsidianVaultPath : ''} isDark={isDark} />
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Memories Tab */}
             {settingsTab === 'memories' && (
               <div className="space-y-4">
@@ -441,32 +479,6 @@ export function SettingsPanel({
                   >
                     {t('settings.memories.save')}
                   </button>
-                </div>
-              </div>
-            )}
-
-            {settingsTab === 'tools' && (
-              <div className="space-y-5">
-                <div>
-                  <div className="mb-2 text-sm font-semibold">Obsidian</div>
-                  <div className={`mt-1 mb-3 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
-                    Set the path to your local Obsidian vault. AEGIS will use this to search, read, and create notes.
-                    Requires the <code className="text-emerald-500">obsidian-mcp</code> npm package to be installed globally.
-                  </div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide opacity-70" htmlFor="obsidian-vault-path">Vault Path</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      id="obsidian-vault-path"
-                      className={`flex-1 rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500' : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
-                      value={obsidianVaultPath}
-                      onChange={(e) => onObsidianVaultPathChange(e.target.value)}
-                      placeholder="C:\Users\YourName\Documents\MyVault"
-                    />
-                    <ObsidianPathStatus path={obsidianVaultPath} isDark={isDark} />
-                  </div>
-                  <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
-                    Saved locally and sent to the Obsidian MCP server on each request.
-                  </div>
                 </div>
               </div>
             )}

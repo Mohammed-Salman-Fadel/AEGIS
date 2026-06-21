@@ -15,6 +15,7 @@ export {
   RAG_THRESHOLD_STORAGE_KEY,
   LANGUAGE_STORAGE_KEY,
   OBSIDIAN_VAULT_PATH_KEY,
+  OBSIDIAN_ENABLED_KEY,
 } from './storage';
 
 export {
