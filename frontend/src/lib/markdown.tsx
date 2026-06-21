@@ -71,6 +71,11 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
     }
     if (inCode) { codeLines.push(rawLine); continue; }
     if (!line) { flushParagraph(); continue; }
+    if (/^(---|\*\*\*|___)\s*$/.test(line)) {
+      flushParagraph();
+      blocks.push({ type: 'hr' });
+      continue;
+    }
     const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
       flushParagraph();
@@ -91,23 +96,55 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
   return blocks.length > 0 ? blocks : [{ type: 'paragraph', text: content }];
 }
 
-export function renderInlineMarkdown(text: string) {
+export function renderInlineMarkdown(text: string, vaultPath?: string, noteDir?: string) {
   const parts: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g;
+  // Match Obsidian image embeds ![[...]], inline code, bold (**/__), italic (*/_)
+  // Use negated character classes instead of .+? for reliable matching
+  const pattern = /(!\[\[([^\]]+)\]\]|`[^`]+`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(text)) !== null) {
     if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
-    const value = match[0];
-    if (value.startsWith('`')) {
-      parts.push(<code className="rounded bg-black/15 px-1.5 py-0.5 font-mono text-[0.92em] text-emerald-500" key={`${match.index}-code`}>{value.slice(1, -1)}</code>);
-    } else if (value.startsWith('**')) {
-      parts.push(<strong className="font-semibold" key={`${match.index}-strong`}>{value.slice(2, -2)}</strong>);
+    const full = match[0];
+    if (full.startsWith('!')) {
+      // Obsidian image embed: ![[filename|options]]
+      const inner = match[2];
+      const pipeIdx = inner.lastIndexOf('|');
+      let filename = pipeIdx >= 0 ? inner.slice(0, pipeIdx) : inner;
+      const options = pipeIdx >= 0 ? inner.slice(pipeIdx + 1) : '';
+      let width: number | undefined;
+      let height: number | undefined;
+      if (options) {
+        const dims = options.split('x');
+        if (dims[0]) width = Math.round(parseInt(dims[0], 10) * 0.8) || undefined;
+        if (dims[1]) height = Math.round(parseInt(dims[1], 10) * 0.8) || undefined;
+      }
+      // Pass filename + optional note directory — backend searches vault root, note dir, images/, etc.
+      let src = '';
+      if (vaultPath) {
+        src = `/api/mcp/obsidian/file?vault_path=${encodeURIComponent(vaultPath)}&path=${encodeURIComponent(filename)}`;
+        if (noteDir) src += `&note_dir=${encodeURIComponent(noteDir)}`;
+      }
+      parts.push(
+        <img
+          key={`${match.index}-img`}
+          src={src}
+          alt={filename}
+          width={width}
+          height={height}
+          className="rounded max-w-full h-auto my-2 mx-auto block border border-zinc-700/50"
+          loading="lazy"
+        />
+      );
+    } else if (full.startsWith('`')) {
+      parts.push(<code className="rounded bg-black/15 px-1.5 py-0.5 font-mono text-[0.92em] text-emerald-500" key={`${match.index}-code`}>{full.slice(1, -1)}</code>);
+    } else if (full.startsWith('**') || full.startsWith('__')) {
+      parts.push(<strong className="font-semibold" key={`${match.index}-strong`}>{match[3] || match[4]}</strong>);
     } else {
-      parts.push(<em className="italic" key={`${match.index}-em`}>{value.slice(1, -1)}</em>);
+      parts.push(<em className="italic" key={`${match.index}-em`}>{match[5] || match[6]}</em>);
     }
-    lastIndex = match.index + value.length;
+    lastIndex = match.index + full.length;
   }
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
   return parts;

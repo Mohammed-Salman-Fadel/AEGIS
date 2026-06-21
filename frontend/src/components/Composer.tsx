@@ -1,5 +1,5 @@
 // Chat composer footer with textarea, tools menu (import/calendar/export), voice, and send button
-import { Upload, Calendar, Download, Wrench, ChevronDown, Mic, Send, Check, FolderOpen, X } from 'lucide-react';
+import { Upload, Calendar, Download, Wrench, ChevronDown, Mic, Send, Check, FolderOpen, X, BookOpen } from 'lucide-react';
 import type { IndexedDocument, CodeProject, ContextUsage } from '../types';
 import { importPhaseLabel, formatTokenMeter, fitTextareaToContent, personalizeWelcomeMessage } from '../lib';
 import { useTranslate } from '../lib/i18n';
@@ -36,6 +36,8 @@ interface ComposerProps {
   onImportClick: () => void;
   onCalendarOpen: () => void;
   onExportPdf: () => void;
+  obsidianEnabled: boolean;
+  onObsidianOpen: () => void;
   onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onClearDocuments: () => void;
   onVoiceModeOpen: () => void;
@@ -51,7 +53,7 @@ export function Composer({
   tokenMeterLabel, contextUsage,
   activeWelcomeMessage, profileText,
   fileInputRef, composerTextareaRef,
-  onInputChange, onSubmit, onToggleTools, onImportClick, onCalendarOpen, onExportPdf,
+  obsidianEnabled, onInputChange, onSubmit, onToggleTools, onImportClick, onCalendarOpen, onExportPdf, onObsidianOpen,
   onFileUpload, onClearDocuments, onVoiceModeOpen, onDetachProject,
 }: ComposerProps) {
   const { t, lang } = useTranslate();
@@ -175,6 +177,11 @@ export function Composer({
                   <button className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} disabled={false} onClick={onExportPdf} type="button">
                     <Download size={15} /> {t('composer.export')}
                   </button>
+                  {obsidianEnabled && (
+                    <button className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onObsidianOpen} type="button">
+                      <BookOpen size={15} /> Obsidian
+                    </button>
+                  )}
                 </div>
               )}
             </div>

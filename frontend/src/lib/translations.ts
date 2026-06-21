@@ -91,6 +91,7 @@ const translations: Record<Language, Record<string, string>> = {
     'settings.tab.voice': 'Voice',
     'settings.tab.rag': 'RAG',
     'settings.tab.memories': 'Memories',
+    'settings.tab.tools': 'Tools',
 
     'metrics.performance': 'Performance Info',
     'metrics.sources': 'Context Sources',
@@ -292,6 +293,7 @@ const translations: Record<Language, Record<string, string>> = {
     'settings.tab.voice': 'Ses',
     'settings.tab.rag': 'RAG',
     'settings.tab.memories': 'Anılar',
+    'settings.tab.tools': 'Araçlar',
 
     'metrics.performance': 'Performans Bilgisi',
     'metrics.sources': 'Bağlam Kaynakları',

@@ -534,6 +534,38 @@ pub fn create_router(state: AppState) -> Router {
         .route("/voice/synthesize", get(handle_voice_synthesize))
         .route("/voice/config", post(handle_voice_config))
         .route(
+            "/mcp/obsidian/validate",
+            get(handlers::mcp::validate_obsidian_path),
+        )
+        .route(
+            "/mcp/obsidian/graph",
+            post(handlers::mcp::build_obsidian_graph),
+        )
+        .route(
+            "/mcp/obsidian/list-notes",
+            post(handlers::mcp::list_vault_notes),
+        )
+        .route(
+            "/mcp/obsidian/read",
+            post(handlers::mcp::read_vault_note),
+        )
+        .route(
+            "/mcp/obsidian/file",
+            get(handlers::mcp::serve_vault_file),
+        )
+        .route(
+            "/mcp/obsidian/search",
+            post(handlers::mcp::search_vault_notes),
+        )
+        .route(
+            "/mcp/obsidian/write",
+            post(handlers::mcp::write_vault_note),
+        )
+        .route(
+            "/mcp/{provider}/{tool}",
+            post(handlers::mcp::call_mcp_tool),
+        )
+        .route(
             "/sessions",
             get(handlers::sessions::list_sessions).post(handlers::sessions::create_session),
         )

@@ -15,7 +15,7 @@ export function CodeBlock({ language, text }: { language: string; text: string }
   }
 
   return (
-    <div className="group max-w-[42rem] overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 shadow-md shadow-white/5">
+    <div className="group rounded-lg border border-zinc-800 bg-zinc-950 shadow-md shadow-white/5">
       <div className="flex items-center justify-between gap-3 px-3 pt-2.5">
         <span className="truncate font-mono text-[11px] uppercase tracking-wide text-zinc-500">
           {languageLabel}

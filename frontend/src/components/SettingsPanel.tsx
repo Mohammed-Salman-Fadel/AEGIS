@@ -1,7 +1,9 @@
 // Settings panel with tabs: General, Inference, Models, Voice, RAG, Memories
-import { Settings, X, Download, Pause, Play, Plus, Eye, Sun, Moon, Monitor } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Settings, X, Download, Pause, Play, Plus, Eye, Sun, Moon, Monitor, BookOpen, Check, AlertCircle, Loader } from 'lucide-react';
 import type { SettingsTab, ThemeMode, ModelResponse, ProviderResponse, CatalogModel, ModelDownloadState } from '../types';
 import { useT, type Language } from '../lib/i18n';
+import { API_BASE } from '../constants';
 import {
   OLLAMA_MODEL_CATALOG, MODEL_PROVIDER_TAGS, RESPONSE_STYLE_OPTIONS, APPEARANCE_THEME_OPTIONS,
 } from '../constants';
@@ -60,6 +62,10 @@ interface SettingsPanelProps {
   onSaveProfile: () => void;
   lang: Language;
   onSetLanguage: (lang: Language) => void;
+  obsidianVaultPath: string;
+  onObsidianVaultPathChange: (value: string) => void;
+  obsidianEnabled: boolean;
+  onObsidianEnabledChange: (value: boolean) => void;
 }
 
 export function SettingsPanel({
@@ -75,11 +81,12 @@ export function SettingsPanel({
   onToggleVoiceLowRam, onToggleTts, onToggleRag, onChangeRagTopK, onChangeRagThreshold,
   onMemoryInputChange, onAddMemory, onDisplayMemories, onSaveProfile,
   lang, onSetLanguage,
+  obsidianVaultPath, onObsidianVaultPathChange, obsidianEnabled, onObsidianEnabledChange,
 }: SettingsPanelProps) {
   const t = useT();
   if (!settingsOpen) return null;
 
-  const tabs: SettingsTab[] = ['general', 'inference', 'models', 'personalize', 'voice', 'rag', 'memories'];
+  const tabs: SettingsTab[] = ['general', 'models', 'tools', 'personalize', 'voice', 'rag', 'memories'];
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 ${settingsClosing ? 'aegis-modal-backdrop-out' : 'aegis-modal-backdrop'}`} onClick={onClose}>
@@ -148,6 +155,24 @@ export function SettingsPanel({
                     <option value="tr">Türkçe</option>
                   </select>
                   <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{t('settings.general.language_hint')}</div>
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold" htmlFor="provider-select">{t('settings.inference.provider')}</label>
+                  <select
+                    className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
+                    disabled={availableProviders.length === 0}
+                    id="provider-select"
+                    onChange={(e) => onSelectProvider(e.target.value)}
+                    value={activeProvider?.name ?? ''}
+                  >
+                    <option value="" disabled>{availableProviders.length === 0 ? 'No providers available' : 'Choose provider'}</option>
+                    {availableProviders.map((p) => (<option key={p.name} value={p.name}>{p.name}</option>))}
+                  </select>
+                  {activeProvider && (
+                    <div className={`mt-2 rounded-xl border p-3 text-xs leading-5 ${isDark ? 'border-zinc-800 bg-zinc-900/40 text-zinc-400' : 'border-stone-300 bg-stone-50 text-slate-500'}`}>
+                      {activeProvider.description}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -261,29 +286,6 @@ export function SettingsPanel({
               </div>
             )}
 
-            {settingsTab === 'inference' && (
-              <div className="space-y-4">
-                <div>
-                  <label className="mb-2 block text-sm font-semibold" htmlFor="provider-select">Inference Provider</label>
-                  <select
-                    className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
-                    disabled={availableProviders.length === 0}
-                    id="provider-select"
-                    onChange={(e) => onSelectProvider(e.target.value)}
-                    value={activeProvider?.name ?? ''}
-                  >
-                    <option value="" disabled>{availableProviders.length === 0 ? 'No providers available' : 'Choose provider'}</option>
-                    {availableProviders.map((p) => (<option key={p.name} value={p.name}>{p.name}</option>))}
-                  </select>
-                </div>
-                {activeProvider && (
-                  <div className={`rounded-xl border p-4 text-sm ${isDark ? 'border-zinc-800 bg-zinc-900/40 text-zinc-300' : 'border-stone-300 bg-stone-50 text-slate-600'}`}>
-                    {activeProvider.description}
-                  </div>
-                )}
-              </div>
-            )}
-
             {settingsTab === 'models' && (
               <div className="space-y-4">
                 <div>
@@ -381,6 +383,42 @@ export function SettingsPanel({
               </div>
             )}
 
+            {/* Tools Tab */}
+            {settingsTab === 'tools' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="mb-2 text-sm font-semibold">Obsidian</div>
+
+                  {/* Toggle */}
+                  <div className="flex items-center justify-between mb-3">
+                    <span className={`text-sm ${isDark ? 'text-zinc-300' : 'text-slate-700'}`}>Add Obsidian to tools</span>
+                    <button
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${obsidianEnabled ? 'bg-emerald-500' : isDark ? 'bg-zinc-700' : 'bg-stone-300'}`}
+                      onClick={() => onObsidianEnabledChange(!obsidianEnabled)}
+                      type="button"
+                      role="switch"
+                      aria-checked={obsidianEnabled}
+                    >
+                      <span className={`pointer-events-none inline-block h-4 w-4 translate-y-0 transform rounded-full bg-white shadow transition-transform duration-200 ${obsidianEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide opacity-70" htmlFor="obsidian-vault-path">Vault Path</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="obsidian-vault-path"
+                      className={`flex-1 rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500' : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
+                      value={obsidianVaultPath}
+                      onChange={(e) => onObsidianVaultPathChange(e.target.value)}
+                      placeholder="C:\Users\YourName\Documents\MyVault"
+                      disabled={!obsidianEnabled}
+                    />
+                    <ObsidianPathStatus path={obsidianEnabled ? obsidianVaultPath : ''} isDark={isDark} />
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Memories Tab */}
             {settingsTab === 'memories' && (
               <div className="space-y-4">
@@ -448,5 +486,55 @@ export function SettingsPanel({
         </section>
       </div>
     </div>
+  );
+}
+
+function ObsidianPathStatus({ path, isDark }: { path: string; isDark: boolean }) {
+  const [state, setState] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!path.trim()) {
+      setState('idle');
+      setMessage('');
+      return;
+    }
+    setState('checking');
+    setMessage('');
+    const controller = new AbortController();
+    fetch(`${API_BASE}/mcp/obsidian/validate?path=${encodeURIComponent(path.trim())}`, { signal: controller.signal })
+      .then((r) => r.json())
+      .then((data) => {
+        setState(data.valid ? 'valid' : 'invalid');
+        setMessage(data.message || '');
+      })
+      .catch(() => {
+        setState('idle');
+        setMessage('');
+      });
+    return () => controller.abort();
+  }, [path]);
+
+  if (state === 'idle' || !path.trim()) return null;
+
+  if (state === 'checking') {
+    return <Loader size={18} className="shrink-0 animate-spin text-zinc-400" />;
+  }
+
+  if (state === 'valid') {
+    return (
+      <span className="shrink-0" title={message}>
+        <Check size={18} className="text-emerald-500" />
+      </span>
+    );
+  }
+
+  return (
+    <span className="group relative shrink-0" title={message}>
+      <AlertCircle size={18} className="text-red-500" />
+      <span className={`absolute left-1/2 -translate-x-1/2 top-full mt-1 w-64 rounded-lg border p-2 text-xs opacity-0 transition-opacity group-hover:opacity-100 pointer-events-none z-10 ${isDark ? 'border-red-900 bg-red-950 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>
+        {message}
+      </span>
+    </span>
   );
 }

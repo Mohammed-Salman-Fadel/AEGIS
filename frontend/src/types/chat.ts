@@ -26,6 +26,7 @@ export type MarkdownBlock =
   | { type: 'paragraph'; text: string }
   | { type: 'ordered'; items: string[] }
   | { type: 'unordered'; items: string[] }
-  | { type: 'code'; text: string; language: string };
+  | { type: 'code'; text: string; language: string }
+  | { type: 'hr' };
 
 export type ImportPhase = 'idle' | 'uploading' | 'indexing' | 'complete' | 'error';
