@@ -395,6 +395,36 @@ pub async fn search_vault_notes(
     Ok(Json(SearchNotesResponse { results, total, elapsed_ms: elapsed }))
 }
 
+/// Write content to a note in the vault (Rust-native, no MCP subprocess).
+/// Called by: `POST /mcp/obsidian/write`
+#[derive(Deserialize)]
+pub struct WriteNoteRequest {
+    pub vault_path: String,
+    pub path: String,
+    pub content: String,
+}
+
+pub async fn write_vault_note(
+    Json(payload): Json<WriteNoteRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let vault = Path::new(&payload.vault_path);
+    if !vault.exists() || !vault.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, "Vault path does not exist or is not a directory.".to_string()));
+    }
+    let note_path = vault.join(&payload.path);
+    let parent = note_path.parent().unwrap();
+    fs::create_dir_all(parent).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directories: {}", e)))?;
+    let normalized = note_path.canonicalize().unwrap_or_else(|_| note_path.clone());
+    let vault_canon = vault.canonicalize().unwrap_or_else(|_| vault.to_path_buf());
+    if !normalized.starts_with(&vault_canon) {
+        return Err((StatusCode::FORBIDDEN, "Path escapes the vault directory.".to_string()));
+    }
+    fs::write(&note_path, &payload.content).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write note: {}", e)))?;
+    Ok(Json(serde_json::json!({ "status": "saved", "path": payload.path })))
+}
+
 /// Serve any file from the vault (images, attachments, etc).
 /// Searches common subdirectories and the note's directory if supplied.
 /// Called by: `GET /mcp/obsidian/file?vault_path=...&path=...&note_dir=...`

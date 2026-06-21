@@ -77,6 +77,8 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
   const [selectedNoteContent, setSelectedNoteContent] = useState<string | null>(null);
   const [selectedNotePath, setSelectedNotePath] = useState<string | null>(null);
   const searchTimer = useRef<any>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [editingNote, setEditingNote] = useState(false);
 
   if (!isOpen) return null;
 
@@ -194,6 +196,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
 
   async function loadSearchNote(path: string) {
     if (!vaultPath?.trim()) return;
+    setEditingNote(false);
     try {
       const res = await fetch(`${API_BASE}/mcp/obsidian/read`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -204,6 +207,18 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
       setSelectedNoteContent(data.content || '');
       setSelectedNotePath(path);
       setSearchResults(null);
+    } catch (_) {}
+  }
+
+  async function saveSearchNote() {
+    if (!vaultPath?.trim() || !selectedNotePath) return;
+    try {
+      const res = await fetch(`${API_BASE}/mcp/obsidian/write`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vault_path: vaultPath.trim(), path: selectedNotePath, content: selectedNoteContent }),
+      });
+      if (!res.ok) return;
+      setEditingNote(false);
     } catch (_) {}
   }
 
@@ -261,11 +276,13 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
           {!vaultPath?.trim() && <p className="text-sm text-amber-500">No vault path configured. Set it in Settings → Tools → Obsidian.</p>}
 
           {tab === 'search' && (
-            <div className="space-y-3 relative">
-              <input className={inputClass} value={query} onChange={(e) => handleSearchInput(e.target.value)} placeholder="Search your vault..." autoFocus />
-              {searchLoading && <Loader size={14} className="animate-spin text-emerald-500 absolute right-3 top-3" />}
-              {searchResults && searchResults.length > 0 && (
-                <div className={`absolute z-10 left-0 right-0 top-12 rounded-lg border shadow-lg max-h-64 overflow-y-auto ${isDark ? 'border-zinc-700 bg-zinc-900' : 'border-stone-200 bg-white'}`}>
+            <div className="relative">
+              <div className="relative mb-3">
+                <input className={`${inputClass} w-full`} value={query} onChange={(e) => handleSearchInput(e.target.value)} placeholder="Search your vault..." autoFocus />
+                {searchLoading && <Loader size={14} className="animate-spin text-emerald-500 absolute right-3 top-1/2 -translate-y-1/2" />}
+              </div>
+              {searchResults && searchResults.length > 0 && !selectedNoteContent && (
+                <div className={`rounded-lg border shadow-lg max-h-48 overflow-y-auto ${isDark ? 'border-zinc-700 bg-zinc-900' : 'border-stone-200 bg-white'}`}>
                   {searchResults.map((r: any) => (
                     <div key={r.path} className={`px-3 py-2 text-sm cursor-pointer border-b last:border-0 ${isDark ? 'border-zinc-800 hover:bg-zinc-800' : 'border-stone-100 hover:bg-stone-100'}`} onClick={() => loadSearchNote(r.path)}>
                       <div className={`font-medium ${isDark ? 'text-zinc-200' : 'text-slate-800'}`}>{r.name}</div>
@@ -274,13 +291,33 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
                   ))}
                 </div>
               )}
-              {selectedNoteContent && (
-                <div className={`rounded-lg border p-3 text-sm leading-6 ${isDark ? 'border-zinc-800 bg-zinc-900/60' : 'border-stone-200 bg-stone-50'}`}>
-                  <div className={`text-xs mb-2 ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>{selectedNotePath}</div>
-                  <AssistantMarkdown content={selectedNoteContent} isDark={isDark} vaultPath={vaultPath} noteDir={selectedNotePath?.includes('/') ? selectedNotePath.slice(0, selectedNotePath.lastIndexOf('/')) : undefined} />
-                </div>
-              )}
               {!query.trim() && !selectedNoteContent && <p className={`text-sm italic ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Start typing to search your vault.</p>}
+            </div>
+          )}
+          {/* Search note reader — fills remaining space (rendered at content div level like Graph tab) */}
+          {selectedNoteContent !== null && selectedNotePath && (
+            <div style={{ height: 'calc(100% - 20px)' }} className="flex flex-col space-y-2">
+              <div className="flex items-center justify-between shrink-0">
+                <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>{selectedNotePath}</span>
+                {!editingNote && (
+                  <button className={`text-xs transition ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-slate-500 hover:text-slate-800'}`} onClick={() => setEditingNote(true)} type="button">Edit</button>
+                )}
+              </div>
+              <div className="flex-1 min-h-0">
+                {editingNote ? (
+                  <div className="h-full flex flex-col space-y-2">
+                    <textarea className={`${inputClass} flex-1 min-h-0 resize-none font-mono text-sm`} value={selectedNoteContent} onChange={(e) => setSelectedNoteContent(e.target.value)} />
+                    <div className="flex gap-2 shrink-0">
+                      <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500" onClick={saveSearchNote} type="button">Save</button>
+                      <button className={`rounded-lg border px-4 py-2 text-sm transition ${isDark ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-900' : 'border-stone-300 text-slate-700 hover:bg-stone-100'}`} onClick={() => { loadSearchNote(selectedNotePath); setEditingNote(false); }} type="button">Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className={`h-full rounded-lg border p-3 text-sm leading-6 overflow-y-auto ${isDark ? 'border-zinc-800 bg-zinc-900/60' : 'border-stone-200 bg-stone-50'}`}>
+                    <AssistantMarkdown content={selectedNoteContent} isDark={isDark} vaultPath={vaultPath} noteDir={selectedNotePath.includes('/') ? selectedNotePath.slice(0, selectedNotePath.lastIndexOf('/')) : undefined} />
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -324,10 +361,13 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
           {tab === 'create' && (
             <div className="space-y-3">
               <input className={inputClass} value={newNotePath} onChange={(e) => setNewNotePath(e.target.value)} placeholder="Note path (e.g. Projects/MyNote)" />
-              <textarea className={`${inputClass} min-h-[120px] resize-none`} value={newNoteContent} onChange={(e) => setNewNoteContent(e.target.value)} placeholder="Note content (markdown supported)" />
-              <button className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={loading || !newNotePath.trim() || !newNoteContent.trim()} onClick={handleCreate} type="button">{loading ? 'Creating...' : 'Create Note'}</button>
-              {results && <div className={resultClass}>{results}</div>}
-              {!results && <p className={`text-sm italic ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Specify a path and content to create a new note.</p>}
+              <textarea className={`${inputClass} min-h-[120px] resize-none font-mono`} value={newNoteContent} onChange={(e) => { setNewNoteContent(e.target.value); setShowPreview(false); }} placeholder="Note content (markdown supported)" />
+              <button className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={!newNoteContent.trim()} onClick={() => setShowPreview(true)} type="button">Render Markdown</button>
+              {showPreview && newNoteContent.trim() && (
+                <div className={`rounded-lg border p-3 text-sm leading-6 ${isDark ? 'border-zinc-800 bg-zinc-900/60' : 'border-stone-200 bg-stone-50'}`}>
+                  <AssistantMarkdown content={newNoteContent} isDark={isDark} vaultPath={vaultPath} noteDir={newNotePath.includes('/') ? newNotePath.slice(0, newNotePath.lastIndexOf('/')) : undefined} />
+                </div>
+              )}
             </div>
           )}
 

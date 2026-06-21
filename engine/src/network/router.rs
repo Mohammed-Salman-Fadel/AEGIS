@@ -558,6 +558,10 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::mcp::search_vault_notes),
         )
         .route(
+            "/mcp/obsidian/write",
+            post(handlers::mcp::write_vault_note),
+        )
+        .route(
             "/mcp/{provider}/{tool}",
             post(handlers::mcp::call_mcp_tool),
         )
