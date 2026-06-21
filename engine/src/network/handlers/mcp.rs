@@ -412,16 +412,24 @@ pub async fn write_vault_note(
         return Err((StatusCode::BAD_REQUEST, "Vault path does not exist or is not a directory.".to_string()));
     }
     let note_path = vault.join(&payload.path);
-    let parent = note_path.parent().unwrap();
-    fs::create_dir_all(parent).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directories: {}", e)))?;
-    let normalized = note_path.canonicalize().unwrap_or_else(|_| note_path.clone());
-    let vault_canon = vault.canonicalize().unwrap_or_else(|_| vault.to_path_buf());
-    if !normalized.starts_with(&vault_canon) {
-        return Err((StatusCode::FORBIDDEN, "Path escapes the vault directory.".to_string()));
+    // Validate path does not escape the vault (check parent dir since file may not exist yet)
+    if let Some(parent) = note_path.parent() {
+        let parent_canon = parent.canonicalize().map_err(|_| (StatusCode::BAD_REQUEST, "Invalid note path.".to_string()))?;
+        let vault_canon = vault.canonicalize().map_err(|_| (StatusCode::BAD_REQUEST, "Invalid vault path.".to_string()))?;
+        if !parent_canon.starts_with(&vault_canon) {
+            return Err((StatusCode::FORBIDDEN, "Path escapes the vault directory.".to_string()));
+        }
     }
-    fs::write(&note_path, &payload.content).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write note: {}", e)))?;
+    fs::create_dir_all(note_path.parent().unwrap()).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directories: {}", e)))?;
+    if let Err(e) = fs::write(&note_path, &payload.content).await {
+        let msg = if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!("Permission denied writing to '{}'. Make sure the vault folder is not read-only and the engine has write access.", note_path.display())
+        } else {
+            format!("Failed to write note: {}", e)
+        };
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, msg));
+    }
     Ok(Json(serde_json::json!({ "status": "saved", "path": payload.path })))
 }
 

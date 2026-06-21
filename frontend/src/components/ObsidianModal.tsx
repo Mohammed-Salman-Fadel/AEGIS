@@ -63,6 +63,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
   const [query, setQuery] = useState('');
   const [notePath, setNotePath] = useState('');
   const [newNotePath, setNewNotePath] = useState('');
+  const [newNoteName, setNewNoteName] = useState('');
   const [newNoteContent, setNewNoteContent] = useState('');
   const [results, setResults] = useState('');
   const [loading, setLoading] = useState(false);
@@ -79,6 +80,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
   const searchTimer = useRef<any>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
+  const [createSuccess, setCreateSuccess] = useState('');
 
   if (!isOpen) return null;
 
@@ -126,7 +128,23 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
       setResults('');
     } finally { setLoading(false); }
   }
-  async function handleCreate() { if (!newNotePath.trim() || !newNoteContent.trim()) return; await callObsidian('create-note', { path: newNotePath.trim(), content: newNoteContent.trim() }); }
+  async function handleCreate() {
+    const name = newNoteName.trim().replace(/\.md$/i, '') + '.md';
+    const fullPath = newNotePath.trim() ? `${newNotePath.trim()}/${name}` : name;
+    if (!newNoteName.trim() || !newNoteContent.trim() || !vaultPath?.trim()) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/mcp/obsidian/write`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vault_path: vaultPath.trim(), path: fullPath, content: newNoteContent.trim() }),
+      });
+      if (!res.ok) { const text = await res.text(); throw new Error(text || 'Failed to create note'); }
+      setCreateSuccess(`Note created successfully.`);
+      setTimeout(() => setCreateSuccess(''), 5000);
+    } catch (e: any) {
+      setError(e instanceof Error ? e.message : 'An error occurred');
+    } finally { setLoading(false); }
+  }
   async function loadReadTree() {
     if (!vaultPath?.trim()) return;
     setReadTree(null);
@@ -254,7 +272,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
   const tabBtn = (t: ObsidianTab, label: string, Icon: any) => (
     <button
       className={`flex-1 px-3 py-2.5 text-xs font-semibold uppercase tracking-wider transition ${tab === t ? 'border-b-2 border-emerald-500 text-emerald-500' : isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-slate-500 hover:text-slate-700'}`}
-      onClick={() => { setTab(t); if (t === 'tree' && !treeData) handleList(); if (t === 'graph' && !graphData) handleLoadGraph(); }}
+      onClick={() => { setTab(t); if (t === 'read' && !readTree) loadReadTree(); if (t === 'tree' && !treeData) handleList(); if (t === 'graph' && !graphData) handleLoadGraph(); }}
       type="button"
     ><Icon size={14} className="inline mr-1" />{label}</button>
   );
@@ -295,7 +313,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
             </div>
           )}
           {/* Search note reader — fills remaining space (rendered at content div level like Graph tab) */}
-          {selectedNoteContent !== null && selectedNotePath && (
+          {tab === 'search' && selectedNoteContent !== null && selectedNotePath && (
             <div style={{ height: 'calc(100% - 20px)' }} className="flex flex-col space-y-2">
               <div className="flex items-center justify-between shrink-0">
                 <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>{selectedNotePath}</span>
@@ -327,8 +345,8 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
                 <input className={inputClass} value={notePath} onChange={(e) => setNotePath(e.target.value)} placeholder="Note path (e.g. Projects/MyNote)" onKeyDown={(e) => { if (e.key === 'Enter') handleRead(); }} />
                 <button className="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={loading || !notePath.trim()} onClick={handleRead} type="button">{loading ? <Loader size={16} className="animate-spin" /> : <FileText size={16} />}</button>
               </div>
-              <button className={`text-xs transition ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-slate-500 hover:text-slate-800'}`} onClick={loadReadTree} type="button">Browse vault</button>
-              {readTree && (
+              <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Browse vault</p>
+              {readTree ? (
                 <div className={`rounded-lg border p-3 text-sm leading-5 max-h-64 overflow-y-auto ${isDark ? 'border-zinc-800 bg-zinc-900/60' : 'border-stone-200 bg-stone-50'}`}>
                   {(() => {
                     const flat: { path: string; name: string; depth: number; isFile: boolean }[] = [];
@@ -348,24 +366,34 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
                     ));
                   })()}
                 </div>
+              ) : (
+                <p className={`text-sm italic ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Loading vault structure...</p>
               )}
               {results && (
                 <div className={`rounded-lg border p-3 text-sm leading-6 ${isDark ? 'border-zinc-800 bg-zinc-900/60' : 'border-stone-200 bg-stone-50'}`}>
                   <AssistantMarkdown content={results} isDark={isDark} vaultPath={vaultPath} noteDir={notePath.includes('/') ? notePath.slice(0, notePath.lastIndexOf('/')) : undefined} />
                 </div>
               )}
-              {!results && !readTree && <p className={`text-sm italic ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>Enter a note path or browse the vault.</p>}
             </div>
           )}
 
           {tab === 'create' && (
             <div className="space-y-3">
-              <input className={inputClass} value={newNotePath} onChange={(e) => setNewNotePath(e.target.value)} placeholder="Note path (e.g. Projects/MyNote)" />
+              <div className="flex gap-2">
+                <input className={`${inputClass} flex-1`} value={newNotePath} onChange={(e) => setNewNotePath(e.target.value)} placeholder="Folder (optional, e.g. Projects/Linked List)" />
+                <input className={`${inputClass} flex-1`} value={newNoteName} onChange={(e) => setNewNoteName(e.target.value)} placeholder="Note name (required)" />
+              </div>
               <textarea className={`${inputClass} min-h-[120px] resize-none font-mono`} value={newNoteContent} onChange={(e) => { setNewNoteContent(e.target.value); setShowPreview(false); }} placeholder="Note content (markdown supported)" />
-              <button className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={!newNoteContent.trim()} onClick={() => setShowPreview(true)} type="button">Render Markdown</button>
+              {createSuccess && (
+                <div className={`rounded-lg border px-3 py-2 text-xs ${isDark ? 'border-emerald-900/60 bg-emerald-950/30 text-emerald-200' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>{createSuccess}</div>
+              )}
+              <div className="flex gap-2">
+                <button className="flex-1 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={!newNoteName.trim() || !newNoteContent.trim() || loading} onClick={handleCreate} type="button">{loading ? 'Creating...' : 'Create Note'}</button>
+                <button className={`rounded-lg border px-4 py-2 text-sm transition disabled:opacity-40 active:scale-95 hover:bg-emerald-500/10 hover:border-emerald-500/50 ${showPreview ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-600' : ''}`} disabled={!newNoteContent.trim()} onClick={() => setShowPreview((v) => !v)} type="button">Render Markdown</button>
+              </div>
               {showPreview && newNoteContent.trim() && (
                 <div className={`rounded-lg border p-3 text-sm leading-6 ${isDark ? 'border-zinc-800 bg-zinc-900/60' : 'border-stone-200 bg-stone-50'}`}>
-                  <AssistantMarkdown content={newNoteContent} isDark={isDark} vaultPath={vaultPath} noteDir={newNotePath.includes('/') ? newNotePath.slice(0, newNotePath.lastIndexOf('/')) : undefined} />
+                  <AssistantMarkdown content={newNoteContent} isDark={isDark} vaultPath={vaultPath} noteDir={newNotePath ? newNotePath.replace(/^\/+|\/+$/g, '') : undefined} />
                 </div>
               )}
             </div>
@@ -406,10 +434,6 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
               </div>
             )}
           </div>
-        </div>
-
-        <div className={`flex justify-end px-6 py-3 border-t shrink-0 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
-          <button className={`rounded-lg border px-4 py-2 text-sm transition ${isDark ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900' : 'border-stone-300 text-slate-700 hover:bg-stone-100'}`} onClick={onClose} type="button">Close</button>
         </div>
       </div>
     </div>
@@ -563,40 +587,33 @@ function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
       const sim = simRef.current;
       if (!sim) return;
 
-      ctx.save();
       ctx.fillStyle = isDark ? '#18181b' : '#fafaf9';
       ctx.fillRect(0, 0, w, h);
-      ctx.translate(offsetX, offsetY);
-      ctx.scale(scale, scale);
 
-      // Faint background dots (like Obsidian's graph) — visible only near the cursor
-      // Uses screen-space coordinates for the proximity check so zoom level doesn't affect the radius.
-      const dotSpacing = 25;
-      const screenDotRadius = 200; // fixed in screen pixels — independent of zoom
+      // Draw screen-space background dots (fixed pixel spacing, independent of zoom)
+      const dotSpacing = 20;
+      const screenDotRadius = 200;
       const dotMaxAlpha = isDark ? 0.06 : 0.18;
-      const worldLeft = -offsetX / scale;
-      const worldRight = (w - offsetX) / scale;
-      const worldTop = -offsetY / scale;
-      const worldBottom = (h - offsetY) / scale;
-      const dotStartX = Math.floor(worldLeft / dotSpacing) * dotSpacing - dotSpacing;
-      const dotEndX = Math.ceil(worldRight / dotSpacing) * dotSpacing + dotSpacing;
-      const dotStartY = Math.floor(worldTop / dotSpacing) * dotSpacing - dotSpacing;
-      const dotEndY = Math.ceil(worldBottom / dotSpacing) * dotSpacing + dotSpacing;
+      const dotStartX = Math.floor(-offsetX / dotSpacing) * dotSpacing - dotSpacing;
+      const dotEndX = Math.ceil((w - offsetX) / dotSpacing) * dotSpacing + dotSpacing;
+      const dotStartY = Math.floor(-offsetY / dotSpacing) * dotSpacing - dotSpacing;
+      const dotEndY = Math.ceil((h - offsetY) / dotSpacing) * dotSpacing + dotSpacing;
 
-      for (let dx = dotStartX; dx <= dotEndX; dx += dotSpacing) {
-        for (let dy = dotStartY; dy <= dotEndY; dy += dotSpacing) {
-          // Screen-space distance from mouse cursor (pixels) — independent of zoom
-          const sx = dx * scale + offsetX;
-          const sy = dy * scale + offsetY;
+      for (let sx = dotStartX; sx <= dotEndX; sx += dotSpacing) {
+        for (let sy = dotStartY; sy <= dotEndY; sy += dotSpacing) {
           const sdist = Math.sqrt((sx - mouseScreenX) ** 2 + (sy - mouseScreenY) ** 2);
           if (sdist > screenDotRadius) continue;
           const alpha = dotMaxAlpha * (1 - sdist / screenDotRadius);
           ctx.fillStyle = isDark ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
           ctx.beginPath();
-          ctx.arc(dx, dy, 1.2 / scale, 0, Math.PI * 2);
+          ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
           ctx.fill();
         }
       }
+
+      ctx.save();
+      ctx.translate(offsetX, offsetY);
+      ctx.scale(scale, scale);
 
       // Edges
       ctx.strokeStyle = isDark ? 'rgba(113,113,122,0.25)' : 'rgba(120,113,108,0.5)';
