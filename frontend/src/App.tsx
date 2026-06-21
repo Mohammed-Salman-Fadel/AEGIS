@@ -28,6 +28,7 @@ import {
   RESPONSE_STYLE_STORAGE_KEY, VOICE_LOW_RAM_MODE_STORAGE_KEY,
   VOICE_TTS_ENABLED_STORAGE_KEY, RAG_ENABLED_STORAGE_KEY,
   RAG_TOP_K_STORAGE_KEY, RAG_THRESHOLD_STORAGE_KEY, LANGUAGE_STORAGE_KEY,
+  OBSIDIAN_VAULT_PATH_KEY,
   OLLAMA_MODEL_CATALOG, EMPTY_CONTEXT_USAGE,
 } from './constants';
 
@@ -61,6 +62,7 @@ import { VoiceModeOverlay } from './components/VoiceModeOverlay';
 import { ProjectPermissionModal } from './components/ProjectPermissionModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { MemoriesPopup } from './components/MemoriesPopup';
+import { ObsidianModal } from './components/ObsidianModal';
 import { I18nProvider, type Language } from './lib/i18n';
 import translations from './lib/translations';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
@@ -146,9 +148,14 @@ export default function App() {
   const [memoriesPopupOpen, setMemoriesPopupOpen] = useState(false);
   const [welcomeMessages, setWelcomeMessages] = useState(parseWelcomeMessages(''));
   const [activeWelcomeMessage, setActiveWelcomeMessage] = useState(() => randomWelcomeMessage(parseWelcomeMessages('')));
+  const [obsidianVaultPath, setObsidianVaultPath] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem(OBSIDIAN_VAULT_PATH_KEY) || '';
+  });
   const [sessionPendingDeletion, setSessionPendingDeletion] = useState<EngineSessionSummary | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [obsidianOpen, setObsidianOpen] = useState(false);
   const [calendarPrompt, setCalendarPrompt] = useState('');
   const [creatingCalendarEvent, setCreatingCalendarEvent] = useState(false);
   const [calendarResult, setCalendarResult] = useState<CalendarResult | null>(null);
@@ -325,6 +332,7 @@ export default function App() {
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(APPEARANCE_THEME_STORAGE_KEY, appearanceTheme); }, [appearanceTheme]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(RESPONSE_STYLE_STORAGE_KEY, responseStyle); }, [responseStyle]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang); }, [lang]);
+  useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(OBSIDIAN_VAULT_PATH_KEY, obsidianVaultPath); }, [obsidianVaultPath]);
   const t = useCallback((key: string) => translations[lang]?.[key] ?? translations.en[key] ?? key, [lang]);
   const engineErr = useCallback((key: string, status: number, file?: string) => {
     let msg = t(key);
@@ -724,6 +732,12 @@ export default function App() {
     setCalendarResult(null);
     setCalendarMessage(null);
     void loadOutlookCalendars();
+  };
+
+  const openObsidianTool = () => {
+    setObsidianOpen(true);
+    setToolsOpen(false);
+    setError(null);
   };
 
   const createCalendarEvent = async () => {
@@ -1252,6 +1266,7 @@ export default function App() {
           onImportClick={() => { setToolsOpen(false); fileInputRef.current?.click(); }}
           onCalendarOpen={openCalendarTool}
           onExportPdf={exportChatAsPdf}
+          onObsidianOpen={openObsidianTool}
           onFileUpload={handleFileUpload}
           onClearDocuments={clearIndexedDocuments}
           onVoiceModeOpen={() => setIsVoiceMode(true)}
@@ -1351,6 +1366,8 @@ export default function App() {
         onSaveProfile={saveProfileSettings}
         lang={lang}
         onSetLanguage={setLang}
+        obsidianVaultPath={obsidianVaultPath}
+        onObsidianVaultPathChange={setObsidianVaultPath}
       />
 
       {/* Memories Popup */}
@@ -1376,6 +1393,14 @@ export default function App() {
         onCalendarPromptChange={setCalendarPrompt}
         onCalendarSelect={selectOutlookCalendar}
         onCreateEvent={createCalendarEvent}
+      />
+
+      {/* Obsidian Modal */}
+      <ObsidianModal
+        isDark={isDark}
+        isOpen={obsidianOpen}
+        onClose={() => setObsidianOpen(false)}
+        vaultPath={obsidianVaultPath}
       />
 
       {/* Metrics Sidebar */}

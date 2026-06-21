@@ -534,6 +534,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/voice/synthesize", get(handle_voice_synthesize))
         .route("/voice/config", post(handle_voice_config))
         .route(
+            "/mcp/obsidian/validate",
+            get(handlers::mcp::validate_obsidian_path),
+        )
+        .route(
+            "/mcp/obsidian/graph",
+            post(handlers::mcp::build_obsidian_graph),
+        )
+        .route(
+            "/mcp/{provider}/{tool}",
+            post(handlers::mcp::call_mcp_tool),
+        )
+        .route(
             "/sessions",
             get(handlers::sessions::list_sessions).post(handlers::sessions::create_session),
         )

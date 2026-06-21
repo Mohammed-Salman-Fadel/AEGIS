@@ -2,6 +2,7 @@ pub mod calendar;
 pub mod chat;
 pub mod context;
 pub mod health;
+pub mod mcp;
 pub mod models;
 pub mod profile;
 pub mod providers;

@@ -16,6 +16,7 @@ use crate::plan_parser::{PlanParser, StepResult};
 use crate::prompt_builder::PromptBuilder;
 use crate::provider_registry::ProviderRegistry;
 use crate::rag_client::RagClient;
+use crate::mcp::McpManager;
 use crate::response_style;
 use crate::tool_registry::ToolRegistry;
 use crate::user_profile;
@@ -37,6 +38,7 @@ pub struct Orchestrator {
     model_registry: ModelRegistry,
     provider_registry: ProviderRegistry,
     memory_store: MemoryStore,
+    pub mcp_manager: McpManager,
 }
 
 pub struct ModelSwitchOutcome {
@@ -357,6 +359,7 @@ impl Orchestrator {
         _api_key: Option<String>,
         semble_path: String,
         python_path: String,
+        mcp_manager: McpManager,
     ) -> Self {
         let provider_registry = ProviderRegistry::new();
         provider_registry.set_active_provider(provider);
@@ -372,6 +375,7 @@ impl Orchestrator {
             model_registry: ModelRegistry::new(),
             provider_registry,
             memory_store,
+            mcp_manager,
         }
     }
 

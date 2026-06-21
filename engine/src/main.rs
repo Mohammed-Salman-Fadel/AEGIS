@@ -5,6 +5,7 @@ mod compactor;
 mod config;
 mod context;
 mod inference;
+mod mcp;
 mod mcp_client;
 mod memory_store;
 mod model_registry;
@@ -58,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
     }
     let memory_store = memory_store::MemoryStore::new().await;
 
+    let mcp_manager = mcp::McpManager::new().await;
+
     let orchestrator = orchestrator::Orchestrator::new(
         inference,
         rag_client,
@@ -67,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
         config.inference.api_key,
         config.semble_path,
         config.python_path,
+        mcp_manager,
     );
     orchestrator
         .warm_active_model()
