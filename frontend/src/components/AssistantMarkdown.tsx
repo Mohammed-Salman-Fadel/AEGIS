@@ -17,8 +17,9 @@ function MarkdownHeading({ level, text }: { level: MarkdownHeadingLevel; text: s
   return <h5 className={className}>{renderInlineMarkdown(text)}</h5>;
 }
 
-export function AssistantMarkdown({ content, isDark }: { content: string; isDark: boolean }) {
+export function AssistantMarkdown({ content, isDark, vaultPath, noteDir }: { content: string; isDark: boolean; vaultPath?: string; noteDir?: string }) {
   const blocks = parseMarkdownBlocks(content || '...');
+  const inline = (text: string) => renderInlineMarkdown(text, vaultPath, noteDir);
 
   if (!content) {
     return <ThinkingIndicator isDark={isDark} />;
@@ -34,7 +35,7 @@ export function AssistantMarkdown({ content, isDark }: { content: string; isDark
           return (
             <ol className="list-decimal space-y-1 pl-5" key={`ol-${blockIndex}`}>
               {block.items.map((item, itemIndex) => (
-                <li key={`${blockIndex}-${itemIndex}`}>{renderInlineMarkdown(item)}</li>
+                <li key={`${blockIndex}-${itemIndex}`}>{inline(item)}</li>
               ))}
             </ol>
           );
@@ -43,7 +44,7 @@ export function AssistantMarkdown({ content, isDark }: { content: string; isDark
           return (
             <ul className="list-disc space-y-1 pl-5" key={`ul-${blockIndex}`}>
               {block.items.map((item, itemIndex) => (
-                <li key={`${blockIndex}-${itemIndex}`}>{renderInlineMarkdown(item)}</li>
+                <li key={`${blockIndex}-${itemIndex}`}>{inline(item)}</li>
               ))}
             </ul>
           );
@@ -51,7 +52,10 @@ export function AssistantMarkdown({ content, isDark }: { content: string; isDark
         if (block.type === 'code') {
           return <CodeBlock key={`code-${blockIndex}`} language={block.language} text={block.text} />;
         }
-        return <p key={`p-${blockIndex}`}>{renderInlineMarkdown(block.text)}</p>;
+        if (block.type === 'hr') {
+          return <hr key={`hr-${blockIndex}`} className="border-t border-zinc-700 my-4" />;
+        }
+        return <p key={`p-${blockIndex}`}>{inline(block.text)}</p>;
       })}
     </div>
   );

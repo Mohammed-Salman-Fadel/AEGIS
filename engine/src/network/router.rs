@@ -546,6 +546,14 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::mcp::list_vault_notes),
         )
         .route(
+            "/mcp/obsidian/read",
+            post(handlers::mcp::read_vault_note),
+        )
+        .route(
+            "/mcp/obsidian/file",
+            get(handlers::mcp::serve_vault_file),
+        )
+        .route(
             "/mcp/{provider}/{tool}",
             post(handlers::mcp::call_mcp_tool),
         )

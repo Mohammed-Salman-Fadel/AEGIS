@@ -279,6 +279,108 @@ pub async fn list_vault_notes(
     Ok(Json(ListNotesResponse { notes, total, elapsed_ms: elapsed }))
 }
 
+/// Read a specific .md note from a vault (Rust-native, no MCP subprocess needed).
+/// Called by: `POST /mcp/obsidian/read`
+#[derive(Deserialize)]
+pub struct ReadNoteRequest {
+    pub vault_path: String,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct ReadNoteResponse {
+    pub content: String,
+    pub path: String,
+}
+
+pub async fn read_vault_note(
+    Json(payload): Json<ReadNoteRequest>,
+) -> Result<Json<ReadNoteResponse>, (StatusCode, String)> {
+    let vault = Path::new(&payload.vault_path);
+    if !vault.exists() || !vault.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, "Vault path does not exist or is not a directory.".to_string()));
+    }
+    let note_path = vault.join(&payload.path);
+    if !note_path.exists() || !note_path.is_file() {
+        return Err((StatusCode::NOT_FOUND, format!("Note not found: {}", payload.path)));
+    }
+    let normalized = note_path.canonicalize().map_err(|_| (StatusCode::BAD_REQUEST, "Invalid note path.".to_string()))?;
+    if !normalized.starts_with(vault.canonicalize().unwrap_or_else(|_| vault.to_path_buf())) {
+        return Err((StatusCode::FORBIDDEN, "Note path escapes the vault directory.".to_string()));
+    }
+    let content = tokio::fs::read_to_string(&note_path).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read note: {}", e)))?;
+    let rel_path = payload.path.replace('\\', "/");
+    Ok(Json(ReadNoteResponse { content, path: rel_path }))
+}
+
+/// Serve any file from the vault (images, attachments, etc).
+/// Searches common subdirectories and the note's directory if supplied.
+/// Called by: `GET /mcp/obsidian/file?vault_path=...&path=...&note_dir=...`
+#[derive(Deserialize)]
+pub struct VaultFileParams {
+    pub vault_path: String,
+    pub path: String,
+    #[serde(default)]
+    pub note_dir: Option<String>,
+}
+
+use axum::body::Body;
+use axum::response::Response;
+
+pub async fn serve_vault_file(
+    Query(params): Query<VaultFileParams>,
+) -> Result<Response<Body>, (StatusCode, String)> {
+    let vault = std::path::Path::new(&params.vault_path);
+    if !vault.exists() || !vault.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, "Vault path does not exist or is not a directory.".to_string()));
+    }
+
+    // Try the exact path, note-relative path, then common attachment folders
+    let mut candidates = vec![
+        vault.join(&params.path),
+        vault.join("images").join(&params.path),
+        vault.join("attachments").join(&params.path),
+        vault.join("assets").join(&params.path),
+        vault.join(".obsidian").join("attachments").join(&params.path),
+    ];
+    if let Some(ref nd) = params.note_dir {
+        candidates.push(vault.join(nd).join(&params.path));
+        candidates.push(vault.join(nd).join("images").join(&params.path));
+    }
+
+    let file_path = candidates.iter().find(|p| p.exists() && p.is_file());
+
+    match file_path {
+        None => return Err((StatusCode::NOT_FOUND, format!("File not found: {}", params.path))),
+        Some(path) => {
+            let normalized = path.canonicalize().map_err(|_| (StatusCode::BAD_REQUEST, "Invalid path.".to_string()))?;
+            let vault_canon = vault.canonicalize().unwrap_or_else(|_| vault.to_path_buf());
+            if !normalized.starts_with(&vault_canon) {
+                return Err((StatusCode::FORBIDDEN, "Path escapes the vault directory.".to_string()));
+            }
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            let mime = match ext.as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "svg" => "image/svg+xml",
+                "webp" => "image/webp",
+                "ico" => "image/x-icon",
+                "pdf" => "application/pdf",
+                _ => "application/octet-stream",
+            };
+            let data = tokio::fs::read(path).await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read file: {}", e)))?;
+            Ok(Response::builder()
+                .header("Content-Type", mime)
+                .header("Cache-Control", "public, max-age=3600")
+                .body(Body::from(data))
+                .unwrap())
+        }
+    }
+}
+
 /// Derive the vault name that obsidian-mcp computes from a vault path.
 /// obsidian-mcp's sanitizeVaultName takes the basename, lowercases it,
 /// replaces non-alphanumeric chars with hyphens, collapses runs, and trims.
