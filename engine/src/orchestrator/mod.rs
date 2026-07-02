@@ -10,7 +10,7 @@ use crate::config::InferenceProvider;
 use crate::context::RequestContext;
 use crate::inference::InferenceBackend;
 use crate::memory_store::{MemoryStore, Session, SessionSummary};
-use crate::model_registry::ModelRegistry;
+use crate::model_registry::{ModelRegistry, DEFAULT_CONTEXT_WINDOW};
 use crate::network::handlers::chat::ChatRequest;
 use crate::plan_parser::{PlanParser, StepResult};
 use crate::prompt_builder::PromptBuilder;
@@ -450,15 +450,19 @@ impl Orchestrator {
     ) -> anyhow::Result<ContextUsageSnapshot> {
         let model = self.model_registry.current_model_name();
         let provider = self.current_provider_name();
-        let context_window = self
+        let context_window = match self
             .inference
             .read()
             .await
             .context_window(&model)
             .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| self.model_registry.get_active().context_window);
+        {
+            Ok(Some(real_window)) => {
+                self.model_registry.set_context_window(&model, real_window);
+                real_window
+            }
+            _ => self.model_registry.current_context_window(&model),
+        };
 
         let used_tokens = match session_id {
             Some(session_id) if !session_id.trim().is_empty() => self
@@ -496,6 +500,24 @@ impl Orchestrator {
 
     pub async fn call_inference(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
         self.inference.read().await.call(prompt, model).await
+    }
+
+    /// Query the inference backend for the model's real context window.
+    /// Returns `None` if the backend doesn't report a value (e.g. OpenAI-compatible).
+    pub async fn call_inference_context_window(&self, model: &str) -> Option<usize> {
+        self.inference
+            .read()
+            .await
+            .context_window(model)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Persist a real context window for a specific model into the model registry.
+    /// Subsequent lookups for this model return the correct value immediately.
+    pub fn set_model_context_window(&self, model: &str, window: usize) {
+        self.model_registry.set_context_window(model, window);
     }
 
     async fn generate_session_title(
@@ -653,6 +675,15 @@ impl Orchestrator {
         let mut backend = self.inference.write().await;
         *backend = new_backend;
 
+        // Refresh the context window for the new provider's active model
+        let active_model = self.model_registry.current_model_name();
+        if let Ok(window) = backend.context_window(&active_model).await {
+            if let Some(real_window) = window {
+                self.model_registry.set_context_window(&active_model, real_window);
+            }
+        }
+        drop(backend);
+
         Ok(ProviderSwitchOutcome {
             previous_provider: current.as_str().to_string(),
             current_provider: provider.as_str().to_string(),
@@ -692,7 +723,28 @@ impl Orchestrator {
             });
         }
 
+<<<<<<< HEAD
         let previous_model = self.model_registry.current_model_name();
+=======
+        self.inference
+            .read()
+            .await
+            .warm_model(next_model)
+            .await
+            .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
+
+        let previous_model = self.model_registry.set_active_model(next_model);
+        // Refresh the cached context window for the newly activated model.
+        // Check the cache first — avoid a backend round-trip if we already know this model.
+        if self.model_registry.current_context_window(next_model) == DEFAULT_CONTEXT_WINDOW {
+            if let Ok(window) = self.inference.read().await.context_window(next_model).await {
+                if let Some(real_window) = window {
+                    self.model_registry.set_context_window(next_model, real_window);
+                }
+            }
+        }
+
+>>>>>>> 169bc59 (feat: dynamic per-model context window with HashMap cache)
         let unload_warning = match self
             .inference
             .read()

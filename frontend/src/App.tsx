@@ -877,6 +877,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/providers/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: providerName }) });
       if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.provider_switch', res.status)); }
       await loadSettingsData();
+      try { setContextUsage(await fetchContextUsage(activeSessionId)); } catch {}
       setSettingsMessage(`Inference provider switched to ${providerName}.`);
     } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_switch_provider')); }
   };
@@ -887,6 +888,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/models/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelName }) });
       if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.model_switch', res.status)); }
       await loadSettingsData();
+      try { setContextUsage(await fetchContextUsage(activeSessionId)); } catch {}
       setSettingsMessage(`Active model switched to ${modelName}.`);
     } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_switch_model')); }
   };
@@ -929,6 +931,7 @@ export default function App() {
       setModelDownloadProgress(100);
       setModelDownloadStatus('Download complete');
       await loadSettingsData();
+      try { setContextUsage(await fetchContextUsage(activeSessionId)); } catch {}
       setSettingsMessage(modelReadyMessage(modelName, providerName));
     } catch (e) {
       if (controller.signal.aborted) return;
