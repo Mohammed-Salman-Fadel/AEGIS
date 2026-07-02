@@ -1,6 +1,7 @@
 pub mod phases;
 pub mod registry;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowId {
     Default,
     DocumentQA,
@@ -13,5 +14,5 @@ pub enum WorkflowId {
 
 pub struct WorkflowDef {
     pub id: WorkflowId,
-    pub phases: Vec<phases::Phase>,
+    pub phases: &'static [phases::Phase],
 }

@@ -106,112 +106,10 @@ fn truncate_code_project_context(context: &str) -> String {
     truncated
 }
 
-fn is_code_scoped_request(message: &str) -> bool {
-    let lower = message.to_lowercase();
-    let has_code_reference = [
-        "code",
-        "function",
-        "method",
-        "class",
-        "variable",
-        "module",
-        "file",
-        "implementation",
-        "logic",
-        "repo",
-        "codebase",
-        "source",
-        "rust",
-        "python",
-        "initialize",
-        "orchestrator",
-        "engine",
-        "handler",
-    ]
-    .iter()
-    .any(|phrase| lower.contains(phrase));
-
-    let asks_for_search = [
-        "where", "how", "find", "show", "explain", "what", "search", "list",
-    ]
-    .iter()
-    .any(|phrase| lower.contains(phrase));
-
-    has_code_reference && asks_for_search
-}
-
-fn is_document_scoped_request(message: &str) -> bool {
-    let lower = message.to_lowercase();
-    let has_document_reference = [
-        "the document",
-        "this document",
-        "that document",
-        "attached document",
-        "uploaded document",
-        "imported document",
-        "the pdf",
-        "this pdf",
-        "that pdf",
-        "attached pdf",
-        "uploaded pdf",
-        "imported pdf",
-        "the file",
-        "this file",
-        "that file",
-        "attached file",
-        "uploaded file",
-        "imported file",
-    ]
-    .iter()
-    .any(|phrase| lower.contains(phrase));
-
-    let asks_for_document_action = [
-        "summarize",
-        "summary",
-        "explain",
-        "analyze",
-        "review",
-        "read",
-        "extract",
-        "find",
-        "from",
-        "based on",
-        "according to",
-        "what does",
-        "what is in",
-    ]
-    .iter()
-    .any(|phrase| lower.contains(phrase));
-
-    has_document_reference && asks_for_document_action
-}
-
-fn is_research_scoped_request(message: &str) -> bool {
-    let lower = message.to_lowercase();
-    let has_research_reference = [
-        "zotero",
-        "citation",
-        "cite",
-        "paper",
-        "article",
-        "journal",
-        "reference",
-        "bibliography",
-        "research",
-        "study",
-        "author",
-    ]
-    .iter()
-    .any(|phrase| lower.contains(phrase));
-
-    let asks_for_search = [
-        "where", "how", "find", "show", "explain", "what", "search", "list", "get",
-    ]
-    .iter()
-    .any(|phrase| lower.contains(phrase));
-
-    has_research_reference && asks_for_search
-}
+// Request classification has moved to engine/src/classifier/mod.rs.
+// The orchestrator calls `self.classifier.classify()` at the start of
+// handle_fallback and uses the returned WorkflowId for persona selection
+// and context-source routing.
 
 fn session_title_prompt(first_prompt: &str) -> String {
     let first_prompt: String = first_prompt.trim().chars().take(1_200).collect();
@@ -847,9 +745,19 @@ impl Orchestrator {
         let context_window = ctx.model.context_window;
         self.compactor.compact(&mut ctx, context_window);
 
-        ctx.trace_summary("classify", "fallback");
+        // Classify the request into a workflow so the orchestrator can
+        // select the right system persona and decide which context sources
+        // to query.
+        let classification = self.classifier.classify(
+            &req.message,
+            !req.attachments.is_empty(),
+            req.mode.as_deref().unwrap_or("general"),
+        );
+        ctx.trace_summary("classify", &format!("{:?}", classification));
 
-        if req.attachments.is_empty() && is_document_scoped_request(&req.message) {
+        if req.attachments.is_empty()
+            && crate::classifier::message_refers_to_document(&req.message)
+        {
             let final_answer = "No document is attached to this conversation. Please import a document into this conversation first, then ask me to summarize it.".to_string();
             let _ = tx.send(final_answer.clone()).await;
 
@@ -946,11 +854,18 @@ impl Orchestrator {
 
         let mode = ChatMode::from(req.mode.clone());
 
-        // 1.5 Code Search: If the query is code-related, use Semble MCP
-        // Optimization: In Coder mode, always try code search if classification passes or if we are forced
-        let context_from_code = if mode == ChatMode::Coder || is_code_scoped_request(&req.message) {
+        // 1.5 Code Search: If the query is code-related, use Semble MCP.
+        // The classifier determines code intent; the frontend's Coder mode
+        // also forces code search regardless of classification.
+        let context_from_code = if mode == ChatMode::Coder
+            || matches!(
+                classification,
+                crate::workflow::WorkflowId::CodeExplain
+                    | crate::workflow::WorkflowId::CodeGenerate
+                    | crate::workflow::WorkflowId::CodeDebug
+            ) {
             tracing::info!(
-                "Query detected as code-related or in Coder mode: invoking Semble MCP tool"
+                "Query classified as code-related or in Coder mode: invoking Semble MCP tool"
             );
             ctx.trace_summary("code_search", "invoking Semble");
             match self
@@ -1019,10 +934,18 @@ impl Orchestrator {
             );
         }
 
-        // 1.6 Zotero Search: If the query is research-related, use Zotero MCP
-        // Optimization: In Academic mode, always try zotero search
+        // 1.6 Zotero Search: If in Academic mode or the query mentions
+        // research terms, search the Zotero library.
         let context_from_zotero = if mode == ChatMode::Academic
-            || is_research_scoped_request(&req.message)
+            || req.message.to_lowercase().contains("zotero")
+            || req.message.to_lowercase().contains("citation")
+            || req.message.to_lowercase().contains("cite")
+            || req.message.to_lowercase().contains("paper")
+            || req.message.to_lowercase().contains("article")
+            || req.message.to_lowercase().contains("journal")
+            || req.message.to_lowercase().contains("research")
+            || req.message.to_lowercase().contains("bibliography")
+            || req.message.to_lowercase().contains("reference")
         {
             tracing::info!(
                 "Query detected as research-related or in Academic mode: invoking Zotero MCP tool"
@@ -1053,16 +976,30 @@ impl Orchestrator {
         {
             ctx.trace_summary("synthesis", "context found and injected into prompt");
             let active_documents = format_active_documents(&req.attachments);
-            let system_persona = match mode {
-                ChatMode::Coder => {
+            let system_persona = match classification {
+                crate::workflow::WorkflowId::CodeExplain
+                | crate::workflow::WorkflowId::CodeGenerate
+                | crate::workflow::WorkflowId::CodeDebug => {
                     "You are the AEGIS AI Coder. You specialize in analyzing local codebases, explaining logic, and providing high-quality implementation suggestions."
                 }
-                ChatMode::Academic => {
-                    "You are the AEGIS AI Researcher. You specialize in analyzing scientific papers, providing precise citations from the Zotero library, and maintaining a formal, evidence-based tone."
+                crate::workflow::WorkflowId::DocumentQA
+                | crate::workflow::WorkflowId::Summarize => {
+                    "You are the AEGIS AI Document Analyst. You specialize in analyzing imported documents, answering questions based on their content, and providing clear, well-structured summaries."
                 }
-                ChatMode::General => {
-                    "You are the AEGIS AI Assistant. You provide balanced and helpful assistance across various tasks."
+                crate::workflow::WorkflowId::Writing => {
+                    "You are the AEGIS AI Writing Assistant. You specialize in creative and professional writing — essays, stories, emails, articles, and editing."
                 }
+                _ => match mode {
+                    ChatMode::Coder => {
+                        "You are the AEGIS AI Coder. You specialize in analyzing local codebases, explaining logic, and providing high-quality implementation suggestions."
+                    }
+                    ChatMode::Academic => {
+                        "You are the AEGIS AI Researcher. You specialize in analyzing scientific papers, providing precise citations from the Zotero library, and maintaining a formal, evidence-based tone."
+                    }
+                    ChatMode::General => {
+                        "You are the AEGIS AI Assistant. You provide balanced and helpful assistance across various tasks."
+                    }
+                },
             };
 
             let mut prompt = format!(
