@@ -3,7 +3,7 @@ use std::env;
 use std::sync::RwLock;
 
 const DEFAULT_MODEL: &str = "llama3.2:latest";
-pub(crate) const DEFAULT_CONTEXT_WINDOW: usize = 4096;
+pub(crate) const DEFAULT_CONTEXT_WINDOW: usize = 32_768;
 
 #[derive(Clone)]
 pub struct ModelProfile {

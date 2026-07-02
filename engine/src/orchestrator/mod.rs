@@ -13,7 +13,7 @@ use crate::memory_store::{MemoryStore, Session, SessionSummary};
 use crate::model_registry::{ModelRegistry, DEFAULT_CONTEXT_WINDOW};
 use crate::network::handlers::chat::ChatRequest;
 use crate::plan_parser::{PlanParser, StepResult};
-use crate::prompt_builder::PromptBuilder;
+use crate::prompt_builder::{format_history, PromptBuilder};
 use crate::provider_registry::ProviderRegistry;
 use crate::rag_client::RagClient;
 use crate::mcp::McpManager;
@@ -450,18 +450,27 @@ impl Orchestrator {
     ) -> anyhow::Result<ContextUsageSnapshot> {
         let model = self.model_registry.current_model_name();
         let provider = self.current_provider_name();
-        let context_window = match self
-            .inference
-            .read()
-            .await
-            .context_window(&model)
-            .await
-        {
-            Ok(Some(real_window)) => {
-                self.model_registry.set_context_window(&model, real_window);
-                real_window
+
+        // Use the cached context window if we already discovered it
+        // (e.g. during warm_active_model or a prior poll).  Never
+        // re-query the backend on every poll — the context window
+        // does not change at runtime, and re-querying can cause the
+        // display to flicker if a transient backend error falls back
+        // to the default value.
+        let context_window = {
+            let cached = self.model_registry.current_context_window(&model);
+            if cached != DEFAULT_CONTEXT_WINDOW {
+                cached
+            } else {
+                // First time seeing this model — discover the real window.
+                match self.inference.read().await.context_window(&model).await {
+                    Ok(Some(real_window)) => {
+                        self.model_registry.set_context_window(&model, real_window);
+                        real_window
+                    }
+                    _ => cached,
+                }
             }
-            _ => self.model_registry.current_context_window(&model),
         };
 
         let used_tokens = match session_id {
@@ -704,6 +713,30 @@ impl Orchestrator {
             .await
             .with_context(|| format!("Could not warm the active model `{model_name}`."))?;
 
+        // Eagerly discover the real context window so the compactor
+        // and token meter are accurate from the very first turn,
+        // instead of relying on the fallback default until the
+        // frontend polls context_usage().
+        if let Ok(Some(window)) = self
+            .inference
+            .read()
+            .await
+            .context_window(&model_name)
+            .await
+        {
+            self.model_registry
+                .set_context_window(&model_name, window);
+            tracing::info!(
+                "Discovered context window for `{model_name}`: {} tokens",
+                window
+            );
+        } else {
+            tracing::info!(
+                "Using default context window for `{model_name}`: {} tokens (backend did not report one)",
+                self.model_registry.current_context_window(&model_name),
+            );
+        }
+
         Ok(())
     }
 
@@ -723,9 +756,6 @@ impl Orchestrator {
             });
         }
 
-<<<<<<< HEAD
-        let previous_model = self.model_registry.current_model_name();
-=======
         self.inference
             .read()
             .await
@@ -744,7 +774,6 @@ impl Orchestrator {
             }
         }
 
->>>>>>> 169bc59 (feat: dynamic per-model context window with HashMap cache)
         let unload_warning = match self
             .inference
             .read()
@@ -757,15 +786,6 @@ impl Orchestrator {
                 "Switched successfully, but could not unload `{previous_model}`: {error}"
             )),
         };
-
-        self.inference
-            .read()
-            .await
-            .warm_model(next_model)
-            .await
-            .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
-
-        let previous_model = self.model_registry.set_active_model(next_model);
 
         Ok(ModelSwitchOutcome {
             previous_model,
@@ -821,6 +841,11 @@ impl Orchestrator {
             session.history.clone(),
             model,
         );
+
+        // Compact conversation history to fit within the model's context window.
+        // Drops oldest turns first so the prompt never overshoots the budget.
+        let context_window = ctx.model.context_window;
+        self.compactor.compact(&mut ctx, context_window);
 
         ctx.trace_summary("classify", "fallback");
 
@@ -1085,6 +1110,15 @@ impl Orchestrator {
                 prompt.push_str(&format!(
                     "ZOTERO LIBRARY EXCERPTS:\n{}\n\n",
                     context_from_zotero
+                ));
+            }
+
+            // Inject conversation history so the model has multi-turn context
+            let history_text = format_history(&ctx.history);
+            if history_text != "<empty>" {
+                prompt.push_str(&format!(
+                    "CONVERSATION HISTORY:\n{}\n\n",
+                    history_text
                 ));
             }
 

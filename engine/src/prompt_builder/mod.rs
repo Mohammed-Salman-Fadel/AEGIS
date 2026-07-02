@@ -135,16 +135,19 @@ Final answer:"#,
     }
 }
 
-fn format_history(history: &ConversationHistory) -> String {
+pub(crate) fn format_history(history: &ConversationHistory) -> String {
     if history.turns.is_empty() {
         return "<empty>".to_string();
     }
 
+    // The compactor has already trimmed history to fit the token budget,
+    // so we format all remaining turns. The `take(50)` is a last-resort
+    // safety net in case the compactor ever malfunctions.
     history
         .turns
         .iter()
         .rev()
-        .take(8)
+        .take(50)
         .rev()
         .map(|turn| format!("user: {}\nassistant: {}", turn.query, turn.response))
         .collect::<Vec<_>>()

@@ -19,6 +19,19 @@ pub struct Turn {
     pub completion_tokens: Option<usize>,
 }
 
+impl Turn {
+    /// Estimate the total token cost of this turn.
+    /// Uses stored token counts (set by the inference backend) when available,
+    /// otherwise falls back to a character-based estimate (~4 chars per token).
+    pub fn token_estimate(&self) -> usize {
+        if let (Some(prompt), Some(completion)) = (self.prompt_tokens, self.completion_tokens) {
+            return prompt + completion;
+        }
+        // Fallback: rough character-to-token estimate for untracked turns
+        (self.query.len() + self.response.len()) / 4 + 20
+    }
+}
+
 /// The conversation history for a session.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ConversationHistory {

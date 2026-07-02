@@ -215,6 +215,7 @@ export default function App() {
   const errorDismissible = error ? !isFatalUiError(error) : false;
   const tokenMeterLabel = formatTokenMeter(contextUsage);
   const showCenteredComposer = !activeSessionId && messages.length === 0;
+  const activeProvider = availableProviders.find((p) => p.active);
   const filteredCatalogModels = OLLAMA_MODEL_CATALOG.filter((model) => {
     const search = modelSearch.trim().toLowerCase();
     const provider = activeProvider?.name?.toLowerCase() || 'ollama';
@@ -222,7 +223,6 @@ export default function App() {
     return matchesProvider && (!search || model.name.toLowerCase().includes(search) || model.provider.toLowerCase().includes(search) || model.tags.some((t) => t.toLowerCase().includes(search)))
       && (selectedModelProviderTag === 'All' || model.provider === selectedModelProviderTag || model.tags.includes(selectedModelProviderTag));
   });
-  const activeProvider = availableProviders.find((p) => p.active);
   const indexedDocuments = activeSessionId ? indexedDocumentsBySession[activeSessionId] ?? [] : [];
   const showImportProgress = importPhase !== 'idle';
   const indexedDocumentLabel = indexedDocuments.length === 1 ? indexedDocuments[0].file_name : `${indexedDocuments.length} documents`;
