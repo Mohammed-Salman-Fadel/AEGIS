@@ -1,7 +1,7 @@
 // Chat composer footer with textarea, tools menu (import/calendar/export), voice, and send button
 import { Upload, Calendar, Download, Wrench, ChevronDown, Mic, Send, Check, FolderOpen, X, BookOpen } from 'lucide-react';
 import type { IndexedDocument, CodeProject, ContextUsage } from '../types';
-import { importPhaseLabel, formatTokenMeter, fitTextareaToContent, personalizeWelcomeMessage } from '../lib';
+import { importPhaseLabel, fitTextareaToContent, personalizeWelcomeMessage } from '../lib';
 import { useTranslate } from '../lib/i18n';
 import { DEFAULT_WELCOME_MESSAGES } from '../constants';
 
@@ -68,12 +68,14 @@ export function Composer({
       )}
 
       {showCenteredComposer && (
-        <div className={`welcome-message pointer-events-auto mx-auto mb-5 max-w-2xl text-center text-xl font-semibold ${isDark ? 'text-zinc-100' : 'text-slate-900'}`}>
-          {(() => {
-            const idx = DEFAULT_WELCOME_MESSAGES.indexOf(activeWelcomeMessage);
-            const msg = idx >= 0 ? t('welcome.' + idx) : activeWelcomeMessage;
-            return personalizeWelcomeMessage(msg, profileText, lang);
-          })()}
+        <div className="pointer-events-auto mx-auto mb-[clamp(0.5rem,1.4vh,1.25rem)] flex w-full max-w-3xl flex-col items-center text-center select-none">
+          <div className={`welcome-message mt-0 max-w-2xl text-[clamp(1rem,1.8vw,1.35rem)] font-semibold leading-snug ${isDark ? 'text-zinc-200' : 'text-slate-700'}`}>
+            {(() => {
+              const idx = DEFAULT_WELCOME_MESSAGES.indexOf(activeWelcomeMessage);
+              const msg = idx >= 0 ? t('welcome.' + idx) : activeWelcomeMessage;
+              return personalizeWelcomeMessage(msg, profileText, lang);
+            })()}
+          </div>
         </div>
       )}
 
@@ -139,7 +141,7 @@ export function Composer({
         </div>
       )}
 
-      <form className={`pointer-events-auto mx-auto transition-all duration-500 ease-out ${showCenteredComposer ? 'max-w-2xl' : 'max-w-3xl'}`} onSubmit={onSubmit}>
+      <form className={`pointer-events-auto mx-auto transition-all duration-500 ease-out ${showCenteredComposer ? 'max-w-2xl' : 'max-w-3xl'} ${showCenteredComposer ? 'mt-0' : ''}`} onSubmit={onSubmit}>
         <input accept=".pdf,.txt" className="hidden" disabled={isStreaming || isUploading} multiple onChange={onFileUpload} ref={fileInputRef} title="Supported files: PDF, TXT" type="file" />
         <div className={`border shadow-sm transition-all duration-500 ease-out ${showCenteredComposer ? 'rounded-[1.75rem] px-4 pb-3 pt-3' : 'rounded-xl px-3 pb-2.5 pt-3'} ${isDark ? 'border-zinc-800 bg-zinc-950/92 text-zinc-100 shadow-black/30' : 'border-stone-300 bg-white text-slate-900 shadow-stone-300/30'}`}>
           <textarea

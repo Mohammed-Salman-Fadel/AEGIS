@@ -45,9 +45,6 @@ fn default_provider() -> InferenceProvider {
         .as_str()
     {
         "lmstudio" | "lm-studio" | "lm_studio" => InferenceProvider::LmStudio,
-        "openai-compatible" | "openai_compatible" | "openai-compat" | "openai_compat" => {
-            InferenceProvider::OpenAiCompatible
-        }
         _ => InferenceProvider::Ollama,
     }
 }

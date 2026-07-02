@@ -145,7 +145,7 @@ export function MessageBubble({
             type="button"
           >
             <FileCode size={14} />
-            Apply suggested patch
+            Apply changes
           </button>
         )}
       </div>

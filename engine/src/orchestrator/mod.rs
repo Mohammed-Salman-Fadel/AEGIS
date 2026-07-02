@@ -22,7 +22,7 @@ use crate::tool_registry::ToolRegistry;
 use crate::user_profile;
 use crate::workflow::registry::WorkflowRegistry;
 
-const MAX_CODE_PROJECT_CONTEXT_CHARS: usize = 180_000;
+const MAX_CODE_PROJECT_CONTEXT_CHARS: usize = 500_000;
 
 /// The central orchestrator — coordinates every subsystem.
 /// This is the primary entry point for all incoming chat requests.
@@ -405,8 +405,8 @@ impl Orchestrator {
     }
 
     /// Creates a new persisted chat session.
-    pub async fn create_session(&self) -> anyhow::Result<Session> {
-        self.memory_store.create_session().await
+    pub async fn create_session(&self, title: Option<String>) -> anyhow::Result<Session> {
+        self.memory_store.create_session(title).await
     }
 
     /// Returns a list of all persisted chat sessions.
@@ -604,11 +604,6 @@ impl Orchestrator {
                 "LM Studio OpenAI-compatible provider".to_string(),
                 current == "lmstudio",
             ),
-            (
-                "openai-compatible".to_string(),
-                "Generic OpenAI-compatible provider".to_string(),
-                current == "openai-compatible",
-            ),
         ]
     }
 
@@ -616,7 +611,7 @@ impl Orchestrator {
         let provider = match name.trim().to_lowercase().as_str() {
             "ollama" => InferenceProvider::Ollama,
             "lmstudio" | "lm-studio" | "lm_studio" => InferenceProvider::LmStudio,
-            "openai-compatible" | "openai_compatible" | "openai-compat" | "openai_compat" => {
+            "openai-compatible" | "openai_compatible" | "openai-compatible-api" => {
                 InferenceProvider::OpenAiCompatible
             }
             _ => anyhow::bail!(
@@ -697,14 +692,7 @@ impl Orchestrator {
             });
         }
 
-        self.inference
-            .read()
-            .await
-            .warm_model(next_model)
-            .await
-            .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
-
-        let previous_model = self.model_registry.set_active_model(next_model);
+        let previous_model = self.model_registry.current_model_name();
         let unload_warning = match self
             .inference
             .read()
@@ -717,6 +705,15 @@ impl Orchestrator {
                 "Switched successfully, but could not unload `{previous_model}`: {error}"
             )),
         };
+
+        self.inference
+            .read()
+            .await
+            .warm_model(next_model)
+            .await
+            .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
+
+        let previous_model = self.model_registry.set_active_model(next_model);
 
         Ok(ModelSwitchOutcome {
             previous_model,
@@ -809,7 +806,7 @@ impl Orchestrator {
 
         // 1. RAG is strictly session-scoped. If this turn has no current-session
         // attachments, or RAG is disabled, do not query the global RAG store at all.
-        let (relevant_chunks, rag_metrics) = if req.attachments.is_empty() || !rag_enabled {
+        let (mut relevant_chunks, rag_metrics) = if req.attachments.is_empty() || !rag_enabled {
             ctx.trace_summary("rag", "no current-session document attachments or RAG disabled");
             (Vec::new(), None)
         } else {
@@ -907,6 +904,37 @@ impl Orchestrator {
             .filter(|context| !context.is_empty())
             .unwrap_or_default();
 
+        // Query RAG for project files if a project is active  
+        let mut project_rag_chunks = Vec::new();
+        if let Some(ref project_id) = req.code_project_id {
+            let project_session = format!("__project__{project_id}");
+            match self.rag_client.retrieve(&ctx.original_query, 8, 0.0, &project_session).await {
+                Ok(outcome) => {
+                    project_rag_chunks = outcome.chunks;
+                    if let Ok(json) = serde_json::to_string(&outcome.metrics) {
+                        let _ = tx.send(format!("[RAG_METRICS] {json}")).await;
+                    }
+                }
+                Err(e) => tracing::warn!("Project RAG retrieval failed: {e}"),
+            }
+        }
+
+        // Build project RAG citations — add to both context_parts and relevant_chunks
+        for chunk in &project_rag_chunks {
+            let filename = std::path::Path::new(&chunk.source)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&chunk.source)
+                .to_string();
+            let meta = format!("[Project: {}]", filename);
+            context_parts.push(format!("{}\n\"\"\"\n{}\n\"\"\"", meta, chunk.text));
+            if !unique_sources.contains(&filename) {
+                unique_sources.push(filename);
+            }
+        }
+        // Add project chunks to relevant_chunks so [RAG_SOURCES] sends them to frontend
+        relevant_chunks.extend(project_rag_chunks);
+
         if !context_from_project.is_empty() {
             ctx.trace_summary(
                 "project_context",
@@ -989,7 +1017,13 @@ impl Orchestrator {
                     .unwrap_or("selected local project");
                 prompt.push_str(&format!(
                     "SELECTED LOCAL CODE PROJECT: {project_name}\n\
-                    Use this project snapshot as read-only workspace context. When the user asks for edits, explain the exact file-level changes or provide a patch; do not claim files were modified unless a write tool confirms it.\n\n\
+                    You have read-only context of this project. When the user asks for code changes, provide a unified diff.\n\
+                    Always use the correct file extension in diff headers (e.g. +++ b/src/main.rs not +++ b/src/main).\n\
+                    After every code change response, include a clear summary section listing:\n\
+                    - Files created (with full content)\n\
+                    - Files modified (with the exact changes made)\n\
+                    - Files deleted (if any)\n\
+                    Do NOT claim files were modified unless the user applied your patch.\n\n\
                     PROJECT SNAPSHOT:\n{}\n\n",
                     context_from_project
                 ));

@@ -22,7 +22,7 @@ impl InferenceProvider {
         match value.trim().to_lowercase().as_str() {
             "ollama" => Ok(Self::Ollama),
             "lmstudio" | "lm-studio" | "lm_studio" => Ok(Self::LmStudio),
-            "openai-compatible" | "openai_compatible" | "openai-compat" | "openai_compat" => {
+            "openai-compatible" | "openai_compatible" | "openai-compatible-api" => {
                 Ok(Self::OpenAiCompatible)
             }
             unknown => anyhow::bail!(

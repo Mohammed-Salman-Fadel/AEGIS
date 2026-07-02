@@ -30,7 +30,8 @@ pub struct ChatRequest {
     pub code_project_path: Option<String>,
     #[serde(default)]
     pub code_project_context: Option<String>,
-    
+    #[serde(default)]
+    pub code_project_id: Option<String>,
     // RAG Settings
     #[serde(default)]
     pub rag_enabled: Option<bool>,

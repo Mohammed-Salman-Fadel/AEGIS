@@ -211,8 +211,15 @@
 }
 
 .aegis-wordmark {
-  color: #050505;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  color: #5a5a5a;
   text-shadow: 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+:is(.aegis-mode-dark, .aegis-shell.aegis-mode-dark) .aegis-wordmark {
+  color: #ffffff;
+  text-shadow: 0 0 2px rgba(255, 255, 255, 0.15);
 }
 
 .aegis-accent-solid {

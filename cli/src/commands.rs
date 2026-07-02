@@ -946,12 +946,6 @@ fn print_providers(
     }
 
     for provider in providers {
-        if provider.name.eq_ignore_ascii_case("openai-compatible")
-            || provider.name.eq_ignore_ascii_case("openai-compat")
-        {
-            continue;
-        }
-
         let active = current_provider
             .map(|current| current.eq_ignore_ascii_case(&provider.name))
             .unwrap_or(false);

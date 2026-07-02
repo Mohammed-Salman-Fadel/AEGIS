@@ -10,9 +10,9 @@ export function extractUnifiedDiff(content: string) {
 }
 
 export function parsePatchTarget(diff: string) {
-  const plusLine = diff.split('\n').find((line) => line.startsWith('+++ ') && !line.includes('/dev/null'));
+  const plusLine = diff.split('\n').find((line) => line.startsWith('+++ '));
   if (!plusLine) return '';
-  return plusLine.replace(/^\+\+\+\s+/, '').replace(/^[ab]\//, '').trim();
+  return plusLine.replace(/^\+\+\+\s+/, '').replace(/^[ab]\//, '').replace(/^\/dev\/null/, '').trim();
 }
 
 export function applySimpleUnifiedDiff(original: string, diff: string) {
@@ -34,10 +34,9 @@ export function applySimpleUnifiedDiff(original: string, diff: string) {
       const marker = hunkLine[0];
       const value = hunkLine.slice(1);
       if (marker === ' ') {
-        if ((lines[sourceIndex] ?? '') !== value) throw new Error('Patch context did not match the current file contents.');
-        output.push(value); sourceIndex += 1;
+        sourceIndex += 1;
+        if (sourceIndex <= lines.length) output.push(value);
       } else if (marker === '-') {
-        if ((lines[sourceIndex] ?? '') !== value) throw new Error('Patch removal did not match the current file contents.');
         sourceIndex += 1;
       } else if (marker === '+') { output.push(value); }
       index += 1;

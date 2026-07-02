@@ -3,6 +3,7 @@
 export interface CatalogModel {
   name: string;
   provider: string;
+  source: 'ollama' | 'huggingface';
   tags: string[];
   description: string;
 }

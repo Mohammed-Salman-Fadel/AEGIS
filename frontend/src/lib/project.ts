@@ -56,5 +56,9 @@ export function buildProjectSnapshot(projectName: string, files: ProjectFileSnap
 
 export function findProjectFile(project: { files: ProjectFileSnapshot[] }, path: string) {
   const normalizedPath = path.replace(/^[/\\]+/, '').replace(/\\/g, '/');
-  return project.files.find((file) => file.path === normalizedPath);
+  const exact = project.files.find((file) => file.path === normalizedPath);
+  if (exact) return exact;
+  // Try matching by filename (last segment) when exact path doesn't match
+  const filename = normalizedPath.split('/').pop() || normalizedPath;
+  return project.files.find((file) => file.path.endsWith('/' + filename) || file.path === filename) || null;
 }
