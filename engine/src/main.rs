@@ -36,7 +36,13 @@ async fn main() -> anyhow::Result<()> {
         InferenceProvider::Ollama => Box::new(inference::backends::ollama::OllamaBackend::new(
             config.inference.base_url.clone(),
         )),
-        InferenceProvider::LmStudio | InferenceProvider::OpenAiCompatible => Box::new(
+        InferenceProvider::LmStudio => Box::new(
+            inference::backends::openai_compat::OpenAiCompatBackend::new(
+                config.inference.base_url.clone(),
+                config.inference.api_key.clone(),
+            ),
+        ),
+        InferenceProvider::OpenAiCompatible => Box::new(
             inference::backends::openai_compat::OpenAiCompatBackend::new(
                 config.inference.base_url.clone(),
                 config.inference.api_key.clone(),

@@ -60,6 +60,7 @@ interface SettingsPanelProps {
   onAddMemory: () => void;
   onDisplayMemories: () => void;
   onSaveProfile: () => void;
+  onProfileTextChange: (value: string) => void;
   lang: Language;
   onSetLanguage: (lang: Language) => void;
   obsidianVaultPath: string;
@@ -79,7 +80,7 @@ export function SettingsPanel({
   onSelectModel, onSelectProvider, onModelSearchChange, onSetModelProviderTag,
   onDownloadModel, onPauseDownload, onCancelDownload, onResumeDownload,
   onToggleVoiceLowRam, onToggleTts, onToggleRag, onChangeRagTopK, onChangeRagThreshold,
-  onMemoryInputChange, onAddMemory, onDisplayMemories, onSaveProfile,
+  onMemoryInputChange, onAddMemory, onDisplayMemories, onSaveProfile, onProfileTextChange,
   lang, onSetLanguage,
   obsidianVaultPath, onObsidianVaultPathChange, obsidianEnabled, onObsidianEnabledChange,
 }: SettingsPanelProps) {
@@ -90,7 +91,11 @@ export function SettingsPanel({
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 ${settingsClosing ? 'aegis-modal-backdrop-out' : 'aegis-modal-backdrop'}`} onClick={onClose}>
-      <div className={`flex h-[64vh] min-h-[420px] w-full max-w-4xl overflow-hidden rounded-2xl border shadow-2xl ${settingsClosing ? 'aegis-modal-panel-out' : 'aegis-modal-panel'} ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`flex min-h-[340px] max-h-[calc(100dvh-2rem)] overflow-hidden rounded-2xl border shadow-2xl ${settingsClosing ? 'aegis-modal-panel-out' : 'aegis-modal-panel'} ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
+        style={{ aspectRatio: '1.18 / 1', width: 'min(84vw, calc((100dvh - 2rem) * 1.18), 70rem)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <aside className={`w-48 shrink-0 border-r p-4 ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-200 bg-stone-50'}`}>
           <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
             <Settings size={16} />
@@ -318,7 +323,22 @@ export function SettingsPanel({
                   </div>
                   <div className={`settings-scroll max-h-56 space-y-2 overflow-y-auto rounded-xl border p-2 ${isDark ? 'border-zinc-800 bg-zinc-950/40' : 'border-stone-300 bg-stone-50'}`}>
                     {filteredCatalogModels.length === 0 ? (
-                      <div className={`p-3 text-sm ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>No catalog models match this filter.</div>
+                      activeProvider?.name?.toLowerCase() === 'lmstudio' ? (
+                        <div className={`p-4 text-sm ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                          <p className="mb-2">Paste a HuggingFace model URL to download via LM Studio:</p>
+                          <div className="flex gap-2">
+                            <input className={`flex-1 rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
+                              placeholder="https://huggingface.co/lmstudio-community/mistral-7b-instruct-v0.3-gguf"
+                              value={modelSearch}
+                              onChange={(e) => onModelSearchChange(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' && modelSearch.trim()) onDownloadModel(modelSearch.trim()); }}
+                            />
+                            <button className={`aegis-accent-ghost inline-flex shrink-0 items-center justify-center rounded-md border p-2 transition ${modelDownloadState === 'downloading' ? 'cursor-not-allowed opacity-45' : isDark ? 'text-zinc-400' : 'text-slate-500'}`} disabled={modelDownloadState === 'downloading'} onClick={() => modelSearch.trim() && onDownloadModel(modelSearch.trim())} type="button"><Download size={15} /></button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={`p-3 text-sm ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>No catalog models match this filter.</div>
+                      )
                     ) : (
                       filteredCatalogModels.map((model) => (
                         <div key={model.name} className={`flex w-full items-start justify-between gap-3 rounded-lg p-3 text-left transition ${modelSearch.trim() === model.name ? isDark ? 'bg-emerald-950/30 text-emerald-100' : 'bg-emerald-50 text-emerald-900' : isDark ? 'hover:bg-zinc-900' : 'hover:bg-white'}`}>
@@ -329,6 +349,7 @@ export function SettingsPanel({
                               {[model.provider, ...model.tags].map((tag) => (
                                 <span key={`${model.name}-${tag}`} className={`rounded-full px-2 py-0.5 text-[10px] ${isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-stone-200 text-slate-600'}`}>{tag}</span>
                               ))}
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] ${isDark ? 'bg-zinc-700 text-emerald-400' : 'bg-stone-200 text-emerald-700'}`}>{model.source === 'ollama' ? 'Ollama' : 'HuggingFace'}</span>
                             </span>
                           </span>
                           <button aria-label={`Download ${model.name}`} className={`aegis-accent-ghost mt-0.5 inline-flex shrink-0 items-center justify-center rounded-md border border-transparent p-2 transition ${modelDownloadState === 'downloading' ? 'cursor-not-allowed opacity-45' : isDark ? 'text-zinc-400' : 'text-slate-500'}`} disabled={modelDownloadState === 'downloading'} onClick={() => onDownloadModel(model.name)} type="button">
@@ -457,8 +478,9 @@ export function SettingsPanel({
                   </div>
                   <textarea
                     className={`min-h-36 w-full resize-none rounded-lg border p-3 text-sm leading-6 outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100 placeholder:text-zinc-500' : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
-                    readOnly
-                    value={profileText || t('settings.memories.empty')}
+                    value={profileText || ''}
+                    onChange={(e) => onProfileTextChange(e.target.value)}
+                    placeholder={t('settings.memories.empty')}
                   />
                 </div>
 
@@ -482,6 +504,7 @@ export function SettingsPanel({
                 </div>
               </div>
             )}
+
           </div>
         </section>
       </div>

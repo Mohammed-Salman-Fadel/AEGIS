@@ -66,7 +66,7 @@ import { ObsidianModal } from './components/ObsidianModal';
 import { I18nProvider, type Language } from './lib/i18n';
 import translations from './lib/translations';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
-import { modelSearchPlaceholder, installedModelsLabel, modelReadyMessage, modelDownloadPercent, type PullModelChunk } from './lib/modelDownload';
+import { modelSearchPlaceholder, installedModelsLabel, modelReadyMessage, modelDownloadPercent, normalizeModelDownloadName, type PullModelChunk } from './lib/modelDownload';
 
 declare global {
   interface Window {
@@ -118,11 +118,22 @@ export default function App() {
 
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [sessionsOpen, setSessionsOpen] = useState(true);
-  const [codeProjects, setCodeProjects] = useState<CodeProject[]>([]);
+  const [codeProjects, setCodeProjects] = useState<CodeProject[]>(() => {
+    try {
+      const stored = localStorage.getItem('aegis-projects');
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [scanningProject, setScanningProject] = useState(false);
   const [projectPermissionRequestId, setProjectPermissionRequestId] = useState<string | null>(null);
   const [projectEditMessage, setProjectEditMessage] = useState<string | null>(null);
+  const [projectSessionIds, setProjectSessionIds] = useState(() => {
+    try {
+      const stored = localStorage.getItem('aegis-project-sessions');
+      return stored ? new Map<string, string>(JSON.parse(stored)) : new Map<string, string>();
+    } catch { return new Map<string, string>(); }
+  });
   const [status, setStatus] = useState('Ready');
   const [error, setError] = useState<string | null>(null);
   const [dismissedResourceWarning, setDismissedResourceWarning] = useState<string | null>(null);
@@ -206,7 +217,9 @@ export default function App() {
   const showCenteredComposer = !activeSessionId && messages.length === 0;
   const filteredCatalogModels = OLLAMA_MODEL_CATALOG.filter((model) => {
     const search = modelSearch.trim().toLowerCase();
-    return (!search || model.name.toLowerCase().includes(search) || model.provider.toLowerCase().includes(search) || model.tags.some((t) => t.toLowerCase().includes(search)))
+    const provider = activeProvider?.name?.toLowerCase() || 'ollama';
+    const matchesProvider = provider === 'ollama' ? model.source === 'ollama' : false;
+    return matchesProvider && (!search || model.name.toLowerCase().includes(search) || model.provider.toLowerCase().includes(search) || model.tags.some((t) => t.toLowerCase().includes(search)))
       && (selectedModelProviderTag === 'All' || model.provider === selectedModelProviderTag || model.tags.includes(selectedModelProviderTag));
   });
   const activeProvider = availableProviders.find((p) => p.active);
@@ -338,6 +351,12 @@ export default function App() {
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang); }, [lang]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(OBSIDIAN_VAULT_PATH_KEY, obsidianVaultPath); }, [obsidianVaultPath]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(OBSIDIAN_ENABLED_KEY, String(obsidianEnabled)); }, [obsidianEnabled]);
+  useEffect(() => {
+    try { localStorage.setItem('aegis-projects', JSON.stringify(codeProjects.map(({ rootHandle, ...rest }) => rest))); } catch {}
+  }, [codeProjects]);
+  useEffect(() => {
+    try { localStorage.setItem('aegis-project-sessions', JSON.stringify([...projectSessionIds])); } catch {}
+  }, [projectSessionIds]);
   const t = useCallback((key: string) => translations[lang]?.[key] ?? translations.en[key] ?? key, [lang]);
   const engineErr = useCallback((key: string, status: number, file?: string) => {
     let msg = t(key);
@@ -438,6 +457,9 @@ export default function App() {
 
   const handleSessionSelect = async (sessionId: string) => {
     if (deletingSessionIds.includes(sessionId)) return;
+    if (activeProjectId && projectSessionIds.get(activeProjectId) !== sessionId) {
+      setActiveProjectId(null);
+    }
     setSessionMenuOpenId(null);
     setSelectedMessageSources(null);
     setSelectedMessageSourcesIndex(null);
@@ -451,6 +473,7 @@ export default function App() {
 
   const handleNewSession = () => {
     if (isStreaming) return;
+    setActiveProjectId(null);
     setSessionMenuOpenId(null);
     activeSessionIdRef.current = null;
     setActiveSessionId(null); setMessages([]); setSelectedMessageSources(null);
@@ -507,6 +530,14 @@ export default function App() {
       setCodeProjects((cur) => [project, ...cur.filter((p) => p.name !== project.name)]);
       setActiveProjectId(project.id);
       setProjectsOpen(true);
+      // Index project files via RAG for semantic search
+      try {
+        await fetch(`${API_BASE}/projects/ingest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: project.id, files: project.files.map(f => ({ path: f.path, content: f.content })) }),
+        });
+      } catch (_) {}
       setChatMode('coder');
       setProjectPermissionRequestId(project.id);
       setStatus(`Project ${project.name} scanned`);
@@ -533,24 +564,56 @@ export default function App() {
     setProjectEditMessage(null);
   };
 
+  async function createProjectFile(project: CodeProject, relativePath: string, content: string) {
+    const parts = relativePath.replace(/\\/g, '/').split('/');
+    let dir: FileSystemDirectoryHandle = project.rootHandle;
+    for (let i = 0; i < parts.length - 1; i++) {
+      dir = await dir.getDirectoryHandle(parts[i], { create: true });
+    }
+    const fileName = parts[parts.length - 1];
+    const fileHandle = await dir.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+    const file = await fileHandle.getFile();
+    const newFile = { path: relativePath, content, size: file.size, handle: fileHandle };
+    const nextFiles = [...project.files, newFile];
+    const nextProject = { ...project, files: nextFiles, fileCount: nextFiles.length, totalBytes: nextFiles.reduce((t, f) => t + f.size, 0), snapshot: buildProjectSnapshot(project.name, nextFiles), updatedAt: new Date().toISOString() };
+    setCodeProjects((cur) => cur.map((p) => p.id === nextProject.id ? nextProject : p));
+  }
+
   const applyAssistantPatch = async (messageContent: string) => {
     if (!activeProject) { setError(t('error.no_active_project')); return; }
     if (!activeProject.writable) { setError(t('error.project_readonly')); return; }
+    if (!activeProject.rootHandle) { setError('Project folder access lost — re-open the project folder to enable editing.'); return; }
     const diff = extractUnifiedDiff(messageContent);
+    if (!diff) { setError(t('error.patch_no_diff')); return; }
     const changedFiles = diff.split('\n').filter((l) => l.startsWith('+++ ') && !l.includes('/dev/null'));
-    const targetPath = parsePatchTarget(diff);
-    const targetFile = targetPath ? findProjectFile(activeProject, targetPath) : null;
     if (changedFiles.length > 1) { setError(t('error.patch_single_file')); return; }
-    if (!diff || !targetFile?.handle.createWritable) { setError(t('error.patch_no_diff')); return; }
+    const targetPath = parsePatchTarget(diff);
+    if (!targetPath) { setError(t('error.patch_no_diff')); return; }
+    const targetFile = findProjectFile(activeProject, targetPath);
+    const isNewFile = !targetFile;
     try {
-      const nextContent = applySimpleUnifiedDiff(targetFile.content, diff);
-      const writable = await targetFile.handle.createWritable();
-      await writable.write(nextContent);
-      await writable.close();
-      const nextFiles = activeProject.files.map((f) => f.path === targetFile.path ? { ...f, content: nextContent, size: new Blob([nextContent]).size } : f);
-      const nextProject = { ...activeProject, files: nextFiles, fileCount: nextFiles.length, totalBytes: nextFiles.reduce((t, f) => t + f.size, 0), snapshot: buildProjectSnapshot(activeProject.name, nextFiles), updatedAt: new Date().toISOString() };
-      setCodeProjects((cur) => cur.map((p) => p.id === nextProject.id ? nextProject : p));
-      setProjectEditMessage(`Applied patch to ${targetFile.path}.`);
+      if (targetFile) {
+        // Edit existing file
+        if (!targetFile.handle.createWritable) { setError(t('error.patch_no_diff')); return; }
+        const nextContent = applySimpleUnifiedDiff(targetFile.content, diff);
+        const writable = await targetFile.handle.createWritable();
+        await writable.write(nextContent);
+        await writable.close();
+        const nextFiles = activeProject.files.map((f) => f.path === targetFile.path ? { ...f, content: nextContent, size: new Blob([nextContent]).size } : f);
+        const nextProject = { ...activeProject, files: nextFiles, fileCount: nextFiles.length, totalBytes: nextFiles.reduce((t, f) => t + f.size, 0), snapshot: buildProjectSnapshot(activeProject.name, nextFiles), updatedAt: new Date().toISOString() };
+        setCodeProjects((cur) => cur.map((p) => p.id === nextProject.id ? nextProject : p));
+        setProjectEditMessage(`Applied patch to ${targetFile.path}.`);
+        setTimeout(() => setProjectEditMessage(null), 3000);
+      } else {
+        // Create new file — apply diff over empty content
+        const content = applySimpleUnifiedDiff('', diff);
+        await createProjectFile(activeProject, targetPath, content);
+        setProjectEditMessage(`Created ${targetPath}.`);
+        setTimeout(() => setProjectEditMessage(null), 3000);
+      }
       setStatus(t('status.project_patch_applied'));
     } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_apply_patch')); setStatus(t('error.patch_failed')); }
   };
@@ -829,7 +892,7 @@ export default function App() {
   };
 
   const downloadModel = async (modelNameOverride?: string) => {
-    const modelName = (modelNameOverride ?? modelSearch).trim();
+    const modelName = normalizeModelDownloadName(modelNameOverride ?? modelSearch, activeProvider?.name);
     if (!modelName || modelDownloadState === 'downloading') return;
     const providerName = activeProvider?.name ?? 'active provider';
     const controller = new AbortController();
@@ -982,7 +1045,7 @@ export default function App() {
           attachments: indexedDocuments.map((d) => `${d.file_name} (${d.chunks_added} chunks)`),
           edit_from_turn_index: editFromTurnIndex, mode: chatMode,
           response_style: responseStyle, code_project_name: activeProject?.name,
-          code_project_context: activeProject?.snapshot, rag_enabled: isRagEnabled,
+          code_project_context: activeProject?.snapshot, code_project_id: activeProject?.id, rag_enabled: isRagEnabled,
           rag_top_k: ragTopK, rag_similarity_threshold: ragSimilarityThreshold,
         }),
       });
@@ -1144,7 +1207,34 @@ export default function App() {
         onToggleSessions={() => setSessionsOpen((c) => !c)}
         onNewSession={handleNewSession}
         onAddProject={handleAddProject}
-        onSelectProject={(id) => { setActiveProjectId(id); setChatMode('coder'); }}
+        onSelectProject={async (id) => {
+          setActiveProjectId(id);
+          setChatMode('coder');
+          // Reuse existing project session if already created
+          const existingSessionId = projectSessionIds.get(id);
+          if (existingSessionId) {
+            setActiveSessionId(existingSessionId);
+            await loadSession(existingSessionId);
+          } else {
+            const project = codeProjects.find(p => p.id === id);
+            if (project) {
+              const res = await fetch(`${API_BASE}/sessions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: project.name }),
+              });
+              if (res.ok) {
+                const session = await res.json() as EngineSession;
+                projectSessionIds.set(id, session.session_id);
+                setProjectSessionIds(new Map(projectSessionIds));
+                setActiveSessionId(session.session_id);
+                setMessages([]);
+                loadSessions();
+              }
+            }
+          }
+          setSessionsOpen(false);
+        }}
         onRemoveProject={removeProject}
         onSelectSession={handleSessionSelect}
         onBeginRenaming={beginRenamingSession}
@@ -1192,9 +1282,11 @@ export default function App() {
           </div>
         )}
 
-        {/* AEGIS heading — fixed position, unaffected by error banners */}
-        {messages.length === 0 && (
-          <div className={`absolute left-1/2 top-[calc(25vh+32px)] z-10 -translate-x-1/2 text-center text-8xl font-black tracking-[0.15em] transition-all duration-700 ${isDark ? 'text-white' : 'text-black'}`} style={{ textShadow: '0 0 1px currentColor' }}>
+        {showCenteredComposer && (
+          <div
+            className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center text-center text-[clamp(3.5rem,8vw,8.25rem)] font-black leading-none tracking-[0.12em] ${isDark ? 'text-white' : 'text-black'}`}
+            style={{ top: 'clamp(3.45rem, 17.5vh, 10rem)', textShadow: '0 0 1px currentColor' }}
+          >
             AEGIS
           </div>
         )}
@@ -1370,6 +1462,7 @@ export default function App() {
         onAddMemory={handleAddMemory}
         onDisplayMemories={() => setMemoriesPopupOpen(true)}
         onSaveProfile={saveProfileSettings}
+        onProfileTextChange={setProfileText}
         lang={lang}
         onSetLanguage={setLang}
         obsidianVaultPath={obsidianVaultPath}

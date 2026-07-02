@@ -997,7 +997,7 @@ impl EngineClient {
         for line in reader.lines() {
             let line =
                 line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
-            if let Some(data) = line.strip_prefix("data:").map(|s| s.trim()) {
+            if let Some(data) = line.strip_prefix("data:").map(|s| s.strip_prefix(' ').unwrap_or(s)) {
                 event_lines.push(data.to_string());
                 continue;
             }
@@ -1261,9 +1261,6 @@ fn warmup_client() -> reqwest::blocking::Client {
 fn normalized_provider_name(provider: &str) -> String {
     match provider.trim().to_lowercase().as_str() {
         "lm-studio" | "lm_studio" => "lmstudio".to_string(),
-        "openai-compatible" | "openai_compatible" | "openai-compat" | "openai_compat" => {
-            "openai-compatible".to_string()
-        }
         other => other.to_string(),
     }
 }

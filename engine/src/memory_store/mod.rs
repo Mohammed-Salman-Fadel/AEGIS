@@ -78,9 +78,9 @@ impl MemoryStore {
         }
     }
 
-    pub async fn create_session(&self) -> anyhow::Result<Session> {
+    pub async fn create_session(&self, title: Option<String>) -> anyhow::Result<Session> {
         match &self.backend {
-            SessionBackend::Files(store) => store.create_session().await,
+            SessionBackend::Files(store) => store.create_session(title).await,
             SessionBackend::Unavailable { reason } => Err(unavailable_error(reason)),
         }
     }
@@ -177,11 +177,11 @@ impl FileSessionStore {
         Ok(Self { sessions_dir })
     }
 
-    async fn create_session(&self) -> anyhow::Result<Session> {
+    async fn create_session(&self, title: Option<String>) -> anyhow::Result<Session> {
         let now = Utc::now();
         let stored = StoredSessionFile {
             session_id: Uuid::new_v4().to_string(),
-            title: "New chat".to_string(),
+            title: title.unwrap_or_else(|| "New chat".to_string()),
             created_at: now,
             updated_at: now,
             turns: Vec::new(),

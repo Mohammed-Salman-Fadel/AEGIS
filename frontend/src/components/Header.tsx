@@ -20,7 +20,7 @@ export function Header({
 }: HeaderProps) {
   const t = useT();
   return (
-    <header className={`flex h-16 shrink-0 items-center justify-between border-b px-6 ${isDark ? 'border-zinc-800' : 'border-stone-300'}`}>
+    <header className={`grid h-16 shrink-0 grid-cols-3 items-center border-b px-6 ${isDark ? 'border-zinc-800' : 'border-stone-300'}`}>
       <div className="flex min-w-0 items-center gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">{activeSessionTitle ?? t('header.new_chat')}</div>
@@ -30,7 +30,7 @@ export function Header({
         </div>
       </div>
 
-      <div className="flex items-center gap-1 rounded-xl border border-zinc-800/50 bg-zinc-900/30 p-1 shadow-inner backdrop-blur-sm">
+      <div className="flex items-center justify-center gap-1 rounded-xl border border-zinc-800/50 bg-zinc-900/30 p-1 shadow-inner backdrop-blur-sm justify-self-center">
         {(['general', 'coder', 'academic'] as ChatMode[]).map((mode) => {
           const Icon = mode === 'general' ? Bot : mode === 'coder' ? Cpu : GraduationCap;
           return (
@@ -47,7 +47,7 @@ export function Header({
         })}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 justify-self-end">
         <button
           className={`aegis-accent-ghost inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${isMetricsOpen ? 'aegis-accent-subtle' : isDark ? 'border-zinc-800 text-zinc-300 hover:bg-zinc-900' : 'border-stone-300 bg-white text-slate-700 hover:bg-stone-100'}`}
           onClick={onToggleMetrics}

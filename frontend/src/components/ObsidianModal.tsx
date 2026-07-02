@@ -283,7 +283,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className={`flex w-[70vw] max-w-5xl h-[70vh] flex-col rounded-2xl border shadow-2xl ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`} onClick={(e) => e.stopPropagation()}>
+      <div className={`flex w-[85vw] h-[85vh] flex-col rounded-2xl border shadow-2xl ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`} onClick={(e) => e.stopPropagation()}>
         <div className={`flex items-center justify-between px-6 py-4 border-b shrink-0 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
           <div className="flex items-center gap-2 text-base font-semibold"><BookOpen size={18} />Obsidian Vault</div>
           <button className={`rounded-md p-1 transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onClose} type="button"><X size={18} /></button>

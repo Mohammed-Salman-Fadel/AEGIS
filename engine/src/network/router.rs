@@ -82,7 +82,7 @@ async fn handle_chat_ws(
                 code_project_name: None,
                 code_project_path: None,
                 code_project_context: None,
-                rag_enabled,
+                code_project_id: None,                rag_enabled,
                 rag_top_k,
                 rag_similarity_threshold,
             };
@@ -523,6 +523,10 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::calendar::select_outlook_calendar),
         )
         .route("/system/stats", get(get_system_stats))
+        .route(
+            "/projects/ingest",
+            post(handlers::projects::ingest_project_files),
+        )
         .route(
             "/ingest",
             post(handle_pdf_ingest).layer(DefaultBodyLimit::max(MAX_INGEST_UPLOAD_BYTES)),

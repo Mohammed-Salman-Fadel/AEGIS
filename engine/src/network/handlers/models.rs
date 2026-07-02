@@ -334,11 +334,23 @@ async fn stream_lmstudio_download(
 ) -> anyhow::Result<()> {
     let base_url = lmstudio_management_base_url();
     let client = reqwest::Client::new();
+
+    // HuggingFace models (no ':' separator, e.g. "mistral-7b-instruct-v0.3-gguf")
+    // need the full HuggingFace URL instead of a bare model name
+    let download_model = if model.contains(':') {
+        // Ollama-style name like "llama3.2:1b" — pass as-is
+        model.to_string()
+    } else {
+        // HuggingFace-style name — wrap in lmstudio-community URL
+        let slug = model.trim().to_lowercase().replace('_', "-").replace(' ', "-");
+        format!("https://huggingface.co/lmstudio-community/{slug}")
+    };
+
     let response = with_lmstudio_auth(
         client
             .post(format!("{base_url}/api/v1/models/download"))
             .json(&LmStudioDownloadRequest {
-                model,
+                model: &download_model,
                 quantization,
             }),
     )
@@ -348,7 +360,20 @@ async fn stream_lmstudio_download(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("LM Studio download error {status} for model `{model}`: {body}");
+        // Try to extract a HuggingFace URL from LM Studio's error response
+        let hint = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
+            val.pointer("/error/message")
+                .and_then(|m| m.as_str())
+                .and_then(|msg| {
+                    msg.split_whitespace()
+                        .find(|w| w.starts_with("https://huggingface.co/"))
+                        .map(|url| format!("\n\nTo download this model, use the HuggingFace URL instead:\n  {url}"))
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        anyhow::bail!("LM Studio download error {status} for model `{model}`:{hint}\n\nBody: {body}");
     }
 
     let initial_status = response.json::<LmStudioDownloadStatus>().await?;

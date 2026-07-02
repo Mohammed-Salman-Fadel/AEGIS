@@ -135,11 +135,20 @@ function markdownToHtml(markdown) {
 
     if (trimmed.startsWith('>')) {
       const quoteLines = [];
+      let alertType = null;
       while (index < lines.length && lines[index].trim().startsWith('>')) {
-        quoteLines.push(lines[index].trim().replace(/^>\s?/, ''));
+        const content = lines[index].trim().replace(/^>\s?/, '');
+        const alertMatch = content.match(/^\[!(\w+)\]/);
+        if (alertMatch) {
+          alertType = alertMatch[1];
+          quoteLines.push(content.replace(/^\[\!\w+\]\s*/, ''));
+        } else {
+          quoteLines.push(content);
+        }
         index += 1;
       }
-      html.push(`<blockquote>${quoteLines.map(renderInlineMarkdown).join('<br />')}</blockquote>`);
+      const cls = alertType ? ` class="alert alert-${alertType.toLowerCase()}"` : '';
+      html.push(`<blockquote${cls}>${quoteLines.map(renderInlineMarkdown).join('<br />')}</blockquote>`);
       continue;
     }
 
@@ -325,3 +334,64 @@ window.addEventListener('pointerleave', () => {
     tiltCard.style.transform = '';
   }
 });
+
+const docsApp = document.querySelector('.docs-app');
+const handle = document.querySelector('.sidebar-resize-handle');
+const STORAGE_KEY = 'aegis-docs-sidebar-width';
+const MIN_WIDTH = 180;
+const MAX_WIDTH = 500;
+
+function setSidebarWidth(w) {
+  w = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, w));
+  docsApp.style.gridTemplateColumns = w + 'px 64px 1fr';
+  return w;
+}
+
+if (docsApp && handle) {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    const w = parseInt(saved, 10);
+    if (w >= MIN_WIDTH && w <= MAX_WIDTH) {
+      setSidebarWidth(w);
+    }
+  }
+
+  let dragging = false;
+
+  function startDrag(e) {
+    dragging = true;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  }
+
+  function moveDrag(e) {
+    if (!dragging) return;
+    const rect = docsApp.getBoundingClientRect();
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    setSidebarWidth(x - rect.left);
+  }
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    const match = docsApp.style.gridTemplateColumns.match(/^(\d+)px/);
+    if (match) {
+      const w = parseInt(match[1], 10);
+      if (w >= MIN_WIDTH && w <= MAX_WIDTH) {
+        localStorage.setItem(STORAGE_KEY, w);
+      }
+    }
+  }
+
+  handle.addEventListener('mousedown', startDrag);
+  document.addEventListener('mousemove', moveDrag);
+  document.addEventListener('mouseup', endDrag);
+  handle.addEventListener('touchstart', startDrag, { passive: false });
+  document.addEventListener('touchmove', moveDrag, { passive: false });
+  document.addEventListener('touchend', endDrag);
+}

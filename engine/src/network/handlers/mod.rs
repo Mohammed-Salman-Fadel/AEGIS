@@ -5,5 +5,6 @@ pub mod health;
 pub mod mcp;
 pub mod models;
 pub mod profile;
+pub mod projects;
 pub mod providers;
 pub mod sessions;

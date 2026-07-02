@@ -5,6 +5,7 @@ import {
   installedModelsLabel,
   modelDownloadPercent,
   modelReadyMessage,
+  normalizeModelDownloadName,
   modelSearchPlaceholder,
 } from '../src/lib/modelDownload.js';
 
@@ -38,4 +39,16 @@ test('installed models label follows the active provider', () => {
 test('modelReadyMessage includes the provider used for the download', () => {
   assert.equal(modelReadyMessage('qwen3:4b', 'ollama'), 'qwen3:4b is ready for ollama.');
   assert.equal(modelReadyMessage('local/model', undefined), 'local/model is ready for active provider.');
+});
+
+test('normalizeModelDownloadName translates common LM Studio shorthand models', () => {
+  assert.equal(
+    normalizeModelDownloadName('llama3.1:8b', 'lmstudio'),
+    'lmstudio-community/Llama-3.1-8B-Instruct-GGUF',
+  );
+  assert.equal(
+    normalizeModelDownloadName('https://huggingface.co/acme/model', 'lmstudio'),
+    'https://huggingface.co/acme/model',
+  );
+  assert.equal(normalizeModelDownloadName('llama3.1:8b', 'ollama'), 'llama3.1:8b');
 });

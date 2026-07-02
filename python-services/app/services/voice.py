@@ -1,9 +1,21 @@
 ﻿import os
 import logging
 import tempfile
-from faster_whisper import WhisperModel
-from kokoro_onnx import Kokoro
-import soundfile as sf
+
+try:
+    from faster_whisper import WhisperModel
+except ImportError:  # Optional dependency: speech-to-text may be unavailable.
+    WhisperModel = None
+
+try:
+    from kokoro_onnx import Kokoro
+except ImportError:  # Optional dependency: text-to-speech may be unavailable.
+    Kokoro = None
+
+try:
+    import soundfile as sf
+except ImportError:  # Optional dependency: TTS output encoding may be unavailable.
+    sf = None
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +34,9 @@ class VoiceService:
         
     def load_stt(self):
         """Lazy load the Whisper model"""
+        if WhisperModel is None:
+            logger.warning("faster_whisper is not installed. Speech-to-text is disabled.")
+            return False
         if self.stt_model is None:
             logger.info(f"Loading Whisper model: {self.model_size}")
             try:
@@ -38,6 +53,9 @@ class VoiceService:
             
     def load_tts(self):
         """Lazy load the Kokoro model"""
+        if Kokoro is None:
+            logger.warning("kokoro_onnx is not installed. Text-to-speech is disabled.")
+            return False
         if self.tts_model is None:
             if not os.path.exists(self.kokoro_model_path):
                 logger.warning(f"Kokoro model not found at {self.kokoro_model_path}. TTS disabled.")
@@ -62,7 +80,8 @@ class VoiceService:
  
     def transcribe(self, audio_bytes: bytes):
         """Transcribes audio bytes to text"""
-        self.load_stt()
+        if not self.load_stt():
+            return ""
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
             temp_audio.write(audio_bytes)
@@ -80,6 +99,9 @@ class VoiceService:
  
     def synthesize(self, text: str):
         """Synthesizes text to speech using Kokoro and returns the WAV bytes"""
+        if sf is None:
+            logger.warning("soundfile is not installed. Text-to-speech is disabled.")
+            return None
         if not self.load_tts():
             return None
             

@@ -26,9 +26,13 @@ impl OpenAiCompatBackend {
     }
 
     fn request_builder(&self) -> reqwest::RequestBuilder {
+        self.request_builder_for(self.chat_completions_url())
+    }
+
+    fn request_builder_for(&self, url: String) -> reqwest::RequestBuilder {
         let builder = self
             .client
-            .post(self.chat_completions_url())
+            .post(url)
             .header(CONTENT_TYPE, "application/json");
 
         match &self.api_key {
@@ -39,6 +43,83 @@ impl OpenAiCompatBackend {
 
     fn models_url(&self) -> String {
         format!("{}/v1/models", self.base_url)
+    }
+
+    fn model_management_url(&self, path: &str) -> String {
+        format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+    }
+
+    async fn post_model_management<T: Serialize + ?Sized>(
+        &self,
+        paths: &[&str],
+        payload: &T,
+        error_prefix: &str,
+        model: &str,
+    ) -> anyhow::Result<()> {
+        let mut last_error: Option<anyhow::Error> = None;
+
+        for path in paths {
+            let response = self
+                .request_builder_for(self.model_management_url(path))
+                .json(payload)
+                .send()
+                .await;
+
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = Some(error.into());
+                    continue;
+                }
+            };
+
+            if response.status().is_success() {
+                return Ok(());
+            }
+
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+
+            if status.as_u16() == 404 || status.as_u16() == 405 {
+                last_error = Some(anyhow::anyhow!("{error_prefix} endpoint `{path}` was not available for model `{model}`: {body}"));
+                continue;
+            }
+
+            anyhow::bail!("{error_prefix} error {status} for model `{model}`: {body}");
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            anyhow::anyhow!("{error_prefix} failed for model `{model}`.")
+        }))
+    }
+
+    async fn post_model_management_variants(
+        &self,
+        paths: &[&str],
+        model: &str,
+        error_prefix: &str,
+    ) -> anyhow::Result<()> {
+        let payload_variants = [
+            serde_json::json!({ "model": model }),
+            serde_json::json!({ "name": model }),
+            serde_json::json!({ "id": model }),
+            serde_json::json!({ "identifier": model }),
+        ];
+
+        let mut last_error: Option<anyhow::Error> = None;
+        for payload in payload_variants {
+            match self
+                .post_model_management(paths, &payload, error_prefix, model)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            anyhow::anyhow!("{error_prefix} failed for model `{model}`.")
+        }))
     }
 }
 
@@ -100,6 +181,11 @@ struct ModelListResponse {
 #[derive(Deserialize)]
 struct ModelData {
     id: String,
+}
+
+#[derive(Serialize)]
+struct LmStudioModelActionRequest<'a> {
+    model: &'a str,
 }
 
 #[async_trait]
@@ -217,5 +303,29 @@ impl InferenceBackend for OpenAiCompatBackend {
         }
 
         Ok(full_response)
+    }
+
+    async fn warm_model(&self, model: &str) -> anyhow::Result<()> {
+        self.post_model_management_variants(
+            &[
+                "/api/v1/models/load",
+                "/api/v0/models/load",
+            ],
+            "LM Studio load",
+            model,
+        )
+        .await
+    }
+
+    async fn unload_model(&self, model: &str) -> anyhow::Result<()> {
+        self.post_model_management_variants(
+            &[
+                "/api/v1/models/unload",
+                "/api/v0/models/unload",
+            ],
+            "LM Studio unload",
+            model,
+        )
+        .await
     }
 }
