@@ -99,7 +99,7 @@ impl McpClient {
             .stderr(Stdio::inherit())
             .spawn()?;
 
-        let stdin = child.stdin.take()
+        let mut stdin = child.stdin.take()
             .ok_or_else(|| anyhow::anyhow!("MCP child had no stdin"))?;
         let stdout = child.stdout.take()
             .ok_or_else(|| anyhow::anyhow!("MCP child had no stdout"))?;

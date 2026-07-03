@@ -16,6 +16,7 @@ use crate::plan_parser::{PlanParser, StepResult};
 use crate::prompt_builder::{format_history, PromptBuilder};
 use crate::provider_registry::ProviderRegistry;
 use crate::rag_client::RagClient;
+use crate::react_loop::ReactLoop;
 use crate::mcp::McpManager;
 use crate::response_style;
 use crate::tool_registry::ToolRegistry;
@@ -779,6 +780,59 @@ impl Orchestrator {
                 if should_title_first_turn_session {
                     self.title_first_turn_session(session_id, &req.message, &ctx.model.name)
                         .await;
+                }
+            }
+
+            return Ok(final_answer);
+        }
+
+        // ── ReAct loop for code workflows ─────────────────────────────
+        // Code workflows benefit from iterative tool use — the model can
+        // search the codebase, read files, and refine its understanding
+        // before producing a final answer.
+        if matches!(
+            classification,
+            crate::workflow::WorkflowId::CodeExplain
+                | crate::workflow::WorkflowId::CodeGenerate
+                | crate::workflow::WorkflowId::CodeDebug
+        ) {
+            let final_answer = ReactLoop::execute(
+                &self.inference,
+                &self.tool_registry,
+                &self.rag_client,
+                &req.message,
+                &working_session_id,
+                &ctx.model.name,
+                req.code_project_path.as_deref(),
+                tx.clone(),
+            )
+            .await?;
+
+            // Send the final answer as a single chunk.
+            let _ = tx.send(final_answer.clone()).await;
+
+            if let Some(session_id) = persisted_session_id.as_deref() {
+                self.memory_store
+                    .append_turn_with_edit(
+                        session_id,
+                        &req.message,
+                        &final_answer,
+                        &ctx.model.name,
+                        &ctx.trace,
+                        req.edit_from_turn_index,
+                        req.edit_from_turn_index.is_some(),
+                        None,
+                        None,
+                    )
+                    .await?;
+
+                if should_title_first_turn_session {
+                    self.title_first_turn_session(
+                        session_id,
+                        &req.message,
+                        &ctx.model.name,
+                    )
+                    .await;
                 }
             }
 

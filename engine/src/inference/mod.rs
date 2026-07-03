@@ -16,7 +16,7 @@ pub struct InferenceResponse {
 }
 
 #[async_trait]
-pub trait InferenceBackend {
+pub trait InferenceBackend: Send + Sync {
     async fn call(&self, prompt: &str, model: &str) -> anyhow::Result<String>;
 
     async fn stream(
