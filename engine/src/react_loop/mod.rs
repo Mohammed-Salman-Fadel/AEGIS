@@ -33,6 +33,18 @@ const MAX_FILE_WRITE_BYTES: usize = 100_000;
 const MAX_SEARCH_RESULTS: usize = 50;
 const LIST_DIR_MAX_ENTRIES: usize = 100;
 const GIT_TIMEOUT_SECS: u64 = 15;
+const MAX_IMAGE_BYTES: u64 = 10_000_000; // 10 MB
+
+/// Shared HTTP client used by all tool implementations that make
+/// external HTTP requests (OCR, vision model).  Reuses connections
+/// and avoids the overhead of creating a new client per call.
+static SHARED_HTTP_CLIENT: once_cell::sync::Lazy<reqwest::Client> =
+    once_cell::sync::Lazy::new(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("Failed to create HTTP client")
+    });
 
 // ── public types ──────────────────────────────────────────────────────
 
@@ -78,6 +90,14 @@ pub struct ToolResult {
     pub tool_name: String,
     pub input: String,
     pub output: String,
+}
+
+/// Result from a ReAct loop execution, including token usage.
+#[derive(Debug, Clone)]
+pub struct ReActResult {
+    pub text: String,
+    pub prompt_tokens: Option<usize>,
+    pub completion_tokens: Option<usize>,
 }
 
 // ── react loop ────────────────────────────────────────────────────────
@@ -379,6 +399,22 @@ async fn execute_tool(
                 output,
             })
         }
+        ToolCall::Calculate(expr) => {
+            let output = calculate_expression(expr);
+            Ok(ToolResult {
+                tool_name: "calculate".into(),
+                input: expr.clone(),
+                output,
+            })
+        }
+        ToolCall::KnowledgeSearch(query) => {
+            let output = search_knowledge_base(query, rag_client, session_id).await;
+            Ok(ToolResult {
+                tool_name: "search_knowledge".into(),
+                input: query.clone(),
+                output,
+            })
+        }
         ToolCall::Rag(query) => {
             let outcome = rag_client.retrieve(query, 5, 0.0, session_id).await;
             let output = match outcome {
@@ -422,7 +458,7 @@ async fn execute_tool(
             })
         }
         ToolCall::OcrImage(path) => {
-            let output = ocr_image_command(path).await;
+            let output = ocr_image_command(path, &tx).await;
             Ok(ToolResult {
                 tool_name: "ocr_image".into(),
                 input: path.clone(),
@@ -430,7 +466,7 @@ async fn execute_tool(
             })
         }
         ToolCall::DescribeImage(path) => {
-            let output = describe_image_command(path).await;
+            let output = describe_image_command(path, &tx).await;
             Ok(ToolResult {
                 tool_name: "describe_image".into(),
                 input: path.clone(),
@@ -912,15 +948,39 @@ fn format_file_size(bytes: u64) -> String {
 }
 
 /// Extract text from an image using OCR (Tesseract via Python service).
-async fn ocr_image_command(path: &str) -> String {
+/// Sends the image as base64 in a JSON payload so no filesystem path is
+/// shared between the Rust engine and Python service.
+async fn ocr_image_command(path: &str, tx: &mpsc::Sender<String>) -> String {
     let safe_path = match validate_read_path(path) {
         Ok(p) => p,
         Err(e) => return format!("Could not access `{path}`: {e}"),
     };
 
-    let body = serde_json::json!({ "path": safe_path.to_string_lossy() });
-    let client = reqwest::Client::new();
-    let resp = client
+    let _ = tx.send("\n[REACT: reading image file...]\n".into()).await;
+
+    let image_bytes = match tokio::fs::read(&safe_path).await {
+        Ok(b) => {
+            if b.len() as u64 > MAX_IMAGE_BYTES {
+                return format!(
+                    "Image too large ({} bytes). Maximum is {} MB. Compress or resize first.",
+                    b.len(), MAX_IMAGE_BYTES / 1_000_000
+                );
+            }
+            b
+        }
+        Err(e) => return format!("Could not read `{path}`: {e}"),
+    };
+
+    let _ = tx.send("\n[REACT: sending to OCR service...]\n".into()).await;
+
+    let b64 = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(&image_bytes)
+    };
+
+    let body = serde_json::json!({ "image": b64, "filename": path });
+
+    let resp = SHARED_HTTP_CLIENT
         .post("http://127.0.0.1:8000/api/ocr")
         .json(&body)
         .timeout(std::time::Duration::from_secs(60))
@@ -957,19 +1017,31 @@ async fn ocr_image_command(path: &str) -> String {
 
 /// Generate a natural-language description of an image using a vision model.
 ///
-/// Calls Ollama's `/api/chat` endpoint with a vision model (`llava`,
-/// `moondream`, `qwen2.5-vl`, etc.).  The image is base64-encoded and
-/// sent inline so no file-system access is needed on the Ollama side.
-async fn describe_image_command(path: &str) -> String {
+/// Calls Ollama's `/api/chat` endpoint.  The vision model is read from the
+/// `VISION_MODEL` environment variable (default: `llava`).  The image is
+/// base64-encoded and sent inline so no file-system access is needed.
+async fn describe_image_command(path: &str, tx: &mpsc::Sender<String>) -> String {
     let safe_path = match validate_read_path(path) {
         Ok(p) => p,
         Err(e) => return format!("Could not access `{path}`: {e}"),
     };
 
+    let _ = tx.send("\n[REACT: reading image file...]\n".into()).await;
+
     let image_bytes = match tokio::fs::read(&safe_path).await {
-        Ok(b) => b,
+        Ok(b) => {
+            if b.len() as u64 > MAX_IMAGE_BYTES {
+                return format!(
+                    "Image too large ({} bytes). Maximum is {} MB. Compress or resize first.",
+                    b.len(), MAX_IMAGE_BYTES / 1_000_000
+                );
+            }
+            b
+        }
         Err(e) => return format!("Could not read `{path}`: {e}"),
     };
+
+    let _ = tx.send("\n[REACT: sending to vision model...]\n".into()).await;
 
     let b64 = {
         use base64::Engine;
@@ -980,8 +1052,10 @@ async fn describe_image_command(path: &str) -> String {
     let vision_prompt = "Describe this image in detail. Include any visible text, \
                          UI elements, diagrams, charts, or code. Be thorough.";
 
+    let vision_model = std::env::var("VISION_MODEL").unwrap_or_else(|_| "llava".to_string());
+
     let body = serde_json::json!({
-        "model": "llava",
+        "model": vision_model,
         "messages": [{
             "role": "user",
             "content": vision_prompt,
@@ -994,8 +1068,7 @@ async fn describe_image_command(path: &str) -> String {
     let ollama_url = std::env::var("OLLAMA_HOST")
         .unwrap_or_else(|_| "http://localhost:11434".to_string());
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = SHARED_HTTP_CLIENT
         .post(format!("{ollama_url}/api/chat"))
         .json(&body)
         .timeout(std::time::Duration::from_secs(120))
@@ -1006,8 +1079,10 @@ async fn describe_image_command(path: &str) -> String {
         Ok(r) if r.status().is_success() => {
             match r.json::<serde_json::Value>().await {
                 Ok(json) => {
-                    let text = json["message"]["content"]
-                        .as_str()
+                    let text = json
+                        .get("message")
+                        .and_then(|m| m.get("content"))
+                        .and_then(|c| c.as_str())
                         .unwrap_or("(no description returned)");
                     format!("Image Description:\n{text}")
                 }
@@ -1015,9 +1090,11 @@ async fn describe_image_command(path: &str) -> String {
             }
         }
         Ok(r) if r.status() == 404 => {
-            "Vision model not found. Run `ollama pull llava` to install \
-             a vision model, or use `ocr_image` for text extraction."
-                .to_string()
+            format!(
+                "Vision model `{vision_model}` not found. Run `ollama pull {vision_model}` or \
+                 set VISION_MODEL environment variable to an installed vision model. \
+                 Available models: llava, moondream, qwen2.5-vl, llama3.2-vision, minicpm-v"
+            )
         }
         Ok(r) => format!("Vision model returned error (HTTP {})", r.status()),
         Err(e) => {
@@ -1111,6 +1188,42 @@ fn parse_react_response(raw: &str) -> Result<ModelDecision> {
                     .map(|s| s.to_string());
                 ToolCall::SearchFiles(pattern.to_string(), dir)
             }
+            "calculate" | "calc" | "math" => {
+                let expr = args
+                    .get("expression")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("calculate tool missing 'expression' argument")
+                    })?;
+                ToolCall::Calculate(expr.to_string())
+            }
+            "git_status" | "git" => {
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("git_status tool missing 'path' argument")
+                    })?;
+                ToolCall::GitStatus(path.to_string())
+            }
+            "list_directory" | "ls" => {
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("list_directory tool missing 'path' argument")
+                    })?;
+                ToolCall::ListDirectory(path.to_string())
+            }
+            "search_knowledge" | "knowledge" => {
+                let query = args
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("search_knowledge tool missing 'query' argument")
+                    })?;
+                ToolCall::KnowledgeSearch(query.to_string())
+            }
             "read_file" | "read" => {
                 let path = args
                     .get("path")
@@ -1161,7 +1274,7 @@ fn parse_react_response(raw: &str) -> Result<ModelDecision> {
             }
             other => {
                 anyhow::bail!(
-                    "Unknown tool `{other}`. Valid tools: search, read_file, write_file, search_files, run_terminal, rag, zotero"
+                    "Unknown tool `{other}`. Valid tools: search, read_file, write_file, search_files, run_terminal, git_status, list_directory, calculate, search_knowledge, ocr_image, describe_image, rag, zotero"
                 )
             }
         };
@@ -1233,6 +1346,26 @@ search_files(pattern, dir) — Search for files by name.
   target, and .git.
   Example: search_files("test", "src")
   Example: search_files("Cargo.toml")
+
+search_knowledge(query) — Search the persistent knowledge base.
+  Use this to retrieve information from previously indexed documents
+  or past conversations. Returns relevant text excerpts with
+  relevance scores. Indexed documents persist across sessions.
+  Example: search_knowledge("authentication flow")
+
+ocr_image(path) — Extract text from an image using OCR.
+  Use this for screenshots, scanned documents, or photos containing
+  text. Routes through the Python RAG service with Tesseract OCR.
+  Best for code screenshots, document scans, and terminal output.
+  Examples: ocr_image("screenshot.png")
+
+describe_image(path) — Generate a detailed description of an image.
+  Use this for UI layouts, diagrams, charts, architecture drawings,
+  or any image where visual understanding matters more than exact
+  text. Uses Ollama vision model (llava). Falls back gracefully if
+  no vision model is loaded.
+  Tip: The tool name is "describe_image", "vision", or "describe".
+  Example: describe_image("diagram.png")
 
 HOW TO RESPOND
 
@@ -1512,5 +1645,52 @@ mod tests {
         // rejection message.
         let result = run_terminal_command("cargo check").await;
         assert!(!result.contains("rejected"));
+    }
+
+    // ── ocr_image / describe_image parsing ──────────────────────────
+
+    #[test]
+    fn parses_ocr_image_tool() {
+        let input = r#"{"thought":"ocr","tool":"ocr_image","arguments":{"path":"screenshot.png"}}"#;
+        match parse_react_response(input).unwrap() {
+            ModelDecision::Tool(ToolCall::OcrImage(p)) => assert_eq!(p, "screenshot.png"),
+            _ => panic!("Expected Tool(OcrImage)"),
+        }
+    }
+
+    #[test]
+    fn parses_ocr_alias() {
+        let input = r#"{"thought":"ocr","tool":"ocr","arguments":{"path":"test.png"}}"#;
+        match parse_react_response(input).unwrap() {
+            ModelDecision::Tool(ToolCall::OcrImage(p)) => assert_eq!(p, "test.png"),
+            _ => panic!("Expected Tool(OcrImage)"),
+        }
+    }
+
+    #[test]
+    fn parses_describe_image_tool() {
+        let input = r#"{"thought":"describe","tool":"describe_image","arguments":{"path":"diagram.png"}}"#;
+        match parse_react_response(input).unwrap() {
+            ModelDecision::Tool(ToolCall::DescribeImage(p)) => assert_eq!(p, "diagram.png"),
+            _ => panic!("Expected Tool(DescribeImage)"),
+        }
+    }
+
+    #[test]
+    fn parses_vision_alias() {
+        let input = r#"{"thought":"describe","tool":"vision","arguments":{"path":"chart.png"}}"#;
+        match parse_react_response(input).unwrap() {
+            ModelDecision::Tool(ToolCall::DescribeImage(p)) => assert_eq!(p, "chart.png"),
+            _ => panic!("Expected Tool(DescribeImage)"),
+        }
+    }
+
+    #[test]
+    fn parses_describe_alias() {
+        let input = r#"{"thought":"describe","tool":"describe","arguments":{"path":"arch.png"}}"#;
+        match parse_react_response(input).unwrap() {
+            ModelDecision::Tool(ToolCall::DescribeImage(p)) => assert_eq!(p, "arch.png"),
+            _ => panic!("Expected Tool(DescribeImage)"),
+        }
     }
 }

@@ -3,6 +3,7 @@
 //! Called by: `POST /projects/ingest`
 //! Calls into: `Orchestrator.rag_client`
 
+use std::path::Path;
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use crate::network::state::AppState;
@@ -41,9 +42,51 @@ pub async fn ingest_project_files(
         }
     }
 
+    // Canonicalize the project dir so we can validate paths against it.
+    let canonical_project_dir = project_dir.canonicalize().unwrap_or(project_dir.clone());
+
     let mut indexed = 0usize;
     for file in &payload.files {
-        let file_path = project_dir.join(&file.path);
+        // Path traversal guard: reject paths with `..` segments.
+        if file.path.contains("..") {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Path traversal rejected: `{}`", file.path),
+            ));
+        }
+        let file_path = canonical_project_dir.join(&file.path);
+        // Verify the resolved path stays within the project directory.
+        match file_path.canonicalize() {
+            Ok(resolved) => {
+                if !resolved.starts_with(&canonical_project_dir) {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("Access denied: `{}` resolves outside project directory", file.path),
+                    ));
+                }
+            }
+            // File doesn't exist yet (will be created) — validate parent.
+            Err(_) => {
+                if let Some(parent) = file_path.parent() {
+                    match parent.canonicalize() {
+                        Ok(canon_parent) => {
+                            if !canon_parent.starts_with(&canonical_project_dir) {
+                                return Err((
+                                    StatusCode::BAD_REQUEST,
+                                    format!("Access denied: `{}` resolves outside project directory", file.path),
+                                ));
+                            }
+                        }
+                        Err(_) => {
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                format!("Parent directory does not exist for `{}`", file.path),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         if let Some(parent) = file_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }

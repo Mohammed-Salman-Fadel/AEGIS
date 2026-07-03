@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use axum::{
     Json,
     extract::State,
@@ -11,6 +12,35 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::network::state::AppState;
+
+/// Resolve the project filesystem path from a project ID.
+/// Mirrors the logic in `projects.rs::dirs_project_dir`.
+fn resolve_project_path(project_id: &str) -> Option<PathBuf> {
+    let sanitized: String = project_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let base = std::env::var("AEGIS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                std::env::var("APPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("AEGIS")
+            } else {
+                std::env::var("XDG_DATA_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        std::env::var("HOME")
+                            .map(|h| PathBuf::from(h).join(".local/share"))
+                            .unwrap_or_else(|_| PathBuf::from("."))
+                    })
+                    .join("AEGIS")
+            }
+        });
+    Some(base.join("projects").join(sanitized))
+}
 
 /// Incoming JSON body for POST /chat
 #[derive(Deserialize)]

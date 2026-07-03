@@ -1,4 +1,5 @@
 use anyhow::Context;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 use tracing::warn;
@@ -13,6 +14,35 @@ use crate::memory_store::{MemoryStore, Session, SessionSummary};
 use crate::model_registry::{ModelRegistry, DEFAULT_CONTEXT_WINDOW};
 use crate::network::handlers::chat::ChatRequest;
 use crate::plan_parser::{PlanParser, StepResult};
+
+/// Resolve the project filesystem path from a project ID.
+/// Mirrors the logic in `projects.rs::dirs_project_dir`.
+pub fn resolve_project_path(project_id: &str) -> Option<PathBuf> {
+    let sanitized: String = project_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let base = std::env::var("AEGIS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                std::env::var("APPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("AEGIS")
+            } else {
+                std::env::var("XDG_DATA_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        std::env::var("HOME")
+                            .map(|h| PathBuf::from(h).join(".local/share"))
+                            .unwrap_or_else(|_| PathBuf::from("."))
+                    })
+                    .join("AEGIS")
+            }
+        });
+    Some(base.join("projects").join(sanitized))
+}
 use crate::prompt_builder::{format_history, PromptBuilder};
 use crate::provider_registry::ProviderRegistry;
 use crate::rag_client::RagClient;
@@ -697,11 +727,21 @@ impl Orchestrator {
     /// The core logic for handling queries using a fallback-to-synthesis approach.
     async fn handle_fallback(
         &self,
-        req: ChatRequest,
+        mut req: ChatRequest,
         working_session_id: String,
         persisted_session_id: Option<String>,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<String> {
+        // If code_project_path is not provided but code_project_id is,
+        // resolve the project directory from the ID.
+        if req.code_project_path.is_none() {
+            if let Some(ref project_id) = req.code_project_id {
+                let resolved = resolve_project_path(project_id);
+                if let Some(p) = resolved {
+                    req.code_project_path = Some(p.to_string_lossy().to_string());
+                }
+            }
+        }
         let mut session = if let Some(session_id) = persisted_session_id.as_deref() {
             self.memory_store
                 .get_session(session_id)

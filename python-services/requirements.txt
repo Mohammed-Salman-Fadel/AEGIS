@@ -9,3 +9,7 @@ PyMuPDF==1.27.2.3
 # This requires downloading the model weights on the first run or placing them in the models directory.
 sentence-transformers==5.4.1
 semble[mcp]
+
+# OCR dependencies
+pytesseract>=0.3.10
+Pillow>=10.0.0

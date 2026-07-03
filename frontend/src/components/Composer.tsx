@@ -1,5 +1,6 @@
 // Chat composer footer with textarea, tools menu (import/calendar/export), voice, and send button
-import { Upload, Calendar, Download, Wrench, ChevronDown, Mic, Send, Check, FolderOpen, X, BookOpen } from 'lucide-react';
+import { useState } from 'react';
+import { Upload, Calendar, Download, Wrench, ChevronDown, Mic, Send, Check, FolderOpen, X, BookOpen, Image, Edit3, Clock } from 'lucide-react';
 import type { IndexedDocument, CodeProject, ContextUsage } from '../types';
 import { importPhaseLabel, fitTextareaToContent, personalizeWelcomeMessage } from '../lib';
 import { useTranslate } from '../lib/i18n';
@@ -26,9 +27,11 @@ interface ComposerProps {
   projectEditMessage: string | null;
   tokenMeterLabel: string;
   contextUsage: ContextUsage;
+  messageQueue: string[];
   activeWelcomeMessage: string;
   profileText: string;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
+  imageFileInputRef: React.RefObject<HTMLInputElement | null>;
   composerTextareaRef: React.RefObject<HTMLTextAreaElement | null>;
   onInputChange: (value: string) => void;
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
@@ -39,9 +42,14 @@ interface ComposerProps {
   obsidianEnabled: boolean;
   onObsidianOpen: () => void;
   onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onImageUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onClearDocuments: () => void;
   onVoiceModeOpen: () => void;
   onDetachProject: () => void;
+  onRemoveFromQueue: (index: number) => void;
+  onEditFromQueue: (index: number) => void;
+  onSaveQueueEdit: () => void;
+  queueEditIndex: number | null;
 }
 
 export function Composer({
@@ -51,12 +59,16 @@ export function Composer({
   indexedDocuments, indexedDocumentLabel, indexedChunkCount,
   documentContextNotice, activeProject, projectEditMessage,
   tokenMeterLabel, contextUsage,
+  messageQueue,
   activeWelcomeMessage, profileText,
-  fileInputRef, composerTextareaRef,
+  fileInputRef, imageFileInputRef, composerTextareaRef,
   obsidianEnabled, onInputChange, onSubmit, onToggleTools, onImportClick, onCalendarOpen, onExportPdf, onObsidianOpen,
-  onFileUpload, onClearDocuments, onVoiceModeOpen, onDetachProject,
+  onFileUpload, onImageUpload, onClearDocuments, onVoiceModeOpen, onDetachProject,
+  onRemoveFromQueue, onEditFromQueue, onSaveQueueEdit, queueEditIndex,
 }: ComposerProps) {
   const { t, lang } = useTranslate();
+  const [queueExpanded, setQueueExpanded] = useState(false);
+
   return (
     <footer className={`px-4 transition-all duration-500 ease-out ${
       showCenteredComposer
@@ -141,12 +153,79 @@ export function Composer({
         </div>
       )}
 
+      {/* ── Message queue display ── */}
+      {messageQueue.length > 0 && (
+        <div className="mx-auto mb-1 max-w-3xl">
+          <button
+            className={`flex w-full items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[11px] transition-all duration-200 ${isDark ? 'border-amber-800/40 bg-amber-950/20 text-amber-400 hover:bg-amber-950/40' : 'border-amber-300/50 bg-amber-50/70 text-amber-700 hover:bg-amber-100/80'}`}
+            onClick={() => setQueueExpanded(!queueExpanded)}
+            type="button"
+          >
+            <span className="font-medium">{queueEditIndex !== null ? 'Editing...' : 'Queue'}</span>
+            <span className={`text-[10px] opacity-50 ${isDark ? 'text-amber-400' : 'text-amber-700'}`}>
+              {queueEditIndex !== null
+                ? `item ${queueEditIndex + 1} of ${messageQueue.length}`
+                : messageQueue.length > 1
+                  ? `·  ${messageQueue.length} messages`
+                  : '·  1 message'}
+            </span>
+            {queueEditIndex !== null ? (
+              <button
+                className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-semibold ${isDark ? 'bg-amber-600/30 text-amber-300 hover:bg-amber-600/50' : 'bg-amber-500/20 text-amber-800 hover:bg-amber-500/30'}`}
+                onClick={(e) => { e.stopPropagation(); onSaveQueueEdit(); }}
+                type="button"
+              >
+                Save
+              </button>
+            ) : (
+              <ChevronDown size={11} className={`ml-auto shrink-0 transition-transform duration-200 ${queueExpanded ? 'rotate-180' : ''}`} />
+            )}
+          </button>
+
+          <div
+            className={`overflow-hidden transition-all duration-250 ease-in-out ${
+              queueExpanded ? 'max-h-48 opacity-100 mt-0.5' : 'max-h-0 opacity-0'
+            }`}
+          >
+            <div className={`rounded-md border p-1.5 ${isDark ? 'border-amber-800/20 bg-amber-950/15' : 'border-amber-300/20 bg-amber-50/60'}`}>
+              <div className="max-h-36 space-y-0.5 overflow-y-auto">
+                {messageQueue.map((msg, i) => (
+                  <div key={i} className={`group flex items-center gap-1.5 rounded px-1.5 py-1 text-[11px] ${isDark ? 'text-amber-300/70 hover:bg-amber-950/20' : 'text-amber-800/70 hover:bg-amber-50'}`}>
+                    <span className={`w-3 shrink-0 text-right text-[10px] font-mono ${isDark ? 'text-amber-400/50' : 'text-amber-700/50'}`}>{i + 1}.</span>
+                    <span className="min-w-0 flex-1 truncate">{msg}</span>
+                    <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                      <button
+                        className={`rounded p-0.5 ${isDark ? 'text-amber-400/60 hover:text-amber-300' : 'text-amber-700/60 hover:text-amber-600'}`}
+                        onClick={() => onEditFromQueue(i)}
+                        title="Edit message"
+                        type="button"
+                      >
+                        <Edit3 size={11} />
+                      </button>
+                      <button
+                        className={`rounded p-0.5 ${isDark ? 'text-amber-400/60 hover:text-red-400' : 'text-amber-700/60 hover:text-red-600'}`}
+                        onClick={() => onRemoveFromQueue(i)}
+                        title="Remove from queue"
+                        type="button"
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <form className={`pointer-events-auto mx-auto transition-all duration-500 ease-out ${showCenteredComposer ? 'max-w-2xl' : 'max-w-3xl'} ${showCenteredComposer ? 'mt-0' : ''}`} onSubmit={onSubmit}>
         <input accept=".pdf,.txt" className="hidden" disabled={isStreaming || isUploading} multiple onChange={onFileUpload} ref={fileInputRef} title="Supported files: PDF, TXT" type="file" />
+        <input accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" className="hidden" disabled={isStreaming} onChange={onImageUpload} ref={imageFileInputRef} title="Supported image files: PNG, JPG, GIF, WEBP, BMP" type="file" />
         <div className={`border shadow-sm transition-all duration-500 ease-out ${showCenteredComposer ? 'rounded-[1.75rem] px-4 pb-3 pt-3' : 'rounded-xl px-3 pb-2.5 pt-3'} ${isDark ? 'border-zinc-800 bg-zinc-950/92 text-zinc-100 shadow-black/30' : 'border-stone-300 bg-white text-slate-900 shadow-stone-300/30'}`}>
           <textarea
             className={`w-full resize-none bg-transparent text-sm leading-6 outline-none ${showCenteredComposer ? 'max-h-28 min-h-[30px]' : 'max-h-44 min-h-[38px]'} ${isDark ? 'placeholder:text-zinc-500' : 'placeholder:text-slate-400'}`}
-            disabled={isStreaming}
+            disabled={isStreaming && isUploading}
             onChange={(e) => onInputChange(e.target.value)}
             onInput={(e) => fitTextareaToContent(e.currentTarget)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
@@ -179,6 +258,9 @@ export function Composer({
                   <button className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} disabled={false} onClick={onExportPdf} type="button">
                     <Download size={15} /> {t('composer.export')}
                   </button>
+                  <button className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} disabled={isStreaming} onClick={() => imageFileInputRef.current?.click()} type="button">
+                    <Image size={15} /> Image
+                  </button>
                   {obsidianEnabled && (
                     <button className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm disabled:opacity-50 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onObsidianOpen} type="button">
                       <BookOpen size={15} /> Obsidian
@@ -200,12 +282,21 @@ export function Composer({
                 <Mic size={19} />
               </button>
               <button
-                className="aegis-accent-solid inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white disabled:opacity-60"
-                disabled={isStreaming || !input.trim() || isUploading}
+                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white transition-all duration-200 ${isStreaming && input.trim() ? 'aegis-accent-chip-active' : 'aegis-accent-solid'} disabled:opacity-60`}
+                disabled={isStreaming && !input.trim()}
                 type="submit"
               >
-                    <span>{t('composer.send')}</span>
+                {isStreaming && input.trim() ? (
+                  <>
+                    <Clock size={15} />
+                    <span>Queue</span>
+                  </>
+                ) : (
+                  <>
                     <Send size={15} />
+                    <span>{t('composer.send')}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

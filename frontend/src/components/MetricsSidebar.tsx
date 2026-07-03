@@ -31,11 +31,11 @@ export function MetricsSidebar({
   const t = useT();
   return (
     <aside
-      className={`flex shrink-0 flex-col border-l transition-all duration-300 ease-in-out ${isMetricsOpen ? 'w-72' : 'w-0 border-transparent p-0'} ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
+      className={`flex shrink-0 flex-col border-l transition-all duration-300 ease-in-out ${isMetricsOpen ? 'w-72' : 'w-0 border-transparent p-0'} aegis-bg-surface aegis-border-subtle`}
     >
       <div className={`flex h-full flex-col overflow-hidden ${isMetricsOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
-        <div className="flex h-16 shrink-0 items-center justify-between px-6 border-b dark:border-zinc-900 border-stone-200">
-            <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">
+        <div className="flex h-16 shrink-0 items-center justify-between px-6 border-b aegis-border-subtle">
+            <div className="text-xs font-bold uppercase tracking-wider aegis-text-muted">
               {metricsTab === 'sources' ? t('metrics.sources') : t('metrics.performance')}
             </div>
           <button
@@ -47,7 +47,7 @@ export function MetricsSidebar({
           </button>
         </div>
 
-        <div className={`flex border-b shrink-0 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
+        <div className={`flex border-b shrink-0 aegis-border-subtle`}>
           <button
             className={`flex-1 py-3 text-center text-[10px] font-bold uppercase tracking-wider transition ${metricsTab === 'metrics' ? 'border-b-2 border-emerald-500 text-emerald-500' : isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-slate-500 hover:text-slate-700'}`}
             onClick={() => onSetMetricsTab('metrics')}
@@ -134,7 +134,7 @@ export function MetricsSidebar({
         ) : (
           <div className="flex-1 space-y-8 overflow-y-auto p-6">
             <div className="space-y-4">
-              <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">System Resources</div>
+            <div className="text-xs font-semibold uppercase tracking-wider aegis-text-muted">System Resources</div>
               <div>
                 <div className="mb-2 flex justify-between text-xs">
                     <span className={isDark ? 'text-zinc-400' : 'text-slate-500'}>{t('metrics.cpu')}</span>
@@ -155,34 +155,34 @@ export function MetricsSidebar({
               </div>
             </div>
 
-            <div className={`h-px w-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`} />
+            <div className={`h-px w-full aegis-border-subtle`} />
 
             <div>
-              <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">Inference Engine</div>
+              <div className="mb-4 text-xs font-semibold uppercase tracking-wider aegis-text-muted">Inference Engine</div>
               <div className="grid grid-cols-2 gap-3">
-                <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-1 text-[10px] uppercase text-zinc-500">{t('metrics.latency')}</div>
+                <div className={`rounded-lg border p-3 aegis-bg-accent-tint aegis-border-subtle`}>
+                    <div className="mb-1 text-[10px] uppercase aegis-text-muted">{t('metrics.latency')}</div>
                     <div className="font-mono text-sm font-semibold">{inferenceStats.latency > 0 ? `${(inferenceStats.latency / 1000).toFixed(2)}s` : '---'}</div>
                   </div>
-                  <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-1 text-[10px] uppercase text-zinc-500">{t('metrics.tps')}</div>
+                  <div className={`rounded-lg border p-3 aegis-bg-accent-tint aegis-border-subtle`}>
+                    <div className="mb-1 text-[10px] uppercase aegis-text-muted">{t('metrics.tps')}</div>
                     <div className="font-mono text-sm font-semibold">{inferenceStats.tps > 0 ? `${inferenceStats.tps}` : '---'}</div>
                   </div>
-                  <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-1 text-[10px] uppercase text-zinc-500">{t('metrics.ttft')}</div>
+                  <div className={`rounded-lg border p-3 aegis-bg-accent-tint aegis-border-subtle`}>
+                    <div className="mb-1 text-[10px] uppercase aegis-text-muted">{t('metrics.ttft')}</div>
                     <div className="font-mono text-sm font-semibold">{inferenceStats.ttft > 0 ? `${inferenceStats.ttft}ms` : '---'}</div>
                   </div>
-                  <div className={`rounded-lg border p-3 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-1 text-[10px] uppercase text-zinc-500">{t('metrics.rag_delay')}</div>
+                  <div className={`rounded-lg border p-3 aegis-bg-accent-tint aegis-border-subtle`}>
+                    <div className="mb-1 text-[10px] uppercase aegis-text-muted">{t('metrics.rag_delay')}</div>
                   <div className="font-mono text-sm font-semibold">{inferenceStats.ragTime > 0 ? `${inferenceStats.ragTime}ms` : '---'}</div>
                 </div>
               </div>
             </div>
 
-            <div className={`h-px w-full ${isDark ? 'bg-zinc-800' : 'bg-stone-200'}`} />
+            <div className={`h-px w-full aegis-border-subtle`} />
 
             <div>
-              <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">RAG Engine Analysis</div>
+              <div className="mb-4 text-xs font-semibold uppercase tracking-wider aegis-text-muted">RAG Engine Analysis</div>
               <div className="space-y-4">
                 <div>
                   <div className="mb-1.5 flex justify-between text-[11px]">
@@ -194,19 +194,19 @@ export function MetricsSidebar({
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">{t('metrics.chunks')}</div>
+                  <div className={`rounded-lg border p-2 aegis-bg-accent-tint aegis-border-subtle`}>
+                    <div className="mb-0.5 text-[9px] uppercase aegis-text-muted">{t('metrics.chunks')}</div>
                     <div className="font-mono text-xs font-semibold">{inferenceStats.chunks || '0'}</div>
                   </div>
-                  <div className={`rounded-lg border p-2 ${isDark ? 'border-zinc-800 bg-zinc-900/40' : 'border-stone-300 bg-white'}`}>
-                    <div className="mb-0.5 text-[9px] uppercase text-zinc-500">{t('metrics.backend')}</div>
+                  <div className={`rounded-lg border p-2 aegis-bg-accent-tint aegis-border-subtle`}>
+                    <div className="mb-0.5 text-[9px] uppercase aegis-text-muted">{t('metrics.backend')}</div>
                     <div className="truncate font-mono text-[10px] font-semibold">{inferenceStats.backend}</div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className={`rounded-lg p-3 text-[11px] leading-relaxed ${isDark ? 'bg-zinc-900/60 text-zinc-500' : 'bg-stone-100 text-slate-500'}`}>
+            <div className={`rounded-lg p-3 text-[11px] leading-relaxed aegis-bg-accent-tint aegis-text-muted`}>
               {t('metrics.disclaimer')}
             </div>
           </div>

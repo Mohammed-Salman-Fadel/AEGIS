@@ -40,6 +40,7 @@ interface SidebarProps {
   onTogglePinned: (id: string) => void;
   onDeleteSession: (session: EngineSessionSummary) => void;
   onSetSessionMenuOpen: (id: string | null) => void;
+  staleProjectIds: Set<string>;
 }
 
 export function Sidebar({
@@ -47,16 +48,17 @@ export function Sidebar({
   codeProjects, activeProjectId, sessions, sortedSessions, activeSessionId,
   editingSessionId, editingTitle, deletingSessionIds, newSessionPulseId,
   pinnedSessionIdSet, sessionMenuOpenId,
-  onToggleSidebar, onToggleProjects, onToggleSessions, onNewSession, onAddProject,
-  onSelectProject, onRemoveProject, onSelectSession, onBeginRenaming, onSubmitRenaming,
-  onCancelRenaming, onEditingTitleChange, onExportSession, onTogglePinned, onDeleteSession,
-  onSetSessionMenuOpen,
-}: SidebarProps) {
+ onToggleSidebar, onToggleProjects, onToggleSessions, onNewSession, onAddProject,
+ onSelectProject, onRemoveProject, onSelectSession, onBeginRenaming, onSubmitRenaming,
+ onCancelRenaming, onEditingTitleChange, onExportSession, onTogglePinned, onDeleteSession,
+ onSetSessionMenuOpen,
+ staleProjectIds,
+ }: SidebarProps) {
   const t = useT();
   return (
     <aside
       aria-hidden={!sidebarOpen}
-      className={`shrink-0 overflow-hidden border-r transition-[width] duration-300 ease-out ${sidebarOpen ? 'w-64' : 'w-0 pointer-events-none'} ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}
+      className={`shrink-0 overflow-hidden border-r transition-[width] duration-300 ease-out ${sidebarOpen ? 'w-64' : 'w-0 pointer-events-none'} aegis-bg-surface aegis-border-subtle`}
     >
       <div className={`flex h-full w-64 shrink-0 flex-col py-4 pl-2 pr-4 transition-opacity duration-150 ease-out ${sidebarOpen ? 'opacity-100 delay-100' : 'opacity-0'}`}>
         <div className="mb-6">
@@ -124,6 +126,9 @@ export function Sidebar({
                         type="button"
                       >
                         <FolderOpen className={isActiveProject ? 'text-emerald-400' : ''} size={16} />
+                        {staleProjectIds.has(project.id) && (
+                          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-[7px] font-bold text-amber-400" title="Project access lost — re-add to enable editing">!</span>
+                        )}
                         <span className="min-w-0">
                           <span className="block truncate text-sm">{project.name}</span>
                           <span className={`block truncate text-[11px] ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>

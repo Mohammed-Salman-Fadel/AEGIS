@@ -92,12 +92,12 @@ export function SettingsPanel({
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 ${settingsClosing ? 'aegis-modal-backdrop-out' : 'aegis-modal-backdrop'}`} onClick={onClose}>
       <div
-        className={`flex min-h-[340px] max-h-[calc(100dvh-2rem)] overflow-hidden rounded-2xl border shadow-2xl ${settingsClosing ? 'aegis-modal-panel-out' : 'aegis-modal-panel'} ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
+        className={`flex min-h-[340px] max-h-[calc(100dvh-2rem)] overflow-hidden rounded-2xl border shadow-2xl ${settingsClosing ? 'aegis-modal-panel-out' : 'aegis-modal-panel'} aegis-bg-surface aegis-border-subtle aegis-text-base`}
         style={{ aspectRatio: '1.18 / 1', width: 'min(84vw, calc((100dvh - 2rem) * 1.18), 70rem)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <aside className={`w-48 shrink-0 border-r p-4 ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-200 bg-stone-50'}`}>
-          <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+        <aside className={`w-48 shrink-0 border-r p-4 aegis-bg-base aegis-border-subtle`}>
+          <div className="mb-8 flex items-center gap-2 text-sm font-semibold">
             <Settings size={16} />
             {t('settings.title')}
           </div>
@@ -132,7 +132,7 @@ export function SettingsPanel({
             </div>
           )}
 
-          <div className="settings-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+          <div className="settings-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-5 aegis-bg-base">
             {settingsTab === 'general' && (
               <div className="space-y-5">
                 <div>

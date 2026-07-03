@@ -136,3 +136,31 @@ def configure_voice(keep_cached: bool):
         return {"status": "ok", "keep_cached": keep_cached}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/ocr")
+async def ocr_image(file: UploadFile = File(None), body: dict = None):
+    """Extracts text from an uploaded image using Tesseract OCR.
+    Accepts either a file upload (multipart) or base64-encoded image in JSON body ({"image": "<base64>", "filename": "image.png"})."""
+    try:
+        from PIL import Image
+        import pytesseract
+        import io
+        import base64
+
+        if file:
+            content = await file.read()
+        elif body and "image" in body:
+            content = base64.b64decode(body["image"])
+        else:
+            raise HTTPException(status_code=400, detail="No image provided. Upload a file or send base64 data.")
+
+        image = Image.open(io.BytesIO(content))
+        text = pytesseract.image_to_string(image)
+        return {"text": text}
+    except ImportError as e:
+        raise HTTPException(
+            status_code=500,
+            detail="OCR dependencies not installed. Run: pip install pytesseract Pillow"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

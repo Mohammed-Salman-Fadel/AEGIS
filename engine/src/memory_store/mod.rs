@@ -280,7 +280,8 @@ impl FileSessionStore {
     }
 
     async fn latest_prompt_token_usage(&self, session_id: &str) -> anyhow::Result<Option<usize>> {
-        Ok(self
+        // First, try to get the stored prompt_tokens from the last turn.
+        if let Some(tokens) = self
             .read_session_file(session_id)
             .await?
             .and_then(|session| {
@@ -289,7 +290,31 @@ impl FileSessionStore {
                     .iter()
                     .rev()
                     .find_map(|turn| turn.prompt_tokens)
-            }))
+            })
+        {
+            return Ok(Some(tokens));
+        }
+
+        // Fallback: estimate from the total character count of all turns.
+        // For English text, ~4 chars per token is a reasonable estimate.
+        // This handles backends that don't report token usage (moa, deepseek, etc.).
+        let total_chars: usize = self
+            .read_session_file(session_id)
+            .await?
+            .map(|session| {
+                session
+                    .turns
+                    .iter()
+                    .map(|turn| turn.query.len() + turn.response.len() + 50)
+                    .sum()
+            })
+            .unwrap_or(0);
+
+        if total_chars > 0 {
+            Ok(Some(total_chars / 4 + 10))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn rename_session(&self, session_id: &str, title: &str) -> anyhow::Result<Session> {

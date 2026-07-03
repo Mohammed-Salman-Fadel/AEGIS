@@ -173,6 +173,18 @@
   --aegis-accent-500: #34d399;
   --aegis-accent-600: #10b981;
   --aegis-accent-700: #059669;
+  --aegis-accent-tint-dark: rgba(16, 185, 129, 0.08);
+  --aegis-bg-base-dark: #09090b;
+  --aegis-bg-surface-dark: #18181b;
+  --aegis-text-base-dark: #f4f4f5;
+  --aegis-text-muted-dark: #a1a1aa;
+  --aegis-border-dark: rgba(255, 255, 255, 0.06);
+  --aegis-accent-tint-light: rgba(16, 185, 129, 0.06);
+  --aegis-bg-base-light: #f5f5f0;
+  --aegis-bg-surface-light: #ffffff;
+  --aegis-text-base-light: #1c1917;
+  --aegis-text-muted-light: #78716c;
+  --aegis-border-light: rgba(0, 0, 0, 0.08);
 }
 
 .aegis-theme-terminal {
@@ -180,6 +192,18 @@
   --aegis-accent-500: #86efac;
   --aegis-accent-600: #4ade80;
   --aegis-accent-700: #22c55e;
+  --aegis-accent-tint-dark: rgba(74, 222, 128, 0.06);
+  --aegis-bg-base-dark: #020202;
+  --aegis-bg-surface-dark: #0a0a0f;
+  --aegis-text-base-dark: #e2e8f0;
+  --aegis-text-muted-dark: #94a3b8;
+  --aegis-border-dark: rgba(74, 222, 128, 0.08);
+  --aegis-accent-tint-light: rgba(74, 222, 128, 0.05);
+  --aegis-bg-base-light: #f7fee7;
+  --aegis-bg-surface-light: #ffffff;
+  --aegis-text-base-light: #1a2e05;
+  --aegis-text-muted-light: #65a30d;
+  --aegis-border-light: rgba(74, 222, 128, 0.12);
 }
 
 .aegis-theme-ocean {
@@ -187,6 +211,18 @@
   --aegis-accent-500: #7dd3fc;
   --aegis-accent-600: #38bdf8;
   --aegis-accent-700: #0284c7;
+  --aegis-accent-tint-dark: rgba(56, 189, 248, 0.06);
+  --aegis-bg-base-dark: #020617;
+  --aegis-bg-surface-dark: #0f172a;
+  --aegis-text-base-dark: #f0f9ff;
+  --aegis-text-muted-dark: #93c5fd;
+  --aegis-border-dark: rgba(56, 189, 248, 0.06);
+  --aegis-accent-tint-light: rgba(56, 189, 248, 0.05);
+  --aegis-bg-base-light: #f0f9ff;
+  --aegis-bg-surface-light: #ffffff;
+  --aegis-text-base-light: #0c4a6e;
+  --aegis-text-muted-light: #0284c7;
+  --aegis-border-light: rgba(56, 189, 248, 0.10);
 }
 
 .aegis-theme-ember {
@@ -194,6 +230,18 @@
   --aegis-accent-500: #fdba74;
   --aegis-accent-600: #fb923c;
   --aegis-accent-700: #c2410c;
+  --aegis-accent-tint-dark: rgba(251, 146, 60, 0.06);
+  --aegis-bg-base-dark: #0c0a09;
+  --aegis-bg-surface-dark: #1c1917;
+  --aegis-text-base-dark: #fefce8;
+  --aegis-text-muted-dark: #d6d3d1;
+  --aegis-border-dark: rgba(251, 146, 60, 0.06);
+  --aegis-accent-tint-light: rgba(251, 146, 60, 0.05);
+  --aegis-bg-base-light: #fff7ed;
+  --aegis-bg-surface-light: #ffffff;
+  --aegis-text-base-light: #431407;
+  --aegis-text-muted-light: #c2410c;
+  --aegis-border-light: rgba(251, 146, 60, 0.12);
 }
 
 .aegis-theme-rose {
@@ -201,6 +249,18 @@
   --aegis-accent-500: #f9a8d4;
   --aegis-accent-600: #f472b6;
   --aegis-accent-700: #db2777;
+  --aegis-accent-tint-dark: rgba(244, 114, 182, 0.06);
+  --aegis-bg-base-dark: #14040d;
+  --aegis-bg-surface-dark: #2a0f1e;
+  --aegis-text-base-dark: #fdf2f8;
+  --aegis-text-muted-dark: #fbcfe8;
+  --aegis-border-dark: rgba(244, 114, 182, 0.06);
+  --aegis-accent-tint-light: rgba(244, 114, 182, 0.04);
+  --aegis-bg-base-light: #fff1f2;
+  --aegis-bg-surface-light: #ffffff;
+  --aegis-text-base-light: #4c0519;
+  --aegis-text-muted-light: #be185d;
+  --aegis-border-light: rgba(244, 114, 182, 0.10);
 }
 
 .aegis-theme-slate {
@@ -208,6 +268,71 @@
   --aegis-accent-500: #cbd5e1;
   --aegis-accent-600: #94a3b8;
   --aegis-accent-700: #475569;
+  --aegis-accent-tint-dark: rgba(148, 163, 184, 0.06);
+  --aegis-bg-base-dark: #0b1222;
+  --aegis-bg-surface-dark: #182233;
+  --aegis-text-base-dark: #f1f5f9;
+  --aegis-text-muted-dark: #cbd5e1;
+  --aegis-border-dark: rgba(148, 163, 184, 0.06);
+  --aegis-accent-tint-light: rgba(148, 163, 184, 0.06);
+  --aegis-bg-base-light: #f8fafc;
+  --aegis-bg-surface-light: #ffffff;
+  --aegis-text-base-light: #1e293b;
+  --aegis-text-muted-light: #64748b;
+  --aegis-border-light: rgba(148, 163, 184, 0.10);
+}
+
+/* ── Theme-aware backgrounds and text utilities ─────────────────────── */
+
+.aegis-bg-base {
+  background: var(--aegis-bg-base-dark);
+}
+.aegis-shell.aegis-mode-light .aegis-bg-base {
+  background: var(--aegis-bg-base-light);
+}
+
+.aegis-bg-surface {
+  background: var(--aegis-bg-surface-dark);
+}
+.aegis-shell.aegis-mode-light .aegis-bg-surface {
+  background: var(--aegis-bg-surface-light);
+}
+
+.aegis-bg-accent-tint {
+  background: var(--aegis-accent-tint-dark);
+}
+.aegis-shell.aegis-mode-light .aegis-bg-accent-tint {
+  background: var(--aegis-accent-tint-light);
+}
+
+.aegis-text-base {
+  color: var(--aegis-text-base-dark);
+}
+.aegis-shell.aegis-mode-light .aegis-text-base {
+  color: var(--aegis-text-base-light);
+}
+
+.aegis-text-muted {
+  color: var(--aegis-text-muted-dark);
+}
+.aegis-shell.aegis-mode-light .aegis-text-muted {
+  color: var(--aegis-text-muted-light);
+}
+
+.aegis-border-subtle {
+  border-color: var(--aegis-border-dark);
+}
+.aegis-shell.aegis-mode-light .aegis-border-subtle {
+  border-color: var(--aegis-border-light);
+}
+
+/* Hide scrollbar while keeping scroll functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }
 
 .aegis-wordmark {

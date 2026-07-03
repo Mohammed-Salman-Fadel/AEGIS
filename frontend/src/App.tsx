@@ -91,6 +91,10 @@ export default function App() {
   });
   const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(loadStoredAppearanceTheme as AppearanceTheme);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [messageQueue, setMessageQueue] = useState<string[]>([]);
+  const messageQueueRef = useRef<string[]>([]);
+  messageQueueRef.current = messageQueue;
+  const [queueEditIndex, setQueueEditIndex] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isClearingIndexedDocuments, setIsClearingIndexedDocuments] = useState(false);
   const [documentContextNotice, setDocumentContextNotice] = useState<string | null>(null);
@@ -125,9 +129,11 @@ export default function App() {
     } catch { return []; }
   });
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const activeProjectRef = useRef<CodeProject | null>(null);
   const [scanningProject, setScanningProject] = useState(false);
   const [projectPermissionRequestId, setProjectPermissionRequestId] = useState<string | null>(null);
   const [projectEditMessage, setProjectEditMessage] = useState<string | null>(null);
+  const [staleProjectIds, setStaleProjectIds] = useState<Set<string>>(new Set());
   const [projectSessionIds, setProjectSessionIds] = useState(() => {
     try {
       const stored = localStorage.getItem('aegis-project-sessions');
@@ -198,6 +204,7 @@ export default function App() {
   const [chatMode, setChatMode] = useState<ChatMode>('general');
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const modelDownloadAbortRef = useRef<AbortController | null>(null);
   const modelDownloadAbortReasonRef = useRef<'pause' | 'cancel' | null>(null);
@@ -206,7 +213,11 @@ export default function App() {
   const streamingMessagesBySessionRef = useRef<Record<string, Message[]>>({});
   const isDark = theme === 'system' ? systemPrefersDark : theme === 'dark';
   const activeSession = useMemo(() => sessions.find((s) => s.session_id === activeSessionId), [activeSessionId, sessions]);
-  const activeProject = useMemo(() => codeProjects.find((p) => p.id === activeProjectId) ?? null, [activeProjectId, codeProjects]);
+  const activeProject = useMemo(() => {
+    const p = codeProjects.find((proj) => proj.id === activeProjectId) ?? null;
+    activeProjectRef.current = p;
+    return p;
+  }, [activeProjectId, codeProjects]);
   const pinnedSessionIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
   const resourceWarning = systemStats.cpu > 80 || systemStats.ram > 80
     ? `${[systemStats.cpu > 80 ? 'CPU' : null, systemStats.ram > 80 ? 'RAM' : null].filter(Boolean).join(' and ')} ${systemStats.cpu > 80 && systemStats.ram > 80 ? 'are' : 'is'} almost at full capacity.`
@@ -351,9 +362,22 @@ export default function App() {
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang); }, [lang]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(OBSIDIAN_VAULT_PATH_KEY, obsidianVaultPath); }, [obsidianVaultPath]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem(OBSIDIAN_ENABLED_KEY, String(obsidianEnabled)); }, [obsidianEnabled]);
+  // Persist projects (strip non-serializable rootHandle).
+  const projectSaveRef = useRef<number | null>(null);
   useEffect(() => {
-    try { localStorage.setItem('aegis-projects', JSON.stringify(codeProjects.map(({ rootHandle, ...rest }) => rest))); } catch {}
+    if (projectSaveRef.current !== null) window.clearTimeout(projectSaveRef.current);
+    projectSaveRef.current = window.setTimeout(() => {
+      try { localStorage.setItem('aegis-projects', JSON.stringify(codeProjects.map(({ rootHandle, ...rest }) => rest))); } catch (e) { console.warn('Failed to persist projects:', e); }
+    }, 500);
   }, [codeProjects]);
+  // Detect stale projects (missing rootHandle after deserialization).
+  useEffect(() => {
+    const stale = new Set<string>();
+    for (const p of codeProjects) {
+      if (!p.rootHandle) stale.add(p.id);
+    }
+    setStaleProjectIds(stale);
+  }, [codeProjects.length]);
   useEffect(() => {
     try { localStorage.setItem('aegis-project-sessions', JSON.stringify([...projectSessionIds])); } catch {}
   }, [projectSessionIds]);
@@ -527,17 +551,27 @@ export default function App() {
         totalBytes: files.reduce((t, f) => t + f.size, 0), snapshot: buildProjectSnapshot(rootHandle.name, files),
         files, writable: false, updatedAt: new Date().toISOString(), rootHandle,
       };
-      setCodeProjects((cur) => [project, ...cur.filter((p) => p.name !== project.name)]);
+      setCodeProjects((cur) => [project, ...cur.filter((p) => p.id !== project.id)]);
       setActiveProjectId(project.id);
       setProjectsOpen(true);
       // Index project files via RAG for semantic search
+      // Index project files via RAG for semantic search
+      const MAX_INGEST_BYTES = 500_000; // 500KB total body limit
+      let ingestBody = { project_id: project.id, files: project.files.map(f => ({ path: f.path, content: f.content })) };
+      const bodyStr = JSON.stringify(ingestBody);
+      if (bodyStr.length > MAX_INGEST_BYTES) {
+        console.warn(`Project ingestion body too large (${bodyStr.length} bytes), truncating to ${MAX_INGEST_BYTES}`);
+        // Truncate file contents while preserving structure
+        ingestBody = { project_id: project.id, files: project.files.slice(0, 30).map(f => ({ path: f.path, content: f.content.slice(0, 8000) })) };
+      }
       try {
         await fetch(`${API_BASE}/projects/ingest`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ project_id: project.id, files: project.files.map(f => ({ path: f.path, content: f.content })) }),
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(ingestBody),
         });
-      } catch (_) {}
+      } catch (e) {
+        console.error('Project RAG ingestion failed:', e);
+      }
       setChatMode('coder');
       setProjectPermissionRequestId(project.id);
       setStatus(`Project ${project.name} scanned`);
@@ -565,7 +599,12 @@ export default function App() {
   };
 
   async function createProjectFile(project: CodeProject, relativePath: string, content: string) {
-    const parts = relativePath.replace(/\\/g, '/').split('/');
+    // Path traversal guard: reject paths with `..` segments or absolute prefixes.
+    const normalized = relativePath.replace(/\\\\/g, '/');
+    if (normalized.includes('..') || normalized.startsWith('/')) {
+      throw new Error(`Invalid path: \`${relativePath}\` must be a relative path without parent traversal.`);
+    }
+    const parts = normalized.split('/');
     let dir: FileSystemDirectoryHandle = project.rootHandle;
     for (let i = 0; i < parts.length - 1; i++) {
       dir = await dir.getDirectoryHandle(parts[i], { create: true });
@@ -596,8 +635,14 @@ export default function App() {
     const isNewFile = !targetFile;
     try {
       if (targetFile) {
-        // Edit existing file
+        // Edit existing file — verify write permission first
         if (!targetFile.handle.createWritable) { setError(t('error.patch_no_diff')); return; }
+        const perm = await targetFile.handle.queryPermission({ mode: 'readwrite' });
+        if (perm !== 'granted') {
+          const req = await targetFile.handle.requestPermission({ mode: 'readwrite' });
+          if (req !== 'granted') { setError('Write permission denied by browser.'); return; }
+          setCodeProjects((cur) => cur.map((p) => p.id === activeProject.id ? { ...p, writable: true } : p));
+        }
         const nextContent = applySimpleUnifiedDiff(targetFile.content, diff);
         const writable = await targetFile.handle.createWritable();
         await writable.write(nextContent);
@@ -723,6 +768,14 @@ export default function App() {
       setStatus(`Indexed ${ingestRes.total_chunks} document chunks`);
     } catch (e) { setImportPhase('error'); setImportProgress(100); setError(e instanceof Error ? e.message : t('error.upload_failed')); setStatus(t('error.upload_failed')); }
     finally { setIsUploading(false); event.target.value = ''; window.setTimeout(() => { setImportPhase('idle'); setImportProgress(0); setImportFileLabel(''); }, 1800); }
+  };
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    setStatus(`Image selected: ${file.name}. Attach and send to analyze with OCR or vision tools.`);
+    event.target.value = '';
   };
 
   const deleteIndexedDocumentFromRag = async (sessionId: string, document: IndexedDocument): Promise<DeleteIndexedDocumentResponse> => {
@@ -1109,6 +1162,8 @@ export default function App() {
       setError(e instanceof Error ? e.message : t('error.could_not_send_chat'));
       setStatus(t('error.chat_failed'));
       updateTarget((cur) => cur.filter((m) => m.content.length > 0));
+      // Clear the queue on error to avoid stuck items.
+      setMessageQueue([]);
     } finally {
       if (streamFlushTimer !== null) window.clearTimeout(streamFlushTimer);
       setIsStreaming(false);
@@ -1118,14 +1173,33 @@ export default function App() {
         delete n[targetSessionId]; streamingMessagesBySessionRef.current = n;
         setStreamingMessagesBySession(n);
       }
+      // Process next item in queue.
+      processNextInQueue();
     }
+  }
+
+  const processNextInQueue = () => {
+    const queue = messageQueueRef.current;
+    if (queue.length === 0) return;
+    const next = queue[0];
+    setMessageQueue((q) => q.slice(1));
+    setInput('');
+    const ts = new Date().toISOString();
+    setStatus(`Processing queued message (${queue.length - 1} remaining)...`);
+    streamPrompt(next, [...messages, { role: 'user', content: next, timestamp: ts }, { role: 'assistant', content: '' }]);
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const prompt = input.trim();
-    if (!prompt || isStreaming) return;
+    if (!prompt) return;
     setInput('');
+    // If streaming, queue the message instead of blocking.
+    if (isStreaming) {
+      setMessageQueue((q) => [...q, prompt]);
+      setStatus(`Queued (${messageQueue.length + 1}) — waiting for current response...`);
+      return;
+    }
     const ts = new Date().toISOString();
     await streamPrompt(prompt, [...messages, { role: 'user', content: prompt, timestamp: ts }, { role: 'assistant', content: '' }]);
   };
@@ -1157,9 +1231,9 @@ export default function App() {
 
   return (
     <I18nProvider lang={lang}>
-    <div className={`aegis-shell aegis-mode-${theme} aegis-theme-${appearanceTheme} flex h-screen overflow-hidden ${isDark ? 'bg-zinc-950 text-zinc-100' : 'bg-stone-100 text-slate-900'}`} onClick={() => setSessionMenuOpenId(null)}>
+    <div className={`aegis-shell aegis-mode-${theme} aegis-theme-${appearanceTheme} aegis-bg-base aegis-text-base flex h-screen overflow-hidden`} onClick={() => setSessionMenuOpenId(null)}>
       {/* Left Icon Bar */}
-      <nav aria-label="Sidebar controls" className={`flex w-14 shrink-0 flex-col items-center border-r ${isDark ? 'border-zinc-800 bg-zinc-950' : 'border-stone-300 bg-stone-50'}`}>
+      <nav aria-label="Sidebar controls" className={`flex w-14 shrink-0 flex-col items-center border-r aegis-bg-surface aegis-border-subtle`}>
         <button
           aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
           className={`mt-4 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'}`}
@@ -1228,9 +1302,11 @@ export default function App() {
               });
               if (res.ok) {
                 const session = await res.json() as EngineSession;
-                projectSessionIds.set(id, session.session_id);
-                setProjectSessionIds(new Map(projectSessionIds));
-                setActiveSessionId(session.session_id);
+                setProjectSessionIds((prev) => {
+                  const next = new Map(prev);
+                  next.set(id, session.session_id);
+                  return next;
+                });
                 setMessages([]);
                 loadSessions();
               }
@@ -1248,6 +1324,7 @@ export default function App() {
         onTogglePinned={togglePinnedSession}
         onDeleteSession={handleDeleteSession}
         onSetSessionMenuOpen={setSessionMenuOpenId}
+        staleProjectIds={staleProjectIds}
       />
 
       {/* Main Content */}
@@ -1295,7 +1372,7 @@ export default function App() {
         )}
 
         {/* Messages Area */}
-        <div ref={scrollRef} className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 ${isDark ? 'bg-zinc-950' : 'bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.75),_rgba(245,245,244,0)_42%)]'}`}>
+        <div ref={scrollRef} className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 aegis-bg-base scrollbar-hide`}>
           <div className="mx-auto flex max-w-4xl flex-col gap-4">
             {messages.map((message, index) => (
                 <MessageBubble
@@ -1356,9 +1433,11 @@ export default function App() {
           projectEditMessage={projectEditMessage}
           tokenMeterLabel={tokenMeterLabel}
           contextUsage={contextUsage}
+          messageQueue={messageQueue}
           activeWelcomeMessage={activeWelcomeMessage}
           profileText={profileText}
           fileInputRef={fileInputRef}
+          imageFileInputRef={imageFileInputRef}
           composerTextareaRef={composerTextareaRef}
           onInputChange={setInput}
           onSubmit={handleSubmit}
@@ -1369,9 +1448,14 @@ export default function App() {
           obsidianEnabled={obsidianEnabled}
           onObsidianOpen={openObsidianTool}
           onFileUpload={handleFileUpload}
+          onImageUpload={handleImageUpload}
           onClearDocuments={clearIndexedDocuments}
           onVoiceModeOpen={() => setIsVoiceMode(true)}
           onDetachProject={() => setActiveProjectId(null)}
+          onRemoveFromQueue={(index) => setMessageQueue((q) => q.filter((_, i) => i !== index))}
+          onEditFromQueue={(index) => { setInput(messageQueueRef.current[index]); setQueueEditIndex(index); }}
+          onSaveQueueEdit={() => { if (queueEditIndex !== null) { setMessageQueue((q) => q.map((msg, i) => i === queueEditIndex ? input : msg)); setQueueEditIndex(null); } }}
+          queueEditIndex={queueEditIndex}
         />
 
         {/* Voice Mode Overlay */}

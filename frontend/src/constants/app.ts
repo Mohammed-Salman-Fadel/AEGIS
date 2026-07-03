@@ -2,7 +2,7 @@
 
 export const MAX_PROJECT_FILES = 120;
 export const MAX_PROJECT_FILE_BYTES = 64 * 1024;
-export const MAX_PROJECT_CONTEXT_CHARS = 0; // unlimited — content is fed through RAG
+export const MAX_PROJECT_CONTEXT_CHARS = 32_000; // roughly 8K tokens for the system prompt
 
 export const IGNORED_PROJECT_DIRECTORIES = new Set([
   '.git',
