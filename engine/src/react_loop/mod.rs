@@ -232,6 +232,7 @@ impl ReactLoop {
                         rag_client,
                         session_id,
                         project_path,
+                        &tx,
                     )
                     .await;
 
@@ -319,6 +320,7 @@ async fn execute_tool(
     rag_client: &RagClient,
     session_id: &str,
     project_path: Option<&str>,
+    tx: &mpsc::Sender<String>,
 ) -> Result<ToolResult> {
     match tool {
         ToolCall::Search(query) => {
@@ -1414,6 +1416,20 @@ fn truncate(s: &str, max: usize) -> String {
     let mut result: String = s[..cutoff].to_string();
     result.push_str(&format!("\n[Truncated to {max} characters]"));
     result
+}
+
+// ── stub tool implementations (TODO: wire to real backends) ──────────────
+
+fn calculate_expression(expr: &str) -> String {
+    format!("[TODO: calculate_expression not yet implemented] Received expression: {expr}")
+}
+
+async fn search_knowledge_base(
+    query: &str,
+    _rag_client: &RagClient,
+    _session_id: &str,
+) -> String {
+    format!("[TODO: search_knowledge_base not yet implemented] Received query: {query}")
 }
 
 #[cfg(test)]
