@@ -159,10 +159,15 @@ fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
         return;
     }
 
+    // Preflight: ensure at least one Ollama model is available before starting the engine.
+    // The engine aborts startup if warm_active_model() finds nothing, so we pull
+    // a default model here if Ollama is empty.
+    ensure_ollama_model(report);
+
     let Some(plan) = engine_launch_plan(workspace) else {
         report
             .warnings
-            .push("Engine was not started because no engine Cargo.toml was found.".to_string());
+            .push("Engine was not started because no engine binary or Cargo.toml was found.".to_string());
         return;
     };
 
@@ -177,7 +182,7 @@ fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
     match spawn_background(&plan, logs_dir) {
         Ok(()) => {
             report.started.push("Engine".to_string());
-            if !wait_for_service(&health_url, Duration::from_secs(20)) {
+            if !wait_for_service(&health_url, Duration::from_secs(30)) {
                 report.warnings.push(format!(
                     "Engine was started in the background but did not answer `{health_url}` yet. The model may still be warming, or startup may have failed. Check `{}`.",
                     log_path(logs_dir, &plan.label).display()
@@ -185,6 +190,79 @@ fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
             }
         }
         Err(error) => report.warnings.push(error),
+    }
+}
+
+/// Check if Ollama has at least one model pulled. If not, pull the default model.
+fn ensure_ollama_model(report: &mut RuntimeStartReport) {
+    let default_model = std::env::var("AEGIS_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
+
+    // First check if ollama is reachable at all
+    if !probe_ollama_cli() {
+        report.warnings.push(
+            "Ollama CLI not found on PATH. Install Ollama and pull a model before using AEGIS.".to_string()
+        );
+        return;
+    }
+
+    // Check if ollama serve is running
+    if !service_reachable("http://127.0.0.1:11434/api/tags") {
+        report.warnings.push(
+            "Ollama server is not running on http://127.0.0.1:11434. Start it with `ollama serve`.".to_string()
+        );
+        return;
+    }
+
+    // Check if any models exist
+    let has_models = Command::new("ollama")
+        .args(["list"])
+        .output()
+        .ok()
+        .map(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            // ollama list shows a header + at least one model row if models exist
+            stdout.lines().count() > 1
+        })
+        .unwrap_or(false);
+
+    if has_models {
+        return; // Models exist, nothing to do
+    }
+
+    // No models — pull the default one
+    println!(
+        "  No Ollama models found. Pulling default model `{default_model}` (this may take a while)..."
+    );
+
+    let plan = model_pull_plan_for_name(&default_model);
+    match run_foreground(&plan) {
+        Ok(()) => {
+            println!("  Default model `{default_model}` pulled successfully.");
+        }
+        Err(e) => {
+            report.warnings.push(format!(
+                "Could not pull default model `{default_model}`: {e}. Run `ollama pull {default_model}` manually."
+            ));
+        }
+    }
+}
+
+fn probe_ollama_cli() -> bool {
+    Command::new("ollama")
+        .arg("--version")
+        .output()
+        .ok()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn model_pull_plan_for_name(model_name: &str) -> LaunchPlan {
+    LaunchPlan {
+        label: format!("Model pull ({model_name})"),
+        program: "ollama".to_string(),
+        args: vec!["pull".to_string(), model_name.to_string()],
+        cwd: std::env::current_dir().unwrap_or_default(),
+        env: Vec::new(),
     }
 }
 
