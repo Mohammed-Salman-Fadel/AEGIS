@@ -25,7 +25,17 @@ pub struct InstallStep {
     pub name: String,
     pub description: String,
     pub action: InstallAction,
-    pub verification_hint: String,
+    /// If non-None, this condition is checked first. When it's satisfied,
+    /// the step is skipped cleanly instead of re-executed.
+    pub skip_if: Option<SkipCondition>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SkipCondition {
+    /// Skip if path exists (file or directory)
+    PathExists(PathBuf),
+    /// Skip if running `<program> <args>` produces stdout/stderr containing `contains`
+    CmdOutputContains { program: String, args: Vec<String>, contains: String },
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +69,11 @@ pub fn build_install_plan(
     let rag_venv_dir = install_root.join("rag-env");
     let config_toml_path = config_dir.join("aegis.toml");
 
+    let rag_venv_python = rag_venv_dir.join(if cfg!(windows) { "Scripts\\python.exe" } else { "bin/python" });
+    let rag_venv_pip = rag_venv_dir.join(if cfg!(windows) { "Scripts\\pip.exe" } else { "bin/pip" });
+    let python_pip = rag_venv_pip.clone();
+    let requirements_exist = workspace.rag_dir.join("requirements.txt").exists();
+
     let mut steps: Vec<InstallStep> = Vec::new();
 
     // Step 1: Python check
@@ -69,10 +84,10 @@ pub fn build_install_plan(
             name: "python".into(),
             optional: false,
         },
-        verification_hint: "Run `python --version`".into(),
+        skip_if: None,
     });
 
-    // Step 2: Create Python venv
+    // Step 2: Create Python venv (skip if already exists)
     let python_cmd = if cfg!(windows) { "python" } else { "python3" };
     steps.push(InstallStep {
         name: "Create RAG virtual environment".into(),
@@ -82,34 +97,32 @@ pub fn build_install_plan(
             args: vec!["-m".into(), "venv".into(), rag_venv_dir.to_string_lossy().to_string()],
             cwd: Some(install_root.clone()),
         },
-        verification_hint: format!(
-            "Check `{}` exists",
-            rag_venv_dir.join(if cfg!(windows) { "Scripts\\python.exe" } else { "bin/python" }).display()
-        ),
+        skip_if: Some(SkipCondition::PathExists(rag_venv_python.clone())),
     });
 
-    // Step 3: Install RAG deps
-    let python_pip = if cfg!(windows) {
-        rag_venv_dir.join("Scripts\\pip.exe")
-    } else {
-        rag_venv_dir.join("bin/pip")
-    };
-    let requirements_path = workspace.rag_dir.join("requirements.txt");
-
-    steps.push(InstallStep {
-        name: "Install Python RAG dependencies".into(),
-        description: format!("pip install -r `{}`", requirements_path.display()),
-        action: InstallAction::RunCommand {
-            program: python_pip.to_string_lossy().to_string(),
-            args: vec![
-                "install".into(),
-                "-r".into(),
-                requirements_path.to_string_lossy().to_string(),
-            ],
-            cwd: Some(rag_venv_dir.clone()),
-        },
-        verification_hint: "Verify pip list shows chromadb, fastapi, uvicorn".into(),
-    });
+    // Step 3: Install RAG deps (skip if already installed)
+    if requirements_exist {
+        let req_path = workspace.rag_dir.join("requirements.txt");
+        steps.push(InstallStep {
+            name: "Install Python RAG dependencies".into(),
+            description: format!("pip install -r `{}`", req_path.display()),
+            action: InstallAction::RunCommand {
+                program: python_pip.to_string_lossy().to_string(),
+                args: vec![
+                    "install".into(),
+                    "-r".into(),
+                    req_path.to_string_lossy().to_string(),
+                ],
+                cwd: Some(rag_venv_dir.clone()),
+            },
+            // Skip if chromadb can already be imported in the venv
+            skip_if: Some(SkipCondition::CmdOutputContains {
+                program: rag_venv_python.to_string_lossy().to_string(),
+                args: vec!["-c".into(), "import chromadb; print('ok')".into()],
+                contains: "ok".into(),
+            }),
+        });
+    }
 
     // Step 4: Node.js check
     steps.push(InstallStep {
@@ -119,7 +132,7 @@ pub fn build_install_plan(
             name: "node".into(),
             optional: true,
         },
-        verification_hint: "Run `node --version`".into(),
+        skip_if: None,
     });
 
     // Step 5: Ollama check
@@ -130,7 +143,7 @@ pub fn build_install_plan(
             name: "ollama".into(),
             optional: false,
         },
-        verification_hint: "Run `ollama --help`".into(),
+        skip_if: None,
     });
 
     // Step 6: Rust toolchain check
@@ -141,32 +154,32 @@ pub fn build_install_plan(
             name: "cargo".into(),
             optional: true,
         },
-        verification_hint: "Run `cargo --version`".into(),
+        skip_if: None,
     });
 
-    // Step 7: Create .aegis directory structure
+    // Step 7-9: Create .aegis directory structure (create_dir_all is already safe)
     steps.push(InstallStep {
         name: "Create AEGIS config directory".into(),
         description: format!("Create `{}` with config/, logs/, sessions/", aegis_dir.display()),
         action: InstallAction::CreateDir { path: config_dir.clone() },
-        verification_hint: format!("Check `{}` exists", aegis_dir.display()),
+        skip_if: Some(SkipCondition::PathExists(config_dir.join("aegis.toml"))),
     });
 
     steps.push(InstallStep {
         name: "Create AEGIS logs directory".into(),
         description: format!("Create `{}`", logs_dir.display()),
         action: InstallAction::CreateDir { path: logs_dir },
-        verification_hint: "Check logs dir exists".into(),
+        skip_if: None,
     });
 
     steps.push(InstallStep {
         name: "Create AEGIS sessions directory".into(),
         description: format!("Create `{}`", sessions_dir.display()),
         action: InstallAction::CreateDir { path: sessions_dir },
-        verification_hint: "Check sessions dir exists".into(),
+        skip_if: None,
     });
 
-    // Step 8: Write default aegis.toml
+    // Step 10: Write default aegis.toml (skip if already exists)
     let config_toml_content = format!(
         r#"# AEGIS configuration
 # This file is auto-generated by `aegis install`.
@@ -198,10 +211,10 @@ model = "{}"
             path: config_toml_path.clone(),
             content: config_toml_content,
         },
-        verification_hint: format!("Check `{}` exists and is valid TOML", config_toml_path.display()),
+        skip_if: Some(SkipCondition::PathExists(config_toml_path.clone())),
     });
 
-    // Step 9: Pull default model from Ollama
+    // Step 11: Pull default model from Ollama (skip if already pulled)
     steps.push(InstallStep {
         name: format!("Pull default model `{default_model}` from Ollama"),
         description: format!("Run `ollama pull {default_model}` to download the default local model"),
@@ -210,7 +223,11 @@ model = "{}"
             args: vec!["pull".into(), default_model.clone()],
             cwd: None,
         },
-        verification_hint: format!("Run `ollama list` and check `{default_model}` appears"),
+        skip_if: Some(SkipCondition::CmdOutputContains {
+            program: "ollama".into(),
+            args: vec!["list".into()],
+            contains: default_model.clone(),
+        }),
     });
 
     InstallPlan {
@@ -224,6 +241,25 @@ model = "{}"
     }
 }
 
+/// Check whether a SkipCondition is currently satisfied.
+fn check_skip(condition: &SkipCondition) -> bool {
+    match condition {
+        SkipCondition::PathExists(path) => path.exists(),
+        SkipCondition::CmdOutputContains { program, args, contains } => {
+            Command::new(program)
+                .args(args)
+                .output()
+                .ok()
+                .map(|o| {
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    stdout.contains(contains) || stderr.contains(contains)
+                })
+                .unwrap_or(false)
+        }
+    }
+}
+
 /// Execute all steps in the install plan.
 /// Returns Ok(()) if all steps succeed.
 pub fn execute_install_plan(ui: &Ui, plan: &InstallPlan) -> Result<(), Vec<String>> {
@@ -232,6 +268,21 @@ pub fn execute_install_plan(ui: &Ui, plan: &InstallPlan) -> Result<(), Vec<Strin
     for (index, step) in plan.steps.iter().enumerate() {
         let step_num = index + 1;
         let total = plan.steps.len();
+
+        // Check skip condition before executing
+        if let Some(ref condition) = step.skip_if {
+            if check_skip(condition) {
+                println!(
+                    "{} [{step_num}/{total}] {} — {}",
+                    ui.header(&step.name),
+                    ui.muted(&step.description),
+                    ui.success("already satisfied, skipping"),
+                );
+                println!();
+                continue;
+            }
+        }
+
         println!(
             "{} [{step_num}/{total}] {}",
             ui.header(&step.name),
@@ -255,7 +306,6 @@ pub fn execute_install_plan(ui: &Ui, plan: &InstallPlan) -> Result<(), Vec<Strin
                         let msg = format!("Step {step_num} failed: {e}");
                         println!("  {}", ui.error(&msg));
                         errors.push(msg);
-                        // Continue with other steps for a full report
                     }
                 }
             }
@@ -337,9 +387,15 @@ pub fn print_install_plan(ui: &Ui, plan: &InstallPlan) {
     println!();
 
     for (index, step) in plan.steps.iter().enumerate() {
-        println!("{}. {}", index + 1, step.name);
+        let skip_hint = match &step.skip_if {
+            Some(SkipCondition::PathExists(p)) => format!(" [skip if `{}` exists]", p.display()),
+            Some(SkipCondition::CmdOutputContains { contains, .. }) => {
+                format!(" [skip if already contains `{contains}`]")
+            }
+            None => String::new(),
+        };
+        println!("{}. {}{}", index + 1, step.name, skip_hint);
         println!("   {}", step.description);
-        println!("   Verify: {}", step.verification_hint);
     }
 }
 
