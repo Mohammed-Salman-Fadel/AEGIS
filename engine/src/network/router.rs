@@ -52,6 +52,41 @@ fn mime_type(path: &Path) -> &'static str {
     }
 }
 
+/// Serves installer/download files from a configurable directory on disk.
+/// Uses AEGIS_DOWNLOADS_DIR env var, or defaults to `downloads/` next to the frontend dist.
+async fn handle_download(axum::extract::Path(path): axum::extract::Path<String>) -> Response<Body> {
+    let downloads_dir = std::env::var("AEGIS_DOWNLOADS_DIR").unwrap_or_else(|_| {
+        // Default: alongside frontend/dist/ (repo root/downloads/)
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest.parent().unwrap_or(&manifest).join("downloads").to_string_lossy().to_string()
+    });
+
+    let file_path = PathBuf::from(&downloads_dir).join(&path);
+
+    // Prevent directory traversal
+    if file_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::from("Forbidden"))
+            .unwrap();
+    }
+
+    match tokio::fs::read(&file_path).await {
+        Ok(bytes) => {
+            let mime = mime_type(&file_path);
+            Response::builder()
+                .header("Content-Type", mime)
+                .header("Content-Disposition", &format!("attachment; filename=\"{}\"", file_path.file_name().unwrap_or_default().to_string_lossy()))
+                .body(Body::from(bytes))
+                .unwrap_or_else(|_| Response::new(Body::from("Internal error")))
+        }
+        Err(_) => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("File not found"))
+            .unwrap(),
+    }
+}
+
 /// Serves the embedded React frontend from the compiled binary.
 /// Returns 404 JSON for any /api/* path not matched by routes (API guard).
 /// SPA fallback: any unknown non-API path returns index.html.
@@ -663,6 +698,10 @@ pub fn create_router(state: AppState) -> Router {
                 .patch(handlers::sessions::rename_session)
                 .delete(handlers::sessions::delete_session),
         )
+        // Download route: serves installer binary from a configurable directory.
+        // Set AEGIS_DOWNLOADS_DIR env var, or defaults to a `downloads/` folder
+        // alongside the frontend dist/ directory.
+        .route("/downloads/{*path}", get(handle_download))
         .fallback(handle_static)
         .layer(cors)
         .with_state(state)
