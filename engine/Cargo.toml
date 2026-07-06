@@ -44,3 +44,6 @@ futures = "0.3"
 tower-http = { version = "0.6.8", features = ["cors"] }
 sysinfo = "0.38.4"
 rand = "0.9"
+
+# Embedded frontend (built dist/ comes along in the .exe)
+rust-embed = "8"

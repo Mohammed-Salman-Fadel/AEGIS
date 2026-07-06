@@ -1,0 +1,130 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v0.1.0, v1.0.0
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Build engine (release)
+        run: |
+          cd engine
+          cargo build --release
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cargo-target-engine
+
+      - name: Build CLI (release)
+        run: |
+          cd cli
+          cargo build --release
+
+      - name: Prepare staging directory
+        run: |
+          mkdir -p build/release
+          cp engine/target/release/aegis-engine.exe build/release/
+          cp cli/target/release/aegis.exe build/release/
+          cp -r frontend/dist build/release/frontend-dist
+          ls -la build/release/
+
+      - name: Setup NSIS
+        run: |
+          # NSIS is pre-installed on windows-latest
+          # Verify it's available
+          makensis /VER
+
+      - name: Build NSIS installer
+        run: |
+          cd installer
+          makensis aegis-installer.nsi
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS-Windows-x64
+          path: installer/AEGIS-Windows-x64.exe
+          if-no-files-found: error
+
+      - name: Upload binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGIS-binaries
+          path: |
+            build/release/aegis-engine.exe
+            build/release/aegis.exe
+            build/release/frontend-dist/
+          if-no-files-found: error
+
+  create-release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          name: AEGIS-Windows-x64
+          path: artifacts/
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: AEGIS-binaries
+          path: artifacts/binaries/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AEGIS ${{ github.ref_name }}
+          body: |
+            ## AEGIS ${{ github.ref_name }}
+
+            ### Windows Installer
+            - `AEGIS-Windows-x64.exe` — NSIS installer bundle (recommended)
+
+            ### Standalone Binaries
+            - `aegis-engine.exe` — AEGIS Rust engine
+            - `aegis.exe` — AEGIS CLI
+            - `frontend-dist/` — Pre-built frontend (embedded in engine binary, included here for reference)
+
+            ### Installation
+            1. Download `AEGIS-Windows-x64.exe`
+            2. Run the installer
+            3. Open a terminal and run `aegis install --yes` to configure dependencies
+            4. Run `aegis open` to start
+          files: |
+            artifacts/AEGIS-Windows-x64.exe
+          generate_release_notes: true

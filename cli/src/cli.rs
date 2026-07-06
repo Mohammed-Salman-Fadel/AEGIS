@@ -58,6 +58,7 @@ pub struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum CommandKind {
     Install(InstallArgs),
+    Open,
     Save(SaveArgs),
     Chat(ChatArgs),
     Load(RequiredSessionIdArg),

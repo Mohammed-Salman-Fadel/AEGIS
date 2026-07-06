@@ -80,7 +80,6 @@ pub fn ensure_local_runtime(ui: &Ui, workspace: &Workspace) -> RuntimeStartRepor
 
     ensure_rag_runtime(workspace, &logs_dir, &mut report);
     ensure_engine_runtime(workspace, &logs_dir, &mut report);
-    ensure_frontend_runtime(workspace, &logs_dir, &mut report);
     render_runtime_report(ui, &report);
 
     report
@@ -246,27 +245,56 @@ fn ensure_frontend_runtime(
 }
 
 pub fn engine_launch_plan(workspace: &Workspace) -> Option<LaunchPlan> {
-    if !workspace.engine_manifest().exists() {
-        return None;
+    // Priority 1: compiled binary in install_root/bin/
+    let install_binary = workspace.install_root.join("bin").join("aegis-engine.exe");
+    if install_binary.exists() {
+        return Some(LaunchPlan {
+            label: "Engine".to_string(),
+            program: install_binary.to_string_lossy().to_string(),
+            args: Vec::new(),
+            cwd: workspace.install_root.clone(),
+            env: vec![
+                (
+                    "AEGIS_RAG_URL".to_string(),
+                    std::env::var("AEGIS_RAG_URL")
+                        .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
+                ),
+                (
+                    "AEGIS_ENGINE_HOST".to_string(),
+                    std::env::var("AEGIS_ENGINE_HOST")
+                        .unwrap_or_else(|_| "127.0.0.1".to_string()),
+                ),
+                (
+                    "AEGIS_ENGINE_PORT".to_string(),
+                    std::env::var("AEGIS_ENGINE_PORT")
+                        .unwrap_or_else(|_| "8080".to_string()),
+                ),
+            ],
+        });
     }
 
-    Some(LaunchPlan {
-        label: "Engine".to_string(),
-        program: "cargo".to_string(),
-        args: vec!["run".to_string()],
-        cwd: workspace.engine_dir.clone(),
-        env: vec![
-            (
-                "CARGO_TARGET_DIR".to_string(),
-                workspace.engine_target_dir(false).display().to_string(),
-            ),
-            (
-                "AEGIS_RAG_URL".to_string(),
-                std::env::var("AEGIS_RAG_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
-            ),
-        ],
-    })
+    // Priority 2: for developers — use cargo run from the engine directory
+    if workspace.engine_manifest().exists() {
+        Some(LaunchPlan {
+            label: "Engine".to_string(),
+            program: "cargo".to_string(),
+            args: vec!["run".to_string()],
+            cwd: workspace.engine_dir.clone(),
+            env: vec![
+                (
+                    "CARGO_TARGET_DIR".to_string(),
+                    workspace.engine_target_dir(false).display().to_string(),
+                ),
+                (
+                    "AEGIS_RAG_URL".to_string(),
+                    std::env::var("AEGIS_RAG_URL")
+                        .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
+                ),
+            ],
+        })
+    } else {
+        None
+    }
 }
 
 pub fn model_pull_plan(workspace: &Workspace, model_name: &str) -> LaunchPlan {
@@ -397,7 +425,7 @@ fn make_command(plan: &LaunchPlan) -> Command {
     command
 }
 
-fn spawn_background(plan: &LaunchPlan, logs_dir: &Path) -> AppResult<()> {
+pub fn spawn_background(plan: &LaunchPlan, logs_dir: &Path) -> AppResult<()> {
     let log_path = log_path(logs_dir, &plan.label);
     let stdout = OpenOptions::new()
         .create(true)
@@ -503,7 +531,7 @@ fn sanitize_label(label: &str) -> String {
         .to_string()
 }
 
-fn service_reachable(url: &str) -> bool {
+pub fn service_reachable(url: &str) -> bool {
     reqwest::blocking::Client::new()
         .get(url)
         .timeout(Duration::from_millis(800))
@@ -512,7 +540,7 @@ fn service_reachable(url: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn wait_for_service(url: &str, timeout: Duration) -> bool {
+pub fn wait_for_service(url: &str, timeout: Duration) -> bool {
     let started = Instant::now();
     while started.elapsed() < timeout {
         if service_reachable(url) {
@@ -539,7 +567,7 @@ fn initialize_rag(base_url: &str) -> AppResult<()> {
     }
 }
 
-fn join_url(base_url: &str, path: &str) -> String {
+pub fn join_url(base_url: &str, path: &str) -> String {
     format!(
         "{}/{}",
         base_url.trim_end_matches('/'),

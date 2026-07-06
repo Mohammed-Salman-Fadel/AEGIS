@@ -66,6 +66,7 @@ fn dispatch_command(
 ) -> AppResult<()> {
     match command {
         CommandKind::Install(args) => handle_install(ctx, args),
+        CommandKind::Open => handle_open(ctx),
         CommandKind::Save(args) => handle_save(ctx, &args.note),
         CommandKind::Chat(args) => handle_chat(ctx, &args.prompt, args.session_id.as_deref()),
         CommandKind::Load(args) => handle_load(ctx, &args.id, invocation_mode),
@@ -154,26 +155,168 @@ fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult
         install_root.clone(),
         install_root_source.clone(),
     );
-    install::print_install_plan(&ctx.ui, &plan);
+
+    if args.plan_only {
+        install::print_install_plan(&ctx.ui, &plan);
+        return Ok(());
+    }
+
+    // Save the install root preference (even before execution, so future CLI runs know where things are)
+    install::persist_install_root(&ctx.ui, &install_root)?;
     println!();
 
-    if args.yes && !args.plan_only {
-        if args.path.is_some() {
-            install::persist_install_root(&ctx.ui, &install_root)?;
-            println!();
-        }
-        println!("{}", ctx.ui.warning("TODO: map each install step to runner.rs subprocess plans before `--yes` performs system changes."));
-    } else {
-        if args.path.is_some() && !args.plan_only {
-            install::persist_install_root(&ctx.ui, &install_root)?;
-            println!();
-        }
-        println!(
-            "{}",
-            ctx.ui
-                .muted("Scaffold mode: no dependency installation is executed yet.")
-        );
+    if !args.yes {
+        println!("{}", ctx.ui.warning("Dry-run mode: showing plan. Pass `--yes` to execute."));
+        install::print_install_plan(&ctx.ui, &plan);
+        return Ok(());
     }
+
+    // Execute the install plan
+    match install::execute_install_plan(&ctx.ui, &plan) {
+        Ok(()) => Ok(()),
+        Err(errors) => {
+            // Print summary of what went wrong
+            for e in &errors {
+                eprintln!("{}", ctx.ui.error(e));
+            }
+            Err(format!(
+                "Installation completed with {} error(s). Fix the issues above and re-run `aegis install --yes`.",
+                errors.len()
+            ))
+        }
+    }
+}
+
+fn handle_open(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("AEGIS Open"));
+    println!(
+        "{}",
+        ctx.ui.muted("Starting local AEGIS services and opening the web interface...")
+    );
+    println!();
+
+    let workspace = &ctx.workspace;
+    let install_root = &workspace.install_root;
+    let engine_binary = install_root.join("bin").join("aegis-engine.exe");
+    let rag_venv_python = install_root
+        .join("rag-env")
+        .join("Scripts")
+        .join("python.exe");
+    let aegis_config = install_root.join(".aegis").join("config").join("aegis.toml");
+
+    let engine_url =
+        std::env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    let rag_url =
+        std::env::var("AEGIS_RAG_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string());
+
+    // 1. Start RAG service if not running
+    println!("{} Checking RAG service...", ctx.ui.info("1/3"));
+    if !crate::runner::service_reachable(&crate::runner::join_url(&rag_url, "/health")) {
+        if rag_venv_python.exists() {
+            let rag_dir = &workspace.rag_dir;
+            let log_file = install_root.join(".aegis").join("logs").join("rag.log");
+
+            println!("  Starting RAG from venv: {}", rag_venv_python.display());
+
+            // Use spawn_background equivalent
+            let plan = crate::runner::LaunchPlan {
+                label: "RAG".to_string(),
+                program: rag_venv_python.to_string_lossy().to_string(),
+                args: vec![
+                    "-m".to_string(),
+                    "uvicorn".to_string(),
+                    "app.main:app".to_string(),
+                    "--host".to_string(),
+                    "127.0.0.1".to_string(),
+                    "--port".to_string(),
+                    "8000".to_string(),
+                ],
+                cwd: rag_dir.clone(),
+                env: vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())],
+            };
+
+            crate::runner::spawn_background(&plan, &install_root.join(".aegis").join("logs"))?;
+
+            if crate::runner::wait_for_service(&crate::runner::join_url(&rag_url, "/health"), std::time::Duration::from_secs(15)) {
+                println!("  {} RAG is ready", ctx.ui.success("✓"));
+            } else {
+                println!("  {} RAG started but not yet healthy (check logs)", ctx.ui.warning("⚠"));
+            }
+        } else {
+            println!(
+                "  {} RAG venv not found at `{}`. Run `aegis install --yes` first.",
+                ctx.ui.warning("⚠"),
+                rag_venv_python.display()
+            );
+        }
+    } else {
+        println!("  {} RAG is already running", ctx.ui.success("✓"));
+    }
+
+    // 2. Start engine if not running
+    println!("{} Checking engine...", ctx.ui.info("2/3"));
+    if !crate::runner::service_reachable(&crate::runner::join_url(&engine_url, "/health")) {
+        if engine_binary.exists() {
+            println!("  Starting engine: {}", engine_binary.display());
+
+            let plan = crate::runner::LaunchPlan {
+                label: "Engine".to_string(),
+                program: engine_binary.to_string_lossy().to_string(),
+                args: Vec::new(),
+                cwd: install_root.clone(),
+                env: vec![
+                    ("AEGIS_RAG_URL".to_string(), rag_url.clone()),
+                    ("AEGIS_ENGINE_HOST".to_string(), "127.0.0.1".to_string()),
+                    ("AEGIS_ENGINE_PORT".to_string(), "8080".to_string()),
+                    ("AEGIS_CONFIG_PATH".to_string(), aegis_config.to_string_lossy().to_string()),
+                ],
+            };
+
+            crate::runner::spawn_background(&plan, &install_root.join(".aegis").join("logs"))?;
+
+            if crate::runner::wait_for_service(&crate::runner::join_url(&engine_url, "/health"), std::time::Duration::from_secs(30)) {
+                println!("  {} Engine is ready", ctx.ui.success("✓"));
+            } else {
+                println!("  {} Engine started but not yet healthy (check logs)", ctx.ui.warning("⚠"));
+            }
+        } else {
+            println!(
+                "  {} Engine binary not found at `{}`. Re-run the installer or build from source.",
+                ctx.ui.warning("⚠"),
+                engine_binary.display()
+            );
+        }
+    } else {
+        println!("  {} Engine is already running", ctx.ui.success("✓"));
+    }
+
+    // 3. Open browser
+    println!("{} Opening web UI...", ctx.ui.info("3/3"));
+    let web_url = "http://localhost:8080";
+    println!("  Web UI: {web_url}");
+
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", web_url])
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(web_url).spawn();
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(web_url).spawn();
+    }
+
+    println!();
+    println!("{}", ctx.ui.success("AEGIS is running!"));
+    println!("  Web UI    : {web_url}");
+    println!("  API       : {engine_url}");
+    println!("  RAG       : {rag_url}");
+    println!();
+    println!("{}", ctx.ui.muted("Press Ctrl+C to stop all services (if running from a terminal)."));
 
     Ok(())
 }
