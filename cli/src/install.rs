@@ -68,9 +68,8 @@ pub fn build_install_plan(
     let sessions_dir = aegis_dir.join("sessions");
     let rag_venv_dir = install_root.join("rag-env");
     let config_toml_path = config_dir.join("aegis.toml");
-
-    let rag_venv_python = rag_venv_dir.join(if cfg!(windows) { "Scripts\\python.exe" } else { "bin/python" });
-    let rag_venv_pip = rag_venv_dir.join(if cfg!(windows) { "Scripts\\pip.exe" } else { "bin/pip" });
+    let rag_venv_python = rag_venv_dir.join("Scripts").join("python.exe");
+    let rag_venv_pip = rag_venv_dir.join("Scripts").join("pip.exe");
     let python_pip = rag_venv_pip.clone();
     let requirements_exist = workspace.rag_dir.join("requirements.txt").exists();
 
