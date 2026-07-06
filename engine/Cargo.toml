@@ -47,3 +47,6 @@ rand = "0.9"
 
 # Embedded frontend (built dist/ comes along in the .exe)
 rust-embed = "8"
+
+[features]
+dev = []

@@ -3,6 +3,14 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
+    // In dev mode (cargo build --features dev), skip frontend building entirely.
+    // Developers should run `npm run dev` in frontend/ for hot-reload.
+    #[cfg(feature = "dev")]
+    {
+        println!("cargo:warning=DEV MODE: Skipping frontend build. Use Vite dev server on port 5173 for hot-reload.");
+        return;
+    }
+
     let frontend_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()

@@ -552,7 +552,20 @@ async fn handle_voice_config(
 }
 
 pub fn create_router(state: AppState) -> Router {
-    let cors = CorsLayer::permissive();
+    // CORS: in production (embedded frontend, same-origin), no CORS needed.
+    // In dev mode (Vite on port 5173), allow only the dev server origin.
+    // Gate permissive CORS behind AEGIS_DEV_CORS env var for debugging.
+    let cors = if std::env::var_os("AEGIS_DEV_CORS").is_some() {
+        CorsLayer::permissive()
+    } else {
+        CorsLayer::new()
+            .allow_origin([
+                "http://127.0.0.1:5173".parse().unwrap(),
+                "http://localhost:5173".parse().unwrap(),
+            ])
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+    };
 
     Router::new()
         // Legacy /health for backward compat
