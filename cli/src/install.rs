@@ -4,9 +4,8 @@
 //! Called by: `commands.rs` for the `aegis install` flow.
 //! Owns: the install step list and the `execute_install_plan` function.
 
-use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::ui::Ui;
@@ -16,8 +15,6 @@ use crate::runner::{run_foreground, LaunchPlan};
 #[derive(Debug, Clone)]
 pub struct InstallPlan {
     pub summary: String,
-    pub workspace_root: PathBuf,
-    pub default_install_root: PathBuf,
     pub install_root: PathBuf,
     pub install_root_source: String,
     pub steps: Vec<InstallStep>,
@@ -45,8 +42,6 @@ pub enum InstallAction {
     WriteFile { path: PathBuf, content: String },
     /// Check if a program is available on PATH, warn if not
     CheckProgram { name: String, optional: bool },
-    /// User-visible info message
-    Info { message: String },
 }
 
 pub fn build_install_plan(
@@ -223,8 +218,6 @@ model = "{}"
             "Complete installation plan for AEGIS at `{}`. Performs dependency checks, creates RAG venv, writes config, and pulls default model.",
             install_root.display()
         ),
-        workspace_root: workspace.root.clone(),
-        default_install_root: workspace.default_install_root.clone(),
         install_root,
         install_root_source: install_root_source.into(),
         steps,
@@ -300,9 +293,6 @@ pub fn execute_install_plan(ui: &Ui, plan: &InstallPlan) -> Result<(), Vec<Strin
                     println!("  {}", ui.error(&msg));
                     errors.push(msg);
                 }
-            }
-            InstallAction::Info { message } => {
-                println!("  {}", ui.muted(message));
             }
         }
 

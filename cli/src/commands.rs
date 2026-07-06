@@ -214,7 +214,7 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
     if !crate::runner::service_reachable(&crate::runner::join_url(&rag_url, "/health")) {
         if rag_venv_python.exists() {
             let rag_dir = &workspace.rag_dir;
-            let log_file = install_root.join(".aegis").join("logs").join("rag.log");
+            let _log_file = install_root.join(".aegis").join("logs").join("rag.log");
 
             println!("  Starting RAG from venv: {}", rag_venv_python.display());
 
@@ -761,6 +761,7 @@ fn handle_provider(ctx: &AppContext, command: ProviderCommand) -> AppResult<()> 
     Ok(())
 }
 
+#[allow(dead_code)]
 fn handle_provider_select(ctx: &AppContext, name: &str) -> AppResult<()> {
     let result = ctx.engine.select_provider(name)?;
     print_action_status(ctx, result);
