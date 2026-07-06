@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AEGIS Architecture Diagram</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #020617; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; display: flex; flex-direction: column; align-items: center; padding: 40px 20px; }
+.diagram-container { max-width: 1300px; width: 100%; background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; padding: 30px; margin-bottom: 30px; }
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.header-left { display: flex; align-items: center; gap: 12px; }
+.pulse-dot { width: 10px; height: 10px; background: #34d399; border-radius: 50%; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.header h1 { font-size: 20px; font-weight: 700; color: #f1f5f9; }
+.header .subtitle { font-size: 11px; color: #64748b; margin-top: 2px; }
+.header .badge { font-size: 10px; padding: 4px 10px; border-radius: 6px; background: rgba(52,211,153,0.15); color: #34d399; border: 1px solid rgba(52,211,153,0.3); }
+svg { width: 100%; height: auto; }
+.cards-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 24px; }
+.card { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 16px; }
+.card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.card-dot { width: 8px; height: 8px; border-radius: 50%; }
+.card-dot.cyan { background: #22d3ee; }
+.card-dot.emerald { background: #34d399; }
+.card-dot.violet { background: #a78bfa; }
+.card h3 { font-size: 12px; font-weight: 600; color: #e2e8f0; }
+.card ul { list-style: none; }
+.card li { font-size: 9.5px; color: #94a3b8; padding: 3px 0; line-height: 1.5; }
+.footer { text-align: center; margin-top: 12px; font-size: 9px; color: #475569; }
+</style>
+</head>
+<body>
+
+<div class="diagram-container">
+  <div class="header">
+    <div class="header-left">
+      <div class="pulse-dot"></div>
+      <div>
+        <h1>AEGIS Architecture</h1>
+        <div class="subtitle">Local-First AI Assistant Platform · Rust Engine + React Frontend</div>
+      </div>
+    </div>
+    <div class="badge">v0.1.0 · 14K LOC Rust · 6K LOC TSX</div>
+  </div>
+
+  <svg viewBox="0 0 1240 860" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+      </pattern>
+      <marker id="arrow-cyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#22d3ee"/>
+      </marker>
+      <marker id="arrow-emerald" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#34d399"/>
+      </marker>
+      <marker id="arrow-violet" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#a78bfa"/>
+      </marker>
+      <marker id="arrow-amber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#fbbf24"/>
+      </marker>
+      <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#fb923c"/>
+      </marker>
+      <filter id="glow">
+        <feGaussianBlur stdDeviation="2" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+
+    <!-- Grid background -->
+    <rect width="1240" height="860" fill="url(#grid)"/>
+
+    <!-- === CONNECTION ARROWS (drawn first, behind boxes) === -->
+
+    <!-- CLI -> Engine HTTP -->
+    <path d="M 250,155 L 250,170 L 400,170 L 400,195" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)" stroke-dasharray="4,3"/>
+
+    <!-- Frontend -> Engine HTTP -->
+    <path d="M 560,155 L 560,195" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)" stroke-dasharray="4,3"/>
+
+    <!-- Engine Agent Loop -> Tool Registry -->
+    <path d="M 560,322 L 630,322 C 660,322 660,370 690,370" fill="none" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+
+    <!-- Engine -> Inference Backends -->
+    <path d="M 560,355 L 610,355 C 640,355 640,445 670,445" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+
+    <!-- Engine -> Memory Store -->
+    <path d="M 560,388 L 610,388 C 640,388 640,525 670,525" fill="none" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+
+    <!-- Engine -> RAG Python -->
+    <path d="M 560,421 L 560,470" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+
+    <!-- RAG Python -> Vector Store -->
+    <path d="M 560,530 L 560,555" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+
+    <!-- Tool Registry -> Semble MCP -->
+    <path d="M 690,382 L 790,382 L 790,305" fill="none" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+
+    <!-- Tool Registry -> Zotero MCP -->
+    <path d="M 690,395 L 790,395 L 790,340" fill="none" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+
+    <!-- Provider Registry -> Ollama/LMStudio/OpenAI -->
+    <path d="M 800,445 L 900,445" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+
+    <!-- Engine -> MCP Manager -->
+    <path d="M 800,520 L 900,520" fill="none" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-orange)" stroke-dasharray="4,3"/>
+
+    <!-- === SECTION BOUNDARIES === -->
+
+    <!-- Presentation Layer -->
+    <rect x="30" y="80" width="680" height="110" rx="12" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.4"/>
+    <text x="45" y="100" fill="#22d3ee" font-size="10" font-weight="600" opacity="0.7">PRESENTATION LAYER</text>
+
+    <!-- Orchestration Layer -->
+    <rect x="30" y="205" width="690" height="245" rx="12" fill="none" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.4"/>
+    <text x="45" y="225" fill="#34d399" font-size="10" font-weight="600" opacity="0.7">ORCHESTRATION LAYER (Rust Engine)</text>
+
+    <!-- Tool & Provider Layer -->
+    <rect x="670" y="275" width="550" height="290" rx="12" fill="none" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.4"/>
+    <text x="685" y="295" fill="#fb923c" font-size="10" font-weight="600" opacity="0.7">TOOL &amp; PROVIDER LAYER</text>
+
+    <!-- Data Layer -->
+    <rect x="30" y="465" width="600" height="120" rx="12" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.4"/>
+    <text x="45" y="485" fill="#a78bfa" font-size="10" font-weight="600" opacity="0.7">DATA LAYER</text>
+
+    <!-- Support Layer -->
+    <rect x="670" y="580" width="550" height="110" rx="12" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.4"/>
+    <text x="685" y="600" fill="#94a3b8" font-size="10" font-weight="600" opacity="0.7">SUPPORT LAYER</text>
+
+    <!-- === PRESENTATION LAYER COMPONENTS === -->
+
+    <!-- Frontend (React SPA) -->
+    <rect x="370" y="115" width="180" height="55" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+    <rect x="370" y="115" width="180" height="55" rx="6" fill="#0f172a" opacity="0.7"/>
+    <rect x="370" y="115" width="180" height="55" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+    <text x="460" y="139" fill="#22d3ee" font-size="12" font-weight="600" text-anchor="middle">React SPA Frontend</text>
+    <text x="460" y="155" fill="#64748b" font-size="8" text-anchor="middle">Chat UI · Settings · Calendar · Metrics</text>
+
+    <!-- CLI (Rust TUI) -->
+    <rect x="60" y="115" width="180" height="55" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+    <rect x="60" y="115" width="180" height="55" rx="6" fill="#0f172a" opacity="0.7"/>
+    <rect x="60" y="115" width="180" height="55" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+    <text x="150" y="139" fill="#22d3ee" font-size="12" font-weight="600" text-anchor="middle">Rust CLI (aegis)</text>
+    <text x="150" y="155" fill="#64748b" font-size="8" text-anchor="middle">Clap args · Crossterm UI · Session mgmt</text>
+
+    <!-- === ORCHESTRATION LAYER (ENGINE CORE) === -->
+
+    <!-- Agent Loop card (handle_fallback) -->
+    <rect x="45" y="245" width="240" height="185" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+    <rect x="45" y="245" width="240" height="185" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="45" y="245" width="240" height="185" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="165" y="268" fill="#34d399" font-size="12" font-weight="600" text-anchor="middle">Agent Loop</text>
+    <text x="165" y="283" fill="#64748b" font-size="8" text-anchor="middle">Orchestrator::handle_fallback()</text>
+
+    <!-- Steps inside the Agent Loop -->
+    <text x="60" y="303" fill="#94a3b8" font-size="9">1. Classify intent →</text>
+    <text x="60" y="318" fill="#94a3b8" font-size="9">2. RAG retrieve (session-scoped)</text>
+    <text x="60" y="333" fill="#94a3b8" font-size="9">3. Code search (Semble MCP)</text>
+    <text x="60" y="348" fill="#94a3b8" font-size="9">4. Zotero search (research)</text>
+    <text x="60" y="363" fill="#94a3b8" font-size="9">5. Prompt synthesis</text>
+    <text x="60" y="378" fill="#94a3b8" font-size="9">6. Inference call (streaming)</text>
+    <text x="60" y="393" fill="#94a3b8" font-size="9">7. Persist turn to session</text>
+
+    <!-- Warning badges -->
+    <rect x="195" y="296" width="78" height="14" rx="3" fill="rgba(251,113,133,0.2)" stroke="#fb7185" stroke-width="0.8"/>
+    <text x="234" y="307" fill="#fb7185" font-size="7" text-anchor="middle">STUB (always default)</text>
+
+    <rect x="195" y="311" width="78" height="14" rx="3" fill="rgba(251,113,133,0.2)" stroke="#fb7185" stroke-width="0.8"/>
+    <text x="234" y="322" fill="#fb7185" font-size="7" text-anchor="middle">SINGLE-PASS</text>
+
+    <!-- Network layer -->
+    <rect x="320" y="245" width="185" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+    <rect x="320" y="245" width="185" height="55" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="320" y="245" width="185" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="412" y="268" fill="#34d399" font-size="12" font-weight="600" text-anchor="middle">Network Layer</text>
+    <text x="412" y="283" fill="#64748b" font-size="8" text-anchor="middle">Axum HTTP · Router · SSE streaming</text>
+
+    <!-- Subsystems row -->
+    <rect x="320" y="315" width="185" height="35" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+    <rect x="320" y="315" width="185" height="35" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="320" y="315" width="185" height="35" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+    <text x="412" y="333" fill="#fb7185" font-size="8" text-anchor="middle">Classifier [STUB] · Compactor [STUB]</text>
+    <text x="412" y="344" fill="#64748b" font-size="7" text-anchor="middle">PromptBuilder · WorkflowRegistry</text>
+
+    <rect x="320" y="365" width="185" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+    <rect x="320" y="365" width="185" height="55" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="320" y="365" width="185" height="55" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+    <text x="412" y="388" fill="#34d399" font-size="8" text-anchor="middle">ModelRegistry · ProviderRegistry</text>
+    <text x="412" y="401" fill="#64748b" font-size="7" text-anchor="middle">RwLock-based state management</text>
+    <text x="412" y="413" fill="#fb7185" font-size="7" text-anchor="middle">ctx_window hardcoded at 8192</text>
+
+    <!-- === TOOL & PROVIDER LAYER === -->
+
+    <!-- Inference Backends -->
+    <rect x="675" y="415" width="180" height="65" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+    <rect x="675" y="415" width="180" height="65" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="675" y="415" width="180" height="65" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="765" y="438" fill="#fbbf24" font-size="11" font-weight="600" text-anchor="middle">Inference Backends</text>
+    <text x="765" y="453" fill="#94a3b8" font-size="8" text-anchor="middle">Ollama · LM Studio · OpenAI-Compatible</text>
+    <text x="765" y="466" fill="#64748b" font-size="7" text-anchor="middle">InferenceBackend trait · stream() / call()</text>
+
+    <!-- Tool Registry -->
+    <rect x="675" y="305" width="180" height="95" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.5"/>
+    <rect x="675" y="305" width="180" height="95" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="675" y="305" width="180" height="95" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.5"/>
+    <text x="765" y="328" fill="#fb923c" font-size="11" font-weight="600" text-anchor="middle">Tool Registry</text>
+    <text x="765" y="343" fill="#94a3b8" font-size="8" text-anchor="middle">MCP-based tool dispatch</text>
+    <text x="765" y="358" fill="#fb923c" font-size="8" text-anchor="middle">● Semble (code search)</text>
+    <text x="765" y="373" fill="#fb923c" font-size="8" text-anchor="middle">● Zotero (citation manager)</text>
+    <text x="765" y="390" fill="#fb7185" font-size="7" text-anchor="middle">HARDCODED · No LLM tool discovery</text>
+
+    <!-- Semble MCP -->
+    <rect x="790" y="270" width="145" height="35" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+    <text x="862" y="290" fill="#94a3b8" font-size="9" text-anchor="middle">Semble (Python MCP)</text>
+    <text x="862" y="301" fill="#64748b" font-size="7" text-anchor="middle">Code search · project context</text>
+
+    <!-- Zotero MCP -->
+    <rect x="790" y="340" width="145" height="35" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+    <text x="862" y="360" fill="#94a3b8" font-size="9" text-anchor="middle">Zotero MCP</text>
+    <text x="862" y="371" fill="#64748b" font-size="7" text-anchor="middle">Research citation search</text>
+
+    <!-- Runtime Manager -->
+    <rect x="900" y="415" width="155" height="65" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+    <rect x="900" y="415" width="155" height="65" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="900" y="415" width="155" height="65" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="977" y="438" fill="#fbbf24" font-size="10" font-weight="600" text-anchor="middle">Runtime Manager</text>
+    <text x="977" y="455" fill="#94a3b8" font-size="8" text-anchor="middle">Model download/load/unload</text>
+    <text x="977" y="470" fill="#64748b" font-size="7" text-anchor="middle">Provider switching</text>
+
+    <!-- McpManager -->
+    <rect x="900" y="498" width="155" height="35" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+    <text x="977" y="518" fill="#94a3b8" font-size="9" text-anchor="middle">MCP Manager</text>
+    <text x="977" y="529" fill="#64748b" font-size="7" text-anchor="middle">Generic MCP server mgmt</text>
+
+    <!-- Calendar Tool -->
+    <rect x="900" y="548" width="155" height="35" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+    <text x="977" y="568" fill="#94a3b8" font-size="9" text-anchor="middle">Calendar Tool</text>
+    <text x="977" y="579" fill="#64748b" font-size="7" text-anchor="middle">Outlook calendar integration</text>
+
+    <!-- === DATA LAYER === -->
+
+    <!-- Memory Store -->
+    <rect x="45" y="495" width="230" height="70" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+    <rect x="45" y="495" width="230" height="70" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="45" y="495" width="230" height="70" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="160" y="518" fill="#a78bfa" font-size="11" font-weight="600" text-anchor="middle">Memory Store</text>
+    <text x="160" y="533" fill="#94a3b8" font-size="8" text-anchor="middle">File-backed JSON session persistence</text>
+    <text x="160" y="548" fill="#fb7185" font-size="7" text-anchor="middle">NO FILE LOCKING · Single-file per session</text>
+
+    <!-- RAG Python Service -->
+    <rect x="310" y="495" width="230" height="70" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+    <rect x="310" y="495" width="230" height="70" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="310" y="495" width="230" height="70" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="425" y="518" fill="#34d399" font-size="11" font-weight="600" text-anchor="middle">RAG Service (Python)</text>
+    <text x="425" y="533" fill="#94a3b8" font-size="8" text-anchor="middle">Embedding · Indexing · Retrieval</text>
+    <text x="425" y="548" fill="#64748b" font-size="7" text-anchor="middle">FastAPI · Sentence-Transformers</text>
+
+    <!-- Vector Store -->
+    <rect x="45" y="580" width="230" height="55" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+    <rect x="45" y="580" width="230" height="55" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="45" y="580" width="230" height="55" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="160" y="603" fill="#a78bfa" font-size="10" font-weight="600" text-anchor="middle">Vector Store (local)</text>
+    <text x="160" y="618" fill="#94a3b8" font-size="8" text-anchor="middle">In-memory FAISS / HNSW index</text>
+
+    <!-- Session Files (Filesystem) -->
+    <rect x="310" y="580" width="230" height="55" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+    <rect x="310" y="580" width="230" height="55" rx="6" fill="#0f172a" opacity="0.6"/>
+    <rect x="310" y="580" width="230" height="55" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="425" y="603" fill="#a78bfa" font-size="10" font-weight="600" text-anchor="middle">Session Files (~/.aegis/sessions/)</text>
+    <text x="425" y="618" fill="#94a3b8" font-size="8" text-anchor="middle">JSON · No indexing · No FTS</text>
+
+    <!-- === SUPPORT LAYER === -->
+
+    <rect x="690" y="598" width="450" height="75" rx="6" fill="rgba(30,41,59,0.3)" stroke="#94a3b8" stroke-width="1"/>
+    <text x="915" y="618" fill="#94a3b8" font-size="10" font-weight="600" text-anchor="middle">Configuration &amp; Environment</text>
+    <text x="915" y="635" fill="#64748b" font-size="8" text-anchor="middle">AEGIS_INFERENCE_PROVIDER · AEGIS_MODEL · AEGIS_OLLAMA_URL</text>
+    <text x="915" y="650" fill="#64748b" font-size="8" text-anchor="middle">AEGIS_ENGINE_HOST/PORT · AEGIS_RAG_URL · AEGIS_SEMBLE_PATH</text>
+    <text x="915" y="667" fill="#fb7185" font-size="7" text-anchor="middle">⚠ 100% env-var driven · No config file · No validation</text>
+
+    <!-- === LEGEND === -->
+
+    <rect x="45" y="710" width="1140" height="120" rx="10" fill="none" stroke="#1e293b" stroke-width="1"/>
+    <text x="60" y="730" fill="#64748b" font-size="10" font-weight="600">COLOR LEGEND</text>
+
+    <rect x="60" y="740" width="12" height="12" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1"/>
+    <text x="78" y="751" fill="#94a3b8" font-size="8">Frontend / Presentation</text>
+
+    <rect x="220" y="740" width="12" height="12" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+    <text x="238" y="751" fill="#94a3b8" font-size="8">Backend / Orchestration</text>
+
+    <rect x="420" y="740" width="12" height="12" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+    <text x="438" y="751" fill="#94a3b8" font-size="8">Database / Storage</text>
+
+    <rect x="600" y="740" width="12" height="12" rx="2" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+    <text x="618" y="751" fill="#94a3b8" font-size="8">Inference / Model</text>
+
+    <rect x="790" y="740" width="12" height="12" rx="2" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1"/>
+    <text x="808" y="751" fill="#94a3b8" font-size="8">Tool / Integration</text>
+
+    <rect x="970" y="740" width="12" height="12" rx="2" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+    <text x="988" y="751" fill="#94a3b8" font-size="8">External / Support</text>
+
+    <text x="60" y="780" fill="#fb7185" font-size="9" font-weight="600">RISK MARKERS</text>
+    <rect x="200" y="772" width="12" height="12" rx="3" fill="rgba(251,113,133,0.2)" stroke="#fb7185" stroke-width="0.8"/>
+    <text x="218" y="783" fill="#fb7185" font-size="8">[STUB] — Placeholder, not implemented</text>
+
+    <rect x="470" y="772" width="12" height="12" rx="3" fill="rgba(251,113,133,0.2)" stroke="#fb7185" stroke-width="0.8"/>
+    <text x="488" y="783" fill="#fb7185" font-size="8">⚠ — Known limitation / risk</text>
+
+    <rect x="700" y="772" width="12" height="12" rx="3" fill="rgba(251,113,133,0.2)" stroke="#fb7185" stroke-width="0.8"/>
+    <text x="718" y="783" fill="#fb7185" font-size="8">HARDCODED — Needs generalization</text>
+
+    <text x="60" y="810" fill="#64748b" font-size="8" opacity="0.6">~14K LOC Rust engine + ~1K LOC Python RAG + ~6.3K LOC TypeScript frontend + ~6.4K LOC CLI</text>
+  </svg>
+
+  <div class="cards-row">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot emerald"></div>
+        <h3>Architecture Style</h3>
+      </div>
+      <ul>
+        <li>• Monolithic Rust engine with modular subsystems</li>
+        <li>• Separate Python RAG service (FastAPI)</li>
+        <li>• React SPA + Rust CLI as dual frontends</li>
+        <li>• MCP protocol for tool integrations</li>
+        <li>• Single-pass pipeline (not iterative agent loop)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot cyan"></div>
+        <h3>Data Flow</h3>
+      </div>
+      <ul>
+        <li>• User → Frontend/CLI → HTTP/SSE → Router</li>
+        <li>• Router → Orchestrator::handle_fallback()</li>
+        <li>• Classify → RAG → Code Search → Zotero</li>
+        <li>• Prompt Synthesis → Inference Backend → Response</li>
+        <li>• Response streamed back + persisted to JSON</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-dot violet"></div>
+        <h3>Key Technologies</h3>
+      </div>
+      <ul>
+        <li>• Rust (Tokio + Axum + reqwest + async-trait)</li>
+        <li>• React 18 + TypeScript + Vite</li>
+        <li>• Python FastAPI + Sentence-Transformers</li>
+        <li>• Ollama / LM Studio / OpenAI-compatible LLMs</li>
+        <li>• MCP (Model Context Protocol) for tools</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">Generated by Hermes Agent · Architecture overview of AEGIS v0.1.0</div>
+</div>
+
+</body>
+</html>

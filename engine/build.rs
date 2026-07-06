@@ -35,7 +35,7 @@ fn main() {
     }
 
     let build_status = Command::new(npm)
-        .args(["run", "build"])
+        .args(["run", "build:dist"])
         .current_dir(&frontend_dir)
         .status()
         .expect("Failed to run npm run build");
