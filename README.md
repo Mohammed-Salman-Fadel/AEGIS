@@ -25,9 +25,10 @@ The system is designed around the following principles:
 
 ## Prerequisites
 
-Download an Inference provider - Ollama is currently the only provider supported by AEGIS.
+Download an Inference provider - Ollama and LMStudio are currently the only providers supported by AEGIS.
 
 - [Ollama's official download page](https://ollama.com/download)
+- [LMStudio download page](https://lmstudio.ai/download)
 
 ## Installation
 

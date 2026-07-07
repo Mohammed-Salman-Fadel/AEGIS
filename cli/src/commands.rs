@@ -67,6 +67,8 @@ fn dispatch_command(
     match command {
         CommandKind::Install(args) => handle_install(ctx, args),
         CommandKind::Open => handle_open(ctx),
+        CommandKind::Logs(args) => handle_logs(ctx, args),
+        CommandKind::Restart => handle_restart(ctx),
         CommandKind::Save(args) => handle_save(ctx, &args.note),
         CommandKind::Chat(args) => handle_chat(ctx, &args.prompt, args.session_id.as_deref()),
         CommandKind::Load(args) => handle_load(ctx, &args.id, invocation_mode),
@@ -319,6 +321,71 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
     println!("{}", ctx.ui.muted("Press Ctrl+C to stop all services (if running from a terminal)."));
 
     Ok(())
+}
+
+fn handle_logs(ctx: &AppContext, args: crate::args::LogsArgs) -> AppResult<()> {
+    let logs_dir = crate::runner::logs_dir_path(&ctx.workspace);
+    let services: Vec<&str> = if args.service.eq_ignore_ascii_case("all") {
+        crate::runner::SERVICE_NAMES.to_vec()
+    } else {
+        vec![args.service.as_str()]
+    };
+
+    for service in &services {
+        match crate::runner::read_service_log(&logs_dir, service, args.lines) {
+            Ok(content) => {
+                println!("{}", ctx.ui.header(&format!("{} log", service)));
+                if content.is_empty() {
+                    println!("  (empty log)\n");
+                } else {
+                    println!("{content}\n");
+                }
+            }
+            Err(e) => {
+                println!("{}", ctx.ui.warning(&e));
+                println!();
+            }
+        }
+    }
+
+    if args.follow {
+        println!("{}", ctx.ui.muted("Tail mode not yet implemented in this version. Use the --lines flag to see more output."));
+    }
+
+    Ok(())
+}
+
+fn handle_restart(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("AEGIS Restart"));
+
+    let logs_dir = crate::runner::logs_dir_path(&ctx.workspace);
+    let mut any_stopped = false;
+
+    // Stop services in reverse order (web-ui last)
+    for service in ["engine", "rag"] {
+        match crate::runner::stop_service(&logs_dir, service) {
+            Ok(true) => {
+                println!("  {} Stopped `{service}`", ctx.ui.success("✓"));
+                any_stopped = true;
+            }
+            Ok(false) => println!("  {} `{service}` was not running", ctx.ui.muted("-")),
+            Err(e) => println!("  {} Error stopping `{service}`: {e}", ctx.ui.warning("⚠")),
+        }
+    }
+
+    if !any_stopped {
+        println!();
+        println!("{}", ctx.ui.muted("No services were running."));
+        return Ok(());
+    }
+
+    // Give processes a moment to release ports
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Start everything back up
+    println!();
+    println!("{}", ctx.ui.muted("Restarting services..."));
+    handle_open(ctx)
 }
 
 fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {

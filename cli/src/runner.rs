@@ -756,3 +756,57 @@ fn render_spawn_error(program: &str, error: io::Error) -> String {
         error.to_string()
     }
 }
+
+/// Services that can be managed (logs, stop, restart).
+pub const SERVICE_NAMES: &[&str] = &["engine", "rag", "web-ui"];
+
+/// Resolve the logs directory from workspace install root.
+pub fn logs_dir_path(workspace: &crate::workspace::Workspace) -> PathBuf {
+    workspace.install_root.join(".aegis").join("logs")
+}
+
+/// Read the last `n` lines from a service's log file.
+pub fn read_service_log(logs_dir: &Path, service: &str, n: usize) -> AppResult<String> {
+    let log_path = log_path(logs_dir, service);
+    if !log_path.exists() {
+        return Err(format!("No log file found for `{service}` at `{}`.", log_path.display()));
+    }
+    let content = fs::read_to_string(&log_path)
+        .map_err(|e| format!("Could not read `{}`: {e}", log_path.display()))?;
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+    let start = if total > n { total - n } else { 0 };
+    Ok(lines[start..].join("\n"))
+}
+
+/// Stop a background service by reading its PID file and killing the process.
+pub fn stop_service(logs_dir: &Path, service: &str) -> AppResult<bool> {
+    let pid_path = pid_path(logs_dir, service);
+    let Ok(raw_pid) = fs::read_to_string(&pid_path) else {
+        return Ok(false);
+    };
+    let Ok(pid) = raw_pid.trim().parse::<u32>() else {
+        return Ok(false);
+    };
+
+    let killed = if cfg!(windows) {
+        Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+
+    if killed {
+        let _ = fs::remove_file(&pid_path);
+    }
+    Ok(killed)
+}

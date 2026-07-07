@@ -9,6 +9,21 @@ use std::path::PathBuf;
 use clap::Args;
 
 #[derive(Debug, Clone, Args)]
+pub struct LogsArgs {
+    /// Service to show logs for: engine, rag, web-ui, or all
+    #[arg(default_value = "all")]
+    pub service: String,
+
+    /// Number of lines to show (from the end)
+    #[arg(long, short = 'n', default_value = "50")]
+    pub lines: usize,
+
+    /// Follow/tail the log in real time
+    #[arg(long, short = 'f')]
+    pub follow: bool,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct InstallArgs {
     #[arg(
         long,
