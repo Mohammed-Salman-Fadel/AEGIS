@@ -193,6 +193,60 @@ fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
     }
 }
 
+/// Check if Ollama CLI is available, either on PATH or at a known install location.
+fn probe_ollama_cli() -> bool {
+    // First try PATH
+    if which_program("ollama") {
+        return true;
+    }
+
+    // Fallback: check known install paths (PATH may have been corrupted)
+    let known_paths = if cfg!(windows) {
+        vec![
+            format!(
+                r"{}\AppData\Local\Programs\Ollama\ollama.exe",
+                std::env::var("USERPROFILE").unwrap_or_default()
+            ),
+            r"C:\Program Files\Ollama\ollama.exe".to_string(),
+            r"C:\Program Files (x86)\Ollama\ollama.exe".to_string(),
+        ]
+    } else {
+        vec![
+            "/usr/local/bin/ollama".to_string(),
+            "/usr/bin/ollama".to_string(),
+        ]
+    };
+
+    for path in &known_paths {
+        if std::path::Path::new(path).exists() {
+            // Temporarily add to PATH so subsequent commands work
+            if let Ok(current) = std::env::var("PATH") {
+                if let Some(parent) = std::path::Path::new(path).parent() {
+                    let dir = parent.to_string_lossy();
+                    if !current.contains(dir.as_ref()) {
+                        // SAFETY: We're modifying our own process's PATH to find Ollama.
+                        // This is safe because it only affects the current process, not the
+                        // system or other processes, and it only appends to the existing PATH.
+                        unsafe { std::env::set_var("PATH", format!("{};{}", dir, current)); }
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    false
+}
+fn which_program(name: &str) -> bool {
+    let cmd = if cfg!(windows) { "where" } else { "which" };
+    Command::new(cmd)
+        .arg(name)
+        .output()
+        .ok()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Check if Ollama has at least one model pulled. If not, pull the default model.
 fn ensure_ollama_model(report: &mut RuntimeStartReport) {
     let default_model = std::env::var("AEGIS_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
@@ -200,7 +254,8 @@ fn ensure_ollama_model(report: &mut RuntimeStartReport) {
     // First check if ollama is reachable at all
     if !probe_ollama_cli() {
         report.warnings.push(
-            "Ollama CLI not found on PATH. Install Ollama and pull a model before using AEGIS.".to_string()
+            "Ollama CLI not found on PATH. Install Ollama and pull a model before using AEGIS."
+                .to_string()
         );
         return;
     }
@@ -208,7 +263,8 @@ fn ensure_ollama_model(report: &mut RuntimeStartReport) {
     // Check if ollama serve is running
     if !service_reachable("http://127.0.0.1:11434/api/tags") {
         report.warnings.push(
-            "Ollama server is not running on http://127.0.0.1:11434. Start it with `ollama serve`.".to_string()
+            "Ollama server is not running on http://127.0.0.1:11434. Start it with `ollama serve`."
+                .to_string()
         );
         return;
     }
@@ -220,13 +276,12 @@ fn ensure_ollama_model(report: &mut RuntimeStartReport) {
         .ok()
         .map(|o| {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            // ollama list shows a header + at least one model row if models exist
             stdout.lines().count() > 1
         })
         .unwrap_or(false);
 
     if has_models {
-        return; // Models exist, nothing to do
+        return;
     }
 
     // No models — pull the default one
@@ -245,15 +300,6 @@ fn ensure_ollama_model(report: &mut RuntimeStartReport) {
             ));
         }
     }
-}
-
-fn probe_ollama_cli() -> bool {
-    Command::new("ollama")
-        .arg("--version")
-        .output()
-        .ok()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 fn model_pull_plan_for_name(model_name: &str) -> LaunchPlan {

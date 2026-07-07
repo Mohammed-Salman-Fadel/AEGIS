@@ -1418,18 +1418,228 @@ fn truncate(s: &str, max: usize) -> String {
     result
 }
 
-// ── stub tool implementations (TODO: wire to real backends) ──────────────
+// ── tool implementations ──────────────────────────────────────────────
 
+/// Safe arithmetic expression evaluator using recursive descent parsing.
+/// Supports: +, -, *, /, %, ^ (power), parentheses, basic math constants/functions.
+/// Returns a string result or a descriptive error — never panics.
 fn calculate_expression(expr: &str) -> String {
-    format!("[TODO: calculate_expression not yet implemented] Received expression: {expr}")
+    let trimmed = expr.trim();
+    if trimmed.is_empty() {
+        return "Error: empty expression.".to_string();
+    }
+
+    // Try parsing and evaluating
+    match eval_arithmetic(trimmed) {
+        Ok(result) => {
+            // Format nicely: integer if whole, decimal otherwise
+            if result.fract() == 0.0 && result.abs() < 1e15 {
+                format!(" = {}", result as i64)
+            } else if result.abs() < 1e-6 || result.abs() > 1e15 {
+                format!(" = {:.6e}", result)
+            } else {
+                format!(" = {}", result)
+            }
+        }
+        Err(e) => format!("Error evaluating `{trimmed}`: {e}"),
+    }
+}
+
+/// Recursive descent parser for arithmetic expressions.
+fn eval_arithmetic(expr: &str) -> Result<f64, String> {
+    let chars: Vec<char> = expr.chars().collect();
+    let mut pos = 0;
+    let result = parse_expr(&chars, &mut pos)?;
+    skip_whitespace(&chars, &mut pos);
+    if pos < chars.len() {
+        return Err(format!("Unexpected character `{}` at position {pos}", chars[pos]));
+    }
+    Ok(result)
+}
+
+fn parse_expr(chars: &[char], pos: &mut usize) -> Result<f64, String> {
+    let mut left = parse_term(chars, pos)?;
+    loop {
+        skip_whitespace(chars, pos);
+        if *pos >= chars.len() { break; }
+        match chars[*pos] {
+            '+' => { *pos += 1; let right = parse_term(chars, pos)?; left += right; }
+            '-' => { *pos += 1; let right = parse_term(chars, pos)?; left -= right; }
+            _ => break,
+        }
+    }
+    Ok(left)
+}
+
+fn parse_term(chars: &[char], pos: &mut usize) -> Result<f64, String> {
+    let mut left = parse_power(chars, pos)?;
+    loop {
+        skip_whitespace(chars, pos);
+        if *pos >= chars.len() { break; }
+        match chars[*pos] {
+            '*' => { *pos += 1; let right = parse_power(chars, pos)?; left *= right; }
+            '/' => {
+                *pos += 1;
+                let right = parse_power(chars, pos)?;
+                if right == 0.0 { return Err("Division by zero.".to_string()); }
+                left /= right;
+            }
+            '%' => {
+                *pos += 1;
+                let right = parse_power(chars, pos)?;
+                if right == 0.0 { return Err("Modulo by zero.".to_string()); }
+                left = left % right;
+            }
+            _ => break,
+        }
+    }
+    Ok(left)
+}
+
+fn parse_power(chars: &[char], pos: &mut usize) -> Result<f64, String> {
+    let mut left = parse_unary(chars, pos)?;
+    skip_whitespace(chars, pos);
+    if *pos < chars.len() && chars[*pos] == '^' {
+        *pos += 1;
+        let right = parse_unary(chars, pos)?;
+        left = left.powf(right);
+    }
+    Ok(left)
+}
+
+fn parse_unary(chars: &[char], pos: &mut usize) -> Result<f64, String> {
+    skip_whitespace(chars, pos);
+    if *pos >= chars.len() { return Err("Unexpected end of expression.".to_string()); }
+    match chars[*pos] {
+        '+' => { *pos += 1; parse_atom(chars, pos) }
+        '-' => { *pos += 1; Ok(-parse_atom(chars, pos)?) }
+        _ => parse_atom(chars, pos),
+    }
+}
+
+fn parse_atom(chars: &[char], pos: &mut usize) -> Result<f64, String> {
+    skip_whitespace(chars, pos);
+    if *pos >= chars.len() { return Err("Unexpected end of expression.".to_string()); }
+
+    // Parenthesized sub-expression
+    if chars[*pos] == '(' {
+        *pos += 1;
+        let result = parse_expr(chars, pos)?;
+        skip_whitespace(chars, pos);
+        if *pos >= chars.len() || chars[*pos] != ')' {
+            return Err("Missing closing parenthesis.".to_string());
+        }
+        *pos += 1;
+        return Ok(result);
+    }
+
+    // Number (integer or decimal)
+    if chars[*pos].is_ascii_digit() || chars[*pos] == '.' {
+        let start = *pos;
+        while *pos < chars.len() && (chars[*pos].is_ascii_digit() || chars[*pos] == '.' || chars[*pos] == 'e' || chars[*pos] == 'E' || chars[*pos] == '+' || chars[*pos] == '-') {
+            // Handle scientific notation properly
+            if (chars[*pos] == '+' || chars[*pos] == '-') && *pos > start && (chars[*pos - 1] == 'e' || chars[*pos - 1] == 'E') {
+                *pos += 1;
+            } else if chars[*pos] == '+' || chars[*pos] == '-' {
+                break; // End of number, operator follows
+            } else {
+                *pos += 1;
+            }
+        }
+        let num_str: String = chars[start..*pos].iter().collect();
+        return num_str.parse::<f64>().map_err(|_| format!("Invalid number: `{num_str}`"));
+    }
+
+    // Named constants / functions: pi, e, sqrt(), abs(), round(), floor(), ceil(), sin(), cos(), tan(), log(), ln()
+    if chars[*pos].is_ascii_alphabetic() || chars[*pos] == '_' {
+        let start = *pos;
+        while *pos < chars.len() && (chars[*pos].is_ascii_alphanumeric() || chars[*pos] == '_') {
+            *pos += 1;
+        }
+        let name: String = chars[start..*pos].iter().collect();
+        skip_whitespace(chars, pos);
+
+        match name.as_str() {
+            "pi" => Ok(std::f64::consts::PI),
+            "e" => Ok(std::f64::consts::E),
+            "inf" | "infinity" => Ok(f64::INFINITY),
+            "nan" => Ok(f64::NAN),
+            func if *pos < chars.len() && chars[*pos] == '(' => {
+                *pos += 1; // consume (
+                let arg = parse_expr(chars, pos)?;
+                skip_whitespace(chars, pos);
+                if *pos >= chars.len() || chars[*pos] != ')' {
+                    return Err(format!("Missing closing parenthesis for `{func}(...)`."));
+                }
+                *pos += 1; // consume )
+                match func {
+                    "sqrt" => Ok(arg.sqrt()),
+                    "abs" => Ok(arg.abs()),
+                    "round" => Ok(arg.round()),
+                    "floor" => Ok(arg.floor()),
+                    "ceil" => Ok(arg.ceil()),
+                    "sin" => Ok(arg.sin()),
+                    "cos" => Ok(arg.cos()),
+                    "tan" => Ok(arg.tan()),
+                    "asin" => Ok(arg.asin()),
+                    "acos" => Ok(arg.acos()),
+                    "atan" => Ok(arg.atan()),
+                    "ln" | "log" => {
+                        if arg <= 0.0 { return Err("Logarithm of non-positive number.".to_string()); }
+                        Ok(arg.ln())
+                    }
+                    "log2" => {
+                        if arg <= 0.0 { return Err("Logarithm of non-positive number.".to_string()); }
+                        Ok(arg.log2())
+                    }
+                    "log10" => {
+                        if arg <= 0.0 { return Err("Logarithm of non-positive number.".to_string()); }
+                        Ok(arg.log10())
+                    }
+                    "exp" => Ok(arg.exp()),
+                    "deg" => Ok(arg.to_degrees()),
+                    "rad" => Ok(arg.to_radians()),
+                    _ => Err(format!("Unknown function: `{func}`")),
+                }
+            }
+            _ => Err(format!("Unknown identifier: `{name}`")),
+        }
+    } else {
+        Err(format!("Unexpected character `{}` at position {pos}", chars[*pos]))
+    }
+}
+
+fn skip_whitespace(chars: &[char], pos: &mut usize) {
+    while *pos < chars.len() && chars[*pos].is_ascii_whitespace() {
+        *pos += 1;
+    }
 }
 
 async fn search_knowledge_base(
     query: &str,
-    _rag_client: &RagClient,
-    _session_id: &str,
+    rag_client: &RagClient,
+    session_id: &str,
 ) -> String {
-    format!("[TODO: search_knowledge_base not yet implemented] Received query: {query}")
+    match rag_client.retrieve(query, 5, 0.0, session_id).await {
+        Ok(outcome) if !outcome.chunks.is_empty() => {
+            let mut result = String::from("Found relevant chunks:\n");
+            for (i, chunk) in outcome.chunks.iter().enumerate() {
+                let src = std::path::Path::new(&chunk.source)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&chunk.source);
+                result.push_str(&format!("\n--- Result {} (from {}) ---\n", i + 1, src));
+                if let Some(page) = chunk.page {
+                    result.push_str(&format!("  Page {}\n", page));
+                }
+                result.push_str(&chunk.text);
+                result.push('\n');
+            }
+            result
+        }
+        Ok(_) => format!("No results found for query: {query}"),
+        Err(e) => format!("Knowledge search failed: {e}"),
+    }
 }
 
 #[cfg(test)]

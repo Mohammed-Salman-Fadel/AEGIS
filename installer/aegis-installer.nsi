@@ -83,19 +83,24 @@ Section "Install"
     ; Desktop shortcut
     CreateShortCut "$DESKTOP\AEGIS.lnk" "$INSTDIR\bin\aegis.exe"
 
-    ; Add to PATH
-    DetailPrint "Adding AEGIS to PATH..."
+    ; Add to PATH — only append if the user PATH already exists.
+    ; If HKCU PATH is empty/non-existent, skip modification entirely.
+    ; Creating a new HKCU PATH would override the implicit merge with
+    ; the system (HKLM) PATH and could wipe HKLM-only entries from the
+    ; effective user PATH in some shells.
+    DetailPrint "Adding AEGIS to user PATH..."
     ReadRegStr $1 HKCU "Environment" "PATH"
-    StrCpy $2 "$INSTDIR\bin"
     ${If} $1 != ""
-        ${If} $1 != "$2"
-        ${AndIf} $1 != "$2;"
-            StrCpy $1 "$1;$2"
+        ${If} $1 != "$INSTDIR\bin"
+        ${AndIf} $1 != "$INSTDIR\bin;"
+            StrCpy $1 "$1;$INSTDIR\bin"
         ${EndIf}
+        WriteRegStr HKCU "Environment" "PATH" $1
+        DetailPrint "AEGIS added to user PATH."
     ${Else}
-        StrCpy $1 "$2"
+        DetailPrint "No existing user PATH found — skipping PATH modification."
+        DetailPrint "Add $INSTDIR\bin to your PATH manually, or run AEGIS from the Start Menu shortcut."
     ${EndIf}
-    WriteRegStr HKCU "Environment" "PATH" $1
     SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 
     ; Registry for uninstall
