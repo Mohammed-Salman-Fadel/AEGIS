@@ -115,3 +115,14 @@ pub struct OptionalNameArg {
     #[arg(value_name = "name", help = "Engine-owned provider or model name")]
     pub name: Option<String>,
 }
+
+#[derive(Debug, Clone, Args)]
+pub struct UpgradeArgs {
+    /// Only check for updates, don't download
+    #[arg(long)]
+    pub check: bool,
+
+    /// Skip confirmation prompt
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}

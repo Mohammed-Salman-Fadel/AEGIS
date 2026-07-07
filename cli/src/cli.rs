@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 
 use crate::args::{
     AskArgs, ChatArgs, InstallArgs, LogsArgs, OptionalNameArg, OptionalSessionIdArg, ReplArgs,
-    RequiredSessionIdArg, SaveArgs,
+    RequiredSessionIdArg, SaveArgs, UpgradeArgs,
 };
 
 pub const HELP_EXAMPLES: &str = "\
@@ -19,6 +19,9 @@ Examples:
   aegis install --path D:\\AEGIS
   aegis open
   aegis restart
+  aegis version
+  aegis upgrade          (check + download latest from GitHub)
+  aegis upgrade --check  (just check, don't download)
   aegis logs               (last 50 lines of all services)
   aegis logs engine        (last 50 lines of engine)
   aegis logs rag -n 200    (last 200 lines of RAG)
@@ -66,6 +69,8 @@ pub enum CommandKind {
     Open,
     Logs(LogsArgs),
     Restart,
+    Version,
+    Upgrade(UpgradeArgs),
     Save(SaveArgs),
     Chat(ChatArgs),
     Load(RequiredSessionIdArg),

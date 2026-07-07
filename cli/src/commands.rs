@@ -69,6 +69,8 @@ fn dispatch_command(
         CommandKind::Open => handle_open(ctx),
         CommandKind::Logs(args) => handle_logs(ctx, args),
         CommandKind::Restart => handle_restart(ctx),
+        CommandKind::Version => handle_version(ctx),
+        CommandKind::Upgrade(args) => handle_upgrade(ctx, args),
         CommandKind::Save(args) => handle_save(ctx, &args.note),
         CommandKind::Chat(args) => handle_chat(ctx, &args.prompt, args.session_id.as_deref()),
         CommandKind::Load(args) => handle_load(ctx, &args.id, invocation_mode),
@@ -386,6 +388,179 @@ fn handle_restart(ctx: &AppContext) -> AppResult<()> {
     println!();
     println!("{}", ctx.ui.muted("Restarting services..."));
     handle_open(ctx)
+}
+
+fn handle_version(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("AEGIS Version Info"));
+
+    // CLI version from Cargo.toml
+    println!("  CLI    : {} (aegis)", clap::crate_version!());
+
+    // Engine version from /api/health
+    let engine_info = ctx.engine.health();
+    if engine_info.reachable {
+        println!("  Engine : {} ({})", engine_info.note, engine_info.request_path);
+    } else {
+        println!("  Engine : {} ({})", ctx.ui.warning("not reachable"), engine_info.request_path);
+    }
+
+    // Rust info
+    println!("  Rust   : {}", rustc_version());
+    println!();
+    println!("{}", ctx.ui.muted("Run `aegis upgrade --check` to see if a newer version is available."));
+    Ok(())
+}
+
+fn handle_upgrade(ctx: &AppContext, args: crate::args::UpgradeArgs) -> AppResult<()> {
+    println!("{}", ctx.ui.header("AEGIS Upgrade"));
+
+    let current_ver = clap::crate_version!();
+    println!("  Current version : {current_ver}");
+
+    let repo = "NousResearch/AEGIS";
+
+    // Query GitHub API for the latest release
+    println!("  Checking {} releases...", ctx.ui.muted(repo));
+    let api_url = format!("https://api.github.com/repos/{repo}/releases/latest");
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("AEGIS-CLI")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Could not create HTTP client: {e}"))?;
+
+    let resp = client
+        .get(&api_url)
+        .send()
+        .map_err(|e| format!("Could not reach GitHub API: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "GitHub API returned HTTP {} (rate limited? Check `gh api {api_url}` manually).",
+            resp.status()
+        ));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| format!("Could not parse GitHub API response: {e}"))?;
+
+    let latest_tag = body["tag_name"]
+        .as_str()
+        .unwrap_or("unknown")
+        .trim_start_matches('v');
+    let release_name = body["name"].as_str().unwrap_or("unknown");
+    let release_url = body["html_url"].as_str().unwrap_or("");
+
+    println!("  Latest version  : v{latest_tag} ({release_name})");
+
+    // Compare versions (simple string comparison for now)
+    let is_newer = latest_tag != current_ver;
+    if !is_newer {
+        println!();
+        println!("{}", ctx.ui.success("You're on the latest version!"));
+        return Ok(());
+    }
+
+    println!("  Release notes  : {release_url}");
+    println!();
+
+    if args.check {
+        println!("{}", ctx.ui.muted("Run `aegis upgrade` without --check to download and install."));
+        return Ok(());
+    }
+
+    // Find the installer asset
+    let assets = body["assets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let installer_asset = assets.iter().find(|a| {
+        a["name"].as_str().map(|n| n.contains("AEGIS-Windows-x64") || n.ends_with(".exe")).unwrap_or(false)
+    });
+
+    let (asset_name, download_url) = match installer_asset {
+        Some(asset) => (
+            asset["name"].as_str().unwrap_or("AEGIS-Windows-x64.exe"),
+            asset["browser_download_url"].as_str().unwrap_or(""),
+        ),
+        None => {
+            // Fallback: try to find any binary asset
+            let first = assets.first().map(|a| (
+                a["name"].as_str().unwrap_or("unknown"),
+                a["browser_download_url"].as_str().unwrap_or(""),
+            ));
+            match first {
+                Some((name, url)) => (name, url),
+                None => return Err("No downloadable assets found in the latest release.".to_string()),
+            }
+        }
+    };
+
+    println!("  Available       : {asset_name}");
+    println!();
+
+    // Confirm
+    if !args.yes {
+        println!("{}", ctx.ui.warning("This will download and install the new version."));
+        print!("  Proceed? [y/N]: ");
+        std::io::stdout().flush().map_err(|e| format!("IO error: {e}"))?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).map_err(|e| format!("IO error: {e}"))?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("{}", ctx.ui.muted("Upgrade cancelled."));
+            return Ok(());
+        }
+    }
+
+    if download_url.is_empty() {
+        return Err("No download URL found in the release.".to_string());
+    }
+
+    // Download
+    println!("  Downloading {}...", ctx.ui.muted(asset_name));
+    let download_resp = client
+        .get(download_url)
+        .send()
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    let total_size = download_resp.content_length().unwrap_or(0);
+    let bytes = download_resp
+        .bytes()
+        .map_err(|e| format!("Could not read download: {e}"))?;
+
+    let mb = total_size as f64 / 1_048_576.0;
+    println!("  Downloaded {:.1} MB", mb);
+
+    // Determine where to save
+    let workspace = &ctx.workspace;
+    let dest_dir = workspace.install_root.join("bin");
+    std::fs::create_dir_all(&dest_dir).map_err(|e| format!("Could not create `{}`: {e}", dest_dir.display()))?;
+
+    // Save as new version alongside current
+    let ext = if asset_name.ends_with(".exe") { "exe" } else { asset_name.split('.').last().unwrap_or("bin") };
+    let dest_path = dest_dir.join(format!("aegis-upgrade-v{latest_tag}.{ext}"));
+    std::fs::write(&dest_path, &bytes)
+        .map_err(|e| format!("Could not write to `{}`: {e}", dest_path.display()))?;
+
+    println!("  Saved to: {}", dest_path.display());
+    println!();
+    println!("{}", ctx.ui.success(&format!("Upgrade v{latest_tag} downloaded.")));
+    println!("{}", ctx.ui.muted("To apply, close AEGIS and replace your current aegis.exe with this file."));
+    println!("{}", ctx.ui.muted(&format!("  copy /Y \"{}\" \"{}\"", dest_path.display(), ctx.workspace.cli_dir.join("aegis.exe").display())));
+
+    Ok(())
+}
+
+/// Return a short Rust toolchain version string.
+fn rustc_version() -> String {
+    let output = std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok();
+    match output {
+        Some(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("unknown").to_string()
+        }
+        _ => "not found".to_string(),
+    }
 }
 
 fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {
