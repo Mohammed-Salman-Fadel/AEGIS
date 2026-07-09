@@ -3,7 +3,8 @@ import type { ImportPhase } from '../types';
 
 export function fitTextareaToContent(textarea: HTMLTextAreaElement) {
   textarea.style.height = '0px';
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 224)}px`;
+  const maxHeight = Math.max(window.innerHeight * 0.55, 160);
+  textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
 }
 
 export function isFatalUiError(message: string) {

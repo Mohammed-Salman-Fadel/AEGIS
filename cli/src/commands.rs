@@ -301,8 +301,8 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
 
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", web_url])
+        let _ = std::process::Command::new("explorer")
+            .arg(web_url)
             .spawn();
     }
     #[cfg(target_os = "macos")]

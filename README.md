@@ -12,6 +12,20 @@ Table of Contents:
 - [Getting Started](#getting-started)
 - [Demo](#demo)
 
+### Project Repository
+
+```
+  aegis/
+  ├── engine-rust/
+  ├── rag-python/
+  ├── web-ui/
+  ├── cli/
+  ├── installer/
+  ├── docs/
+  ├── scripts/
+  └── data/
+```
+
 ## Overview
 
 <!-- As local models progress and provide better  -->
@@ -36,12 +50,43 @@ Installation steps:
 
 ### 1. Download binary file from web page:
 
-### 2. Run the following command
-
+```
+    cd \AEGIS\AEGIS\landing page
+    npm run dev
 ```
 
+- Run the downloaded `AEGIS-Windows-x64.exe` executable file. All the python dependencies in the requirements.txt file should be downloaded automatically.
+
+### 2. Open a new terminal and run the following command:
+
+```
+    aegis install --yes
 ```
 
 ## Getting Started
+
+To launch everything from the terminal, run the following:
+
+```
+    aegis open
+```
+
+This should start the following:
+
+- RAG service (Python FastAPI on 127.0.0.1:8000).
+- Engine (Rust HTTP server on 127.0.0.1:8080).
+- Opens the browser to http://localhost:8080.
+
+Once everything is ran, you simpy go to the localhost link and you can begin chatting with AEGIS!
+
+### Getting Started with the CLI
+
+Calling the AEGIS CLi is very easy, you can simply call `aegis` in powershell or your default command line shell and AEGIS CLI should start running.
+
+```
+aegis
+```
+
+**NOTE**: When using the aegis cli, you should still call the `aegis open` command to run the background services needed for the cli to function.
 
 ## Demo
