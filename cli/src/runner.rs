@@ -80,7 +80,6 @@ pub fn ensure_local_runtime(ui: &Ui, workspace: &Workspace) -> RuntimeStartRepor
 
     ensure_rag_runtime(workspace, &logs_dir, &mut report);
     ensure_engine_runtime(workspace, &logs_dir, &mut report);
-    ensure_frontend_runtime(workspace, &logs_dir, &mut report);
     render_runtime_report(ui, &report);
 
     report
@@ -160,10 +159,15 @@ fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
         return;
     }
 
+    // Preflight: ensure at least one Ollama model is available before starting the engine.
+    // The engine aborts startup if warm_active_model() finds nothing, so we pull
+    // a default model here if Ollama is empty.
+    ensure_ollama_model(report);
+
     let Some(plan) = engine_launch_plan(workspace) else {
         report
             .warnings
-            .push("Engine was not started because no engine Cargo.toml was found.".to_string());
+            .push("Engine was not started because no engine binary or Cargo.toml was found.".to_string());
         return;
     };
 
@@ -178,7 +182,7 @@ fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
     match spawn_background(&plan, logs_dir) {
         Ok(()) => {
             report.started.push("Engine".to_string());
-            if !wait_for_service(&health_url, Duration::from_secs(20)) {
+            if !wait_for_service(&health_url, Duration::from_secs(30)) {
                 report.warnings.push(format!(
                     "Engine was started in the background but did not answer `{health_url}` yet. The model may still be warming, or startup may have failed. Check `{}`.",
                     log_path(logs_dir, &plan.label).display()
@@ -186,6 +190,125 @@ fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
             }
         }
         Err(error) => report.warnings.push(error),
+    }
+}
+
+/// Check if Ollama CLI is available, either on PATH or at a known install location.
+fn probe_ollama_cli() -> bool {
+    // First try PATH
+    if which_program("ollama") {
+        return true;
+    }
+
+    // Fallback: check known install paths (PATH may have been corrupted)
+    let known_paths = if cfg!(windows) {
+        vec![
+            format!(
+                r"{}\AppData\Local\Programs\Ollama\ollama.exe",
+                std::env::var("USERPROFILE").unwrap_or_default()
+            ),
+            r"C:\Program Files\Ollama\ollama.exe".to_string(),
+            r"C:\Program Files (x86)\Ollama\ollama.exe".to_string(),
+        ]
+    } else {
+        vec![
+            "/usr/local/bin/ollama".to_string(),
+            "/usr/bin/ollama".to_string(),
+        ]
+    };
+
+    for path in &known_paths {
+        if std::path::Path::new(path).exists() {
+            // Temporarily add to PATH so subsequent commands work
+            if let Ok(current) = std::env::var("PATH") {
+                if let Some(parent) = std::path::Path::new(path).parent() {
+                    let dir = parent.to_string_lossy();
+                    if !current.contains(dir.as_ref()) {
+                        // SAFETY: We're modifying our own process's PATH to find Ollama.
+                        // This is safe because it only affects the current process, not the
+                        // system or other processes, and it only appends to the existing PATH.
+                        unsafe { std::env::set_var("PATH", format!("{};{}", dir, current)); }
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    false
+}
+fn which_program(name: &str) -> bool {
+    let cmd = if cfg!(windows) { "where" } else { "which" };
+    Command::new(cmd)
+        .arg(name)
+        .output()
+        .ok()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if Ollama has at least one model pulled. If not, pull the default model.
+fn ensure_ollama_model(report: &mut RuntimeStartReport) {
+    let default_model = std::env::var("AEGIS_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
+
+    // First check if ollama is reachable at all
+    if !probe_ollama_cli() {
+        report.warnings.push(
+            "Ollama CLI not found on PATH. Install Ollama and pull a model before using AEGIS."
+                .to_string()
+        );
+        return;
+    }
+
+    // Check if ollama serve is running
+    if !service_reachable("http://127.0.0.1:11434/api/tags") {
+        report.warnings.push(
+            "Ollama server is not running on http://127.0.0.1:11434. Start it with `ollama serve`."
+                .to_string()
+        );
+        return;
+    }
+
+    // Check if any models exist
+    let has_models = Command::new("ollama")
+        .args(["list"])
+        .output()
+        .ok()
+        .map(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout.lines().count() > 1
+        })
+        .unwrap_or(false);
+
+    if has_models {
+        return;
+    }
+
+    // No models — pull the default one
+    println!(
+        "  No Ollama models found. Pulling default model `{default_model}` (this may take a while)..."
+    );
+
+    let plan = model_pull_plan_for_name(&default_model);
+    match run_foreground(&plan) {
+        Ok(()) => {
+            println!("  Default model `{default_model}` pulled successfully.");
+        }
+        Err(e) => {
+            report.warnings.push(format!(
+                "Could not pull default model `{default_model}`: {e}. Run `ollama pull {default_model}` manually."
+            ));
+        }
+    }
+}
+
+fn model_pull_plan_for_name(model_name: &str) -> LaunchPlan {
+    LaunchPlan {
+        label: format!("Model pull ({model_name})"),
+        program: "ollama".to_string(),
+        args: vec!["pull".to_string(), model_name.to_string()],
+        cwd: std::env::current_dir().unwrap_or_default(),
+        env: Vec::new(),
     }
 }
 
@@ -246,27 +369,56 @@ fn ensure_frontend_runtime(
 }
 
 pub fn engine_launch_plan(workspace: &Workspace) -> Option<LaunchPlan> {
-    if !workspace.engine_manifest().exists() {
-        return None;
+    // Priority 1: compiled binary in install_root/bin/
+    let install_binary = workspace.install_root.join("bin").join("aegis-engine.exe");
+    if install_binary.exists() {
+        return Some(LaunchPlan {
+            label: "Engine".to_string(),
+            program: install_binary.to_string_lossy().to_string(),
+            args: Vec::new(),
+            cwd: workspace.install_root.clone(),
+            env: vec![
+                (
+                    "AEGIS_RAG_URL".to_string(),
+                    std::env::var("AEGIS_RAG_URL")
+                        .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
+                ),
+                (
+                    "AEGIS_ENGINE_HOST".to_string(),
+                    std::env::var("AEGIS_ENGINE_HOST")
+                        .unwrap_or_else(|_| "127.0.0.1".to_string()),
+                ),
+                (
+                    "AEGIS_ENGINE_PORT".to_string(),
+                    std::env::var("AEGIS_ENGINE_PORT")
+                        .unwrap_or_else(|_| "8080".to_string()),
+                ),
+            ],
+        });
     }
 
-    Some(LaunchPlan {
-        label: "Engine".to_string(),
-        program: "cargo".to_string(),
-        args: vec!["run".to_string()],
-        cwd: workspace.engine_dir.clone(),
-        env: vec![
-            (
-                "CARGO_TARGET_DIR".to_string(),
-                workspace.engine_target_dir(false).display().to_string(),
-            ),
-            (
-                "AEGIS_RAG_URL".to_string(),
-                std::env::var("AEGIS_RAG_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
-            ),
-        ],
-    })
+    // Priority 2: for developers — use cargo run from the engine directory
+    if workspace.engine_manifest().exists() {
+        Some(LaunchPlan {
+            label: "Engine".to_string(),
+            program: "cargo".to_string(),
+            args: vec!["run".to_string()],
+            cwd: workspace.engine_dir.clone(),
+            env: vec![
+                (
+                    "CARGO_TARGET_DIR".to_string(),
+                    workspace.engine_target_dir(false).display().to_string(),
+                ),
+                (
+                    "AEGIS_RAG_URL".to_string(),
+                    std::env::var("AEGIS_RAG_URL")
+                        .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string()),
+                ),
+            ],
+        })
+    } else {
+        None
+    }
 }
 
 pub fn model_pull_plan(workspace: &Workspace, model_name: &str) -> LaunchPlan {
@@ -397,7 +549,7 @@ fn make_command(plan: &LaunchPlan) -> Command {
     command
 }
 
-fn spawn_background(plan: &LaunchPlan, logs_dir: &Path) -> AppResult<()> {
+pub fn spawn_background(plan: &LaunchPlan, logs_dir: &Path) -> AppResult<()> {
     let log_path = log_path(logs_dir, &plan.label);
     let stdout = OpenOptions::new()
         .create(true)
@@ -503,7 +655,7 @@ fn sanitize_label(label: &str) -> String {
         .to_string()
 }
 
-fn service_reachable(url: &str) -> bool {
+pub fn service_reachable(url: &str) -> bool {
     reqwest::blocking::Client::new()
         .get(url)
         .timeout(Duration::from_millis(800))
@@ -512,7 +664,7 @@ fn service_reachable(url: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn wait_for_service(url: &str, timeout: Duration) -> bool {
+pub fn wait_for_service(url: &str, timeout: Duration) -> bool {
     let started = Instant::now();
     while started.elapsed() < timeout {
         if service_reachable(url) {
@@ -539,7 +691,7 @@ fn initialize_rag(base_url: &str) -> AppResult<()> {
     }
 }
 
-fn join_url(base_url: &str, path: &str) -> String {
+pub fn join_url(base_url: &str, path: &str) -> String {
     format!(
         "{}/{}",
         base_url.trim_end_matches('/'),
@@ -649,4 +801,58 @@ fn render_spawn_error(program: &str, error: io::Error) -> String {
     } else {
         error.to_string()
     }
+}
+
+/// Services that can be managed (logs, stop, restart).
+pub const SERVICE_NAMES: &[&str] = &["engine", "rag", "web-ui"];
+
+/// Resolve the logs directory from workspace install root.
+pub fn logs_dir_path(workspace: &crate::workspace::Workspace) -> PathBuf {
+    workspace.install_root.join(".aegis").join("logs")
+}
+
+/// Read the last `n` lines from a service's log file.
+pub fn read_service_log(logs_dir: &Path, service: &str, n: usize) -> AppResult<String> {
+    let log_path = log_path(logs_dir, service);
+    if !log_path.exists() {
+        return Err(format!("No log file found for `{service}` at `{}`.", log_path.display()));
+    }
+    let content = fs::read_to_string(&log_path)
+        .map_err(|e| format!("Could not read `{}`: {e}", log_path.display()))?;
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+    let start = if total > n { total - n } else { 0 };
+    Ok(lines[start..].join("\n"))
+}
+
+/// Stop a background service by reading its PID file and killing the process.
+pub fn stop_service(logs_dir: &Path, service: &str) -> AppResult<bool> {
+    let pid_path = pid_path(logs_dir, service);
+    let Ok(raw_pid) = fs::read_to_string(&pid_path) else {
+        return Ok(false);
+    };
+    let Ok(pid) = raw_pid.trim().parse::<u32>() else {
+        return Ok(false);
+    };
+
+    let killed = if cfg!(windows) {
+        Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+
+    if killed {
+        let _ = fs::remove_file(&pid_path);
+    }
+    Ok(killed)
 }

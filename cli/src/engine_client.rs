@@ -1180,7 +1180,7 @@ struct SelectProviderRequest {
 
 #[derive(Deserialize)]
 struct SwitchProviderResponse {
-    current: String,
+    _current: String,
     persisted: bool,
     message: String,
 }

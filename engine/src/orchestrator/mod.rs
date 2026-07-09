@@ -826,58 +826,65 @@ impl Orchestrator {
             return Ok(final_answer);
         }
 
-        // ── ReAct loop for code workflows ─────────────────────────────
-        // Code workflows benefit from iterative tool use — the model can
-        // search the codebase, read files, and refine its understanding
-        // before producing a final answer.
-        if matches!(
+        // ── ReAct loop for all workflows ──────────────────────────────
+        // Every query goes through the agentic loop. The model sees a list
+        // of available tools (search, read, calculate, rag, etc.) and can
+        // choose to call them iteratively, or produce a final answer directly
+        // if no tools are needed.  This makes the system truly agentic for
+        // all chat modes, not just code workflows.
+        // The loop is bounded by MAX_ROUNDS so it always terminates.
+        let react_project_path = if matches!(
             classification,
             crate::workflow::WorkflowId::CodeExplain
                 | crate::workflow::WorkflowId::CodeGenerate
                 | crate::workflow::WorkflowId::CodeDebug
         ) {
-            let final_answer = ReactLoop::execute(
-                &self.inference,
-                &self.tool_registry,
-                &self.rag_client,
-                &req.message,
-                &working_session_id,
-                &ctx.model.name,
-                req.code_project_path.as_deref(),
-                tx.clone(),
-            )
-            .await?;
+            req.code_project_path.as_deref()
+        } else {
+            None
+        };
 
-            // Send the final answer as a single chunk.
-            let _ = tx.send(final_answer.clone()).await;
+        let final_answer = ReactLoop::execute(
+            &self.inference,
+            &self.tool_registry,
+            &self.rag_client,
+            &req.message,
+            &working_session_id,
+            &ctx.model.name,
+            react_project_path,
+            tx.clone(),
+        )
+        .await?;
 
-            if let Some(session_id) = persisted_session_id.as_deref() {
-                self.memory_store
-                    .append_turn_with_edit(
-                        session_id,
-                        &req.message,
-                        &final_answer,
-                        &ctx.model.name,
-                        &ctx.trace,
-                        req.edit_from_turn_index,
-                        req.edit_from_turn_index.is_some(),
-                        None,
-                        None,
-                    )
-                    .await?;
+        // Send the final answer as a single chunk.
+        let _ = tx.send(final_answer.clone()).await;
 
-                if should_title_first_turn_session {
-                    self.title_first_turn_session(
-                        session_id,
-                        &req.message,
-                        &ctx.model.name,
-                    )
-                    .await;
-                }
+        if let Some(session_id) = persisted_session_id.as_deref() {
+            self.memory_store
+                .append_turn_with_edit(
+                    session_id,
+                    &req.message,
+                    &final_answer,
+                    &ctx.model.name,
+                    &ctx.trace,
+                    req.edit_from_turn_index,
+                    req.edit_from_turn_index.is_some(),
+                    None,
+                    None,
+                )
+                .await?;
+
+            if should_title_first_turn_session {
+                self.title_first_turn_session(
+                    session_id,
+                    &req.message,
+                    &ctx.model.name,
+                )
+                .await;
             }
-
-            return Ok(final_answer);
         }
+
+        return Ok(final_answer);
 
         let rag_enabled = req.rag_enabled.unwrap_or(true);
         let rag_top_k = req.rag_top_k.unwrap_or(5);

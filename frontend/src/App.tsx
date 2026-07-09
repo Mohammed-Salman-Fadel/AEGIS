@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   PanelLeftClose, PanelLeftOpen, Sun, Moon, Settings, X,
+  Bot, Cpu as CpuIcon, GraduationCap, Activity,
 } from 'lucide-react';
 
 // Types
@@ -52,7 +53,6 @@ import {
 
 // Components
 import { Sidebar } from './components/Sidebar';
-import { Header } from './components/Header';
 import { MessageBubble } from './components/MessageBubble';
 import { Composer } from './components/Composer';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -154,6 +154,7 @@ export default function App() {
   const [modelSearch, setModelSearch] = useState('');
   const [selectedModelProviderTag, setSelectedModelProviderTag] = useState('All');
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [modelSwitching, setModelSwitching] = useState(false);
   const [pausedModelDownload, setPausedModelDownload] = useState<string | null>(null);
   const [modelDownloadState, setModelDownloadState] = useState<ModelDownloadState>('idle');
   const [modelDownloadProgress, setModelDownloadProgress] = useState(0);
@@ -936,6 +937,7 @@ export default function App() {
   };
 
   const selectModel = async (modelName: string) => {
+    setModelSwitching(true);
     setSettingsMessage(null);
     try {
       const res = await fetch(`${API_BASE}/models/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelName }) });
@@ -944,6 +946,7 @@ export default function App() {
       try { setContextUsage(await fetchContextUsage(activeSessionId)); } catch {}
       setSettingsMessage(`Active model switched to ${modelName}.`);
     } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_switch_model')); }
+    setModelSwitching(false);
   };
 
   const downloadModel = async (modelNameOverride?: string) => {
@@ -1329,16 +1332,46 @@ export default function App() {
 
       {/* Main Content */}
       <main className="relative flex min-w-0 flex-1 flex-col">
-        <Header
-          isDark={isDark}
-          activeSessionTitle={activeSession?.title}
-          activeSessionId={activeSessionId}
-          chatMode={chatMode}
-          isMetricsOpen={isMetricsOpen}
-          status={status}
-          onSetChatMode={setChatMode}
-          onToggleMetrics={() => setIsMetricsOpen((c) => !c)}
-        />
+        {/* Session bar — replaces the old header */}
+        <div className={`flex shrink-0 items-center gap-4 px-6 py-2 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{activeSession?.title ?? t('header.new_chat')}</div>
+              <div className={`truncate text-xs ${isDark ? 'text-zinc-600' : 'text-slate-400'}`}>
+                Session: {activeSessionId ?? t('header.not_started')}
+              </div>
+            </div>
+          </div>
+          <div className={`flex items-center gap-1 rounded-lg border p-0.5 shadow-inner backdrop-blur-sm justify-self-center ${isDark ? 'border-zinc-800 bg-zinc-900/30' : 'border-stone-200 bg-white/50'}`}>
+            {(['general', 'coder', 'academic'] as ChatMode[]).map((mode) => {
+              const Icon = mode === 'general' ? Bot : mode === 'coder' ? CpuIcon : GraduationCap;
+              return (
+                <button
+                  key={mode}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all ${chatMode === mode ? 'aegis-accent-chip-active text-white' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'}`}
+                  onClick={() => setChatMode(mode)}
+                  type="button"
+                >
+                  <Icon size={13} />
+                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              className={`aegis-accent-ghost inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition ${isMetricsOpen ? 'aegis-accent-subtle' : isDark ? 'border-transparent text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200' : 'border-transparent text-slate-500 hover:bg-stone-100 hover:text-slate-700'}`}
+              onClick={() => setIsMetricsOpen((c) => !c)}
+              type="button"
+            >
+              <Activity size={13} />
+              {t('metrics.live_stats')}
+            </button>
+            <span className={`rounded-md px-2 py-1 text-[11px] ${isDark ? 'bg-zinc-900 text-zinc-500' : 'bg-stone-100 text-slate-400'}`}>
+              {status}
+            </span>
+          </div>
+        </div>
 
         {/* Resource Warning */}
         {visibleResourceWarning && (
@@ -1456,6 +1489,9 @@ export default function App() {
           onEditFromQueue={(index) => { setInput(messageQueueRef.current[index]); setQueueEditIndex(index); }}
           onSaveQueueEdit={() => { if (queueEditIndex !== null) { setMessageQueue((q) => q.map((msg, i) => i === queueEditIndex ? input : msg)); setQueueEditIndex(null); } }}
           queueEditIndex={queueEditIndex}
+          availableModels={availableModels}
+          onSelectModel={selectModel}
+          modelSwitching={modelSwitching}
         />
 
         {/* Voice Mode Overlay */}

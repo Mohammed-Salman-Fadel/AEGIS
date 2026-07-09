@@ -1,6 +1,6 @@
 // Chat composer footer with textarea, tools menu (import/calendar/export), voice, and send button
 import { useState } from 'react';
-import { Upload, Calendar, Download, Wrench, ChevronDown, Mic, Send, Check, FolderOpen, X, BookOpen, Image, Edit3, Clock } from 'lucide-react';
+import { Upload, Calendar, Download, Wrench, ChevronDown, Mic, Send, Check, FolderOpen, X, BookOpen, Image, Edit3, Clock, Cpu } from 'lucide-react';
 import type { IndexedDocument, CodeProject, ContextUsage } from '../types';
 import { importPhaseLabel, fitTextareaToContent, personalizeWelcomeMessage } from '../lib';
 import { useTranslate } from '../lib/i18n';
@@ -50,6 +50,9 @@ interface ComposerProps {
   onEditFromQueue: (index: number) => void;
   onSaveQueueEdit: () => void;
   queueEditIndex: number | null;
+  availableModels: { name: string; description: string; active: boolean }[];
+  onSelectModel: (name: string) => void;
+  modelSwitching: boolean;
 }
 
 export function Composer({
@@ -65,9 +68,11 @@ export function Composer({
   obsidianEnabled, onInputChange, onSubmit, onToggleTools, onImportClick, onCalendarOpen, onExportPdf, onObsidianOpen,
   onFileUpload, onImageUpload, onClearDocuments, onVoiceModeOpen, onDetachProject,
   onRemoveFromQueue, onEditFromQueue, onSaveQueueEdit, queueEditIndex,
+  availableModels, onSelectModel, modelSwitching,
 }: ComposerProps) {
   const { t, lang } = useTranslate();
   const [queueExpanded, setQueueExpanded] = useState(false);
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
 
   return (
     <footer className={`px-4 transition-all duration-500 ease-out ${
@@ -224,7 +229,7 @@ export function Composer({
         <input accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" className="hidden" disabled={isStreaming} onChange={onImageUpload} ref={imageFileInputRef} title="Supported image files: PNG, JPG, GIF, WEBP, BMP" type="file" />
         <div className={`border shadow-sm transition-all duration-500 ease-out ${showCenteredComposer ? 'rounded-[1.75rem] px-4 pb-3 pt-3' : 'rounded-xl px-3 pb-2.5 pt-3'} ${isDark ? 'border-zinc-800 bg-zinc-950/92 text-zinc-100 shadow-black/30' : 'border-stone-300 bg-white text-slate-900 shadow-stone-300/30'}`}>
           <textarea
-            className={`w-full resize-none bg-transparent text-sm leading-6 outline-none ${showCenteredComposer ? 'max-h-28 min-h-[30px]' : 'max-h-44 min-h-[38px]'} ${isDark ? 'placeholder:text-zinc-500' : 'placeholder:text-slate-400'}`}
+            className={`w-full resize-none bg-transparent text-sm leading-6 outline-none ${showCenteredComposer ? 'max-h-[40vh] min-h-[6vh]' : 'max-h-[55vh] min-h-[8vh]'} ${isDark ? 'placeholder:text-zinc-500' : 'placeholder:text-slate-400'}`}
             disabled={isStreaming && isUploading}
             onChange={(e) => onInputChange(e.target.value)}
             onInput={(e) => fitTextareaToContent(e.currentTarget)}
@@ -235,7 +240,7 @@ export function Composer({
             value={input}
           />
           <div className="mt-2 flex items-center justify-between gap-3">
-            <div className="relative">
+            <div className="relative"> {/* Tools button */}
               <button
                 aria-expanded={toolsOpen}
                 className={`aegis-accent-ghost inline-flex items-center gap-2 rounded-lg border px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] transition-all duration-200 ${isStreaming ? 'cursor-not-allowed opacity-60' : ''} ${toolsOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${toolsOpen ? 'aegis-accent-subtle' : isDark ? 'border-transparent text-zinc-500 hover:bg-zinc-800' : 'border-transparent text-slate-500 hover:bg-stone-100'}`}
@@ -281,6 +286,74 @@ export function Composer({
               >
                 <Mic size={19} />
               </button>
+              {/* ── Model dropdown ── */}
+              <div className="relative">
+                <button
+                  className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1.5 text-[11px] transition-all duration-200 ${
+                    isStreaming ? 'cursor-not-allowed opacity-60' : ''
+                  } ${modelDropdownOpen ? '-translate-y-0.5 scale-[0.98]' : 'translate-y-0 scale-100'} ${
+                    modelDropdownOpen
+                      ? 'aegis-accent-subtle'
+                      : isDark ? 'border-transparent text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400' : 'border-transparent text-slate-500 hover:bg-stone-100 hover:text-emerald-600'
+                  }`}
+                  disabled={isStreaming}
+                  onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+                  onBlur={() => setTimeout(() => setModelDropdownOpen(false), 180)}
+                  type="button"
+                  title="Switch model"
+                >
+                  <span className="w-[80px] truncate text-center tracking-wide">{contextUsage.model ? contextUsage.model.split(':')[0] : 'Model'}</span>
+                  <ChevronDown size={11} className={`shrink-0 transition-transform duration-200 ${modelDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {/* ── Model switching progress bar ── */}
+                <div
+                  className={`pointer-events-none absolute -bottom-[5px] left-1/2 h-[3px] -translate-x-1/2 rounded-full transition-all duration-300 ${
+                    modelSwitching ? 'w-4/5 opacity-100' : 'w-0 opacity-0'
+                  } ${isDark ? 'bg-emerald-400' : 'bg-emerald-500'}`}
+                  style={{ animation: modelSwitching ? 'pulse 1.2s ease-in-out infinite' : 'none' }}
+                />
+
+                {modelDropdownOpen && (
+                  <div
+                    className={`absolute bottom-full right-0 z-30 mb-2 w-44 animate-[toolsMenuIn_160ms_ease-out] rounded-lg border py-1 shadow-xl ${
+                      isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'
+                    }`}
+                  >
+                    <div className={`px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>
+                      Installed Models
+                    </div>
+                    {availableModels.length === 0 ? (
+                      <div className={`px-3 py-3 text-center text-[11px] ${isDark ? 'text-zinc-600' : 'text-slate-400'}`}>
+                        No models found. Install one in Settings.
+                      </div>
+                    ) : (
+                      <div className="max-h-48 overflow-y-auto">
+                        {availableModels.map((m) => (
+                          <button
+                            key={m.name}
+                            className={`flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] transition-colors ${
+                              m.active
+                                ? isDark ? 'bg-emerald-950/30 text-emerald-300' : 'bg-emerald-50/60 text-emerald-700'
+                                : isDark ? 'text-zinc-300 hover:bg-zinc-900' : 'text-slate-700 hover:bg-stone-100'
+                            }`}
+                            onClick={() => { onSelectModel(m.name); setModelDropdownOpen(false); }}
+                            type="button"
+                          >
+                            <span className={`shrink-0 text-[9px] ${m.active ? 'opacity-100' : 'opacity-0'}`}>
+                              {m.active ? '✓' : ''}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate">{m.name}</span>
+                            {m.active && (
+                              <span className={`shrink-0 text-[9px] ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`}>active</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <button
                 className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white transition-all duration-200 ${isStreaming && input.trim() ? 'aegis-accent-chip-active' : 'aegis-accent-solid'} disabled:opacity-60`}
                 disabled={isStreaming && !input.trim()}

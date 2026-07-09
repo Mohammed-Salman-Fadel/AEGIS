@@ -62,3 +62,7 @@ data/
 .idea/
 *.swp
 *.iml
+
+
+
+.agents

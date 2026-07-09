@@ -17,19 +17,10 @@ export async function fetchContextUsage(sessionId: string | null): Promise<Conte
   if (sessionId) params.set('session_id', sessionId);
   const query = params.toString();
   const suffix = query ? `?${query}` : '';
-  const urls = [`${API_BASE}/context/usage${suffix}`, `/context/usage${suffix}`];
-  let lastError: Error | null = null;
-
-  for (const url of urls) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Engine returned HTTP ${response.status} while loading context usage.`);
-      return normalizeContextUsage((await response.json()) as Partial<ContextUsage>);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error('Could not load context usage.');
-    }
-  }
-  throw lastError ?? new Error('Could not load context usage.');
+  const url = `${API_BASE}/context/usage${suffix}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Engine returned HTTP ${response.status} while loading context usage.`);
+  return normalizeContextUsage((await response.json()) as Partial<ContextUsage>);
 }
 
 export function formatTokenMeter(usage: ContextUsage) {

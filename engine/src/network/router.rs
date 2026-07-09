@@ -7,20 +7,132 @@ use axum::{
         DefaultBodyLimit, Multipart, State,
         ws::{Message, WebSocketUpgrade},
     },
-    http::{HeaderValue, Method, StatusCode},
+    http::{Method, StatusCode},
+    response::IntoResponse,
     routing::{delete, get, post},
 };
 use futures::{sink::SinkExt, stream::StreamExt};
+use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
+    collections::HashMap,
 };
 use sysinfo::System;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
 use tracing::warn;
+use axum::body::Body;
+use axum::http::Request;
+use axum::response::Response;
+
+/// Embedded frontend dist/ using rust-embed.
+/// The build.rs ensures dist/ is populated before engine compiles.
+#[derive(Embed)]
+#[folder = "../frontend/dist/"]
+#[prefix = ""]
+struct FrontendAssets;
+
+/// Minimal MIME type map for static file serving.
+fn mime_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "css"  => "text/css; charset=utf-8",
+        "js"   => "application/javascript",
+        "svg"  => "image/svg+xml",
+        "png"  => "image/png",
+        "ico"  => "image/x-icon",
+        "json" => "application/json",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf"  => "font/ttf",
+        _      => "application/octet-stream",
+    }
+}
+
+/// Serves installer/download files from a configurable directory on disk.
+/// Uses AEGIS_DOWNLOADS_DIR env var, or defaults to `downloads/` next to the frontend dist.
+async fn handle_download(axum::extract::Path(path): axum::extract::Path<String>) -> Response<Body> {
+    let downloads_dir = std::env::var("AEGIS_DOWNLOADS_DIR").unwrap_or_else(|_| {
+        // Default: alongside frontend/dist/ (repo root/downloads/)
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest.parent().unwrap_or(&manifest).join("downloads").to_string_lossy().to_string()
+    });
+
+    let file_path = PathBuf::from(&downloads_dir).join(&path);
+
+    // Prevent directory traversal
+    if file_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::from("Forbidden"))
+            .unwrap();
+    }
+
+    match tokio::fs::read(&file_path).await {
+        Ok(bytes) => {
+            let mime = mime_type(&file_path);
+            Response::builder()
+                .header("Content-Type", mime)
+                .header("Content-Disposition", &format!("attachment; filename=\"{}\"", file_path.file_name().unwrap_or_default().to_string_lossy()))
+                .body(Body::from(bytes))
+                .unwrap_or_else(|_| Response::new(Body::from("Internal error")))
+        }
+        Err(_) => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("File not found"))
+            .unwrap(),
+    }
+}
+
+/// Serves the embedded React frontend from the compiled binary.
+/// Returns 404 JSON for any /api/* path not matched by routes (API guard).
+/// SPA fallback: any unknown non-API path returns index.html.
+async fn handle_static(uri: axum::http::Uri) -> Response<Body> {
+    let requested_path = uri.path().trim_start_matches('/');
+
+    // API guard: if path starts with api/ and it wasn't caught by routes, return 404 JSON
+    if requested_path.starts_with("api/") {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"error":"API endpoint not found"}"#))
+            .unwrap();
+    }
+
+    // Default to index.html for root or SPA routes
+    let asset_path = if requested_path.is_empty() || !FrontendAssets::get(requested_path).is_some() {
+        "index.html"
+    } else {
+        requested_path
+    };
+
+    match FrontendAssets::get(asset_path) {
+        Some(content) => {
+            let mime = mime_type(Path::new(asset_path));
+            Response::builder()
+                .header("Content-Type", mime)
+                .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                .body(Body::from(content.data.to_vec()))
+                .unwrap_or_else(|_| Response::new(Body::from("Internal error")))
+        }
+        None => {
+            // Final SPA fallback: serve index.html
+            match FrontendAssets::get("index.html") {
+                Some(content) => Response::builder()
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .body(Body::from(content.data.to_vec()))
+                    .unwrap(),
+                None => Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::from("Not found"))
+                    .unwrap(),
+            }
+        }
+    }
+}
 
 static SYSTEM_STATS: OnceLock<Mutex<System>> = OnceLock::new();
 const MAX_INGEST_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
@@ -475,110 +587,122 @@ async fn handle_voice_config(
 }
 
 pub fn create_router(state: AppState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::PATCH,
-            Method::DELETE,
-        ])
-        .allow_headers(tower_http::cors::Any);
+    // CORS: in production (embedded frontend, same-origin), no CORS needed.
+    // In dev mode (Vite on port 5173), allow only the dev server origin.
+    // Gate permissive CORS behind AEGIS_DEV_CORS env var for debugging.
+    let cors = if std::env::var_os("AEGIS_DEV_CORS").is_some() {
+        CorsLayer::permissive()
+    } else {
+        CorsLayer::new()
+            .allow_origin([
+                "http://127.0.0.1:5173".parse().unwrap(),
+                "http://localhost:5173".parse().unwrap(),
+            ])
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+    };
 
     Router::new()
+        // Legacy /health for backward compat
         .route("/health", get(handlers::health::health))
-        .route("/chat", post(handlers::chat::chat))
+        // All API routes under /api prefix
+        .route("/api/health", get(handlers::health::health))
+        .route("/api/chat", post(handlers::chat::chat))
         .route(
-            "/providers/current",
+            "/api/providers/current",
             get(handlers::providers::current_provider),
         )
-        .route("/providers", get(handlers::providers::list_providers))
+        .route("/api/providers", get(handlers::providers::list_providers))
         .route(
-            "/providers/select",
+            "/api/providers/select",
             post(handlers::providers::select_provider),
         )
-        .route("/models", get(handlers::models::list_models))
-        .route("/models/ollama", get(handlers::models::list_ollama_models))
-        .route("/models/current", get(handlers::models::current_model))
-        .route("/models/select", post(handlers::models::select_model))
-        .route("/models/download", post(handlers::models::download_model))
-        .route("/models/pull", post(handlers::models::pull_ollama_model))
+        .route("/api/models", get(handlers::models::list_models))
+        .route("/api/models/ollama", get(handlers::models::list_ollama_models))
+        .route("/api/models/current", get(handlers::models::current_model))
+        .route("/api/models/select", post(handlers::models::select_model))
+        .route("/api/models/download", post(handlers::models::download_model))
+        .route("/api/models/pull", post(handlers::models::pull_ollama_model))
         .route(
-            "/profile",
+            "/api/profile",
             get(handlers::profile::get_profile).put(handlers::profile::save_profile),
         )
-        .route("/context/usage", get(handlers::context::usage))
-        .route("/calendar/event", post(handlers::calendar::create_event))
+        .route("/api/context/usage", get(handlers::context::usage))
+        .route("/api/calendar/event", post(handlers::calendar::create_event))
         .route(
-            "/calendar/create-from-prompt",
+            "/api/calendar/create-from-prompt",
             post(handlers::calendar::create_from_prompt),
         )
         .route(
-            "/calendar/outlook/calendars",
+            "/api/calendar/outlook/calendars",
             get(handlers::calendar::list_outlook_calendars),
         )
         .route(
-            "/calendar/outlook/select",
+            "/api/calendar/outlook/select",
             post(handlers::calendar::select_outlook_calendar),
         )
-        .route("/system/stats", get(get_system_stats))
+        .route("/api/system/stats", get(get_system_stats))
         .route(
-            "/projects/ingest",
+            "/api/projects/ingest",
             post(handlers::projects::ingest_project_files),
         )
         .route(
-            "/ingest",
+            "/api/ingest",
             post(handle_pdf_ingest).layer(DefaultBodyLimit::max(MAX_INGEST_UPLOAD_BYTES)),
         )
-        .route("/ingest/document", delete(handle_ingest_document_delete))
-        .route("/index/progress", get(handle_progress_ws))
-        .route("/chat/stream", get(handle_chat_ws))
-        .route("/voice/transcribe", post(handle_voice_transcribe))
-        .route("/voice/synthesize", get(handle_voice_synthesize))
-        .route("/voice/config", post(handle_voice_config))
+        .route("/api/ingest/document", delete(handle_ingest_document_delete))
+        .route("/api/index/progress", get(handle_progress_ws))
+        .route("/api/chat/stream", get(handle_chat_ws))
+        .route("/api/voice/transcribe", post(handle_voice_transcribe))
+        .route("/api/voice/synthesize", get(handle_voice_synthesize))
+        .route("/api/voice/config", post(handle_voice_config))
         .route(
-            "/mcp/obsidian/validate",
+            "/api/mcp/obsidian/validate",
             get(handlers::mcp::validate_obsidian_path),
         )
         .route(
-            "/mcp/obsidian/graph",
+            "/api/mcp/obsidian/graph",
             post(handlers::mcp::build_obsidian_graph),
         )
         .route(
-            "/mcp/obsidian/list-notes",
+            "/api/mcp/obsidian/list-notes",
             post(handlers::mcp::list_vault_notes),
         )
         .route(
-            "/mcp/obsidian/read",
+            "/api/mcp/obsidian/read",
             post(handlers::mcp::read_vault_note),
         )
         .route(
-            "/mcp/obsidian/file",
+            "/api/mcp/obsidian/file",
             get(handlers::mcp::serve_vault_file),
         )
         .route(
-            "/mcp/obsidian/search",
+            "/api/mcp/obsidian/search",
             post(handlers::mcp::search_vault_notes),
         )
         .route(
-            "/mcp/obsidian/write",
+            "/api/mcp/obsidian/write",
             post(handlers::mcp::write_vault_note),
         )
         .route(
-            "/mcp/{provider}/{tool}",
+            "/api/mcp/{provider}/{tool}",
             post(handlers::mcp::call_mcp_tool),
         )
         .route(
-            "/sessions",
+            "/api/sessions",
             get(handlers::sessions::list_sessions).post(handlers::sessions::create_session),
         )
         .route(
-            "/sessions/{session_id}",
+            "/api/sessions/{session_id}",
             get(handlers::sessions::get_session)
                 .patch(handlers::sessions::rename_session)
                 .delete(handlers::sessions::delete_session),
         )
+        // Download route: serves installer binary from a configurable directory.
+        // Set AEGIS_DOWNLOADS_DIR env var, or defaults to a `downloads/` folder
+        // alongside the frontend dist/ directory.
+        .route("/downloads/{*path}", get(handle_download))
+        .fallback(handle_static)
         .layer(cors)
         .with_state(state)
 }

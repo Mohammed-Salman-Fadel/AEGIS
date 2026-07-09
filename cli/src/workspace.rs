@@ -188,9 +188,25 @@ impl Workspace {
             }
         }
 
-        let port = self.frontend_dev_port().unwrap_or(5173);
+        // Check if frontend dev server is running on port 5173
+        let dev_port = self.frontend_dev_port().unwrap_or(5173);
+        if dev_port == 5173 {
+            // Quick check if Vite dev server is listening
+            if let Ok(response) = reqwest::blocking::Client::new()
+                .get(&format!("http://127.0.0.1:{dev_port}"))
+                .timeout(std::time::Duration::from_millis(300))
+                .send()
+            {
+                if response.status().is_success() {
+                    return format!("http://localhost:{dev_port}");
+                }
+            }
+        }
 
-        format!("http://localhost:{port}")
+        // Default to engine URL — frontend is embedded, served on same port
+        let host = env::var("AEGIS_ENGINE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = env::var("AEGIS_ENGINE_PORT").unwrap_or_else(|_| "8080".to_string());
+        format!("http://{host}:{port}")
     }
 
     pub fn installer_readme(&self) -> PathBuf {

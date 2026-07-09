@@ -8,8 +8,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::args::{
-    AskArgs, ChatArgs, InstallArgs, OptionalNameArg, OptionalSessionIdArg, ReplArgs,
-    RequiredSessionIdArg, SaveArgs,
+    AskArgs, ChatArgs, InstallArgs, LogsArgs, OptionalNameArg, OptionalSessionIdArg, ReplArgs,
+    RequiredSessionIdArg, SaveArgs, UpgradeArgs,
 };
 
 pub const HELP_EXAMPLES: &str = "\
@@ -17,19 +17,27 @@ Examples:
   aegis
   aegis install
   aegis install --path D:\\AEGIS
+  aegis open
+  aegis restart
+  aegis version
+  aegis upgrade          (check + download latest from GitHub)
+  aegis upgrade --check  (just check, don't download)
+  aegis logs               (last 50 lines of all services)
+  aegis logs engine        (last 50 lines of engine)
+  aegis logs rag -n 200    (last 200 lines of RAG)
   aegis chat \"What can you do?\"
   aegis load 1189578c-9c96-4b4c-8015-4d0673544a6a
   aegis repl
   aegis ask --stdin
   aegis session new
   aegis save \"my name is Sam\"
-    aegis provider list
-    aegis model
-    aegis model list
-    aegis model switch qwen3:4b
-    aegis model download qwen3:4b
-    aegis status
-    aegis doctor";
+  aegis provider list
+  aegis model
+  aegis model list
+  aegis model switch qwen3:4b
+  aegis model download qwen3:4b
+  aegis status
+  aegis doctor";
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -58,6 +66,11 @@ pub struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum CommandKind {
     Install(InstallArgs),
+    Open,
+    Logs(LogsArgs),
+    Restart,
+    Version,
+    Upgrade(UpgradeArgs),
     Save(SaveArgs),
     Chat(ChatArgs),
     Load(RequiredSessionIdArg),
