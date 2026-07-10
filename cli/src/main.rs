@@ -136,6 +136,7 @@ mod tests {
             ChatArgs {
                 prompt: "hello".to_string(),
                 session_id: None,
+                attachments: Vec::new(),
             }
         ))));
     }

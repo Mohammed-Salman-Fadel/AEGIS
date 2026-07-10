@@ -63,6 +63,13 @@ pub struct SessionDetail {
     pub title: String,
     pub note: String,
     pub recent_turns: Vec<String>,
+    pub turns: Vec<SessionTurn>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionTurn {
+    pub query: String,
+    pub response: String,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +142,17 @@ impl EngineClient {
         self.warm_active_model_silently()
     }
 
+    fn api_url(&self, path: &str) -> String {
+        let base_url = self.base_url.trim_end_matches('/');
+        let api_base = if base_url.ends_with("/api") {
+            base_url.to_string()
+        } else {
+            format!("{base_url}/api")
+        };
+
+        format!("{}/{}", api_base, path.trim_start_matches('/'))
+    }
+
     fn warm_active_model_silently(&self) -> AppResult<()> {
         let client = warmup_client();
         let mut last_error = None;
@@ -169,7 +187,7 @@ impl EngineClient {
     }
 
     fn current_model_with_client(&self, client: &reqwest::blocking::Client) -> AppResult<String> {
-        let request_path = format!("{}/models/current", self.base_url.trim_end_matches('/'));
+        let request_path = self.api_url("models/current");
         let response = client
             .get(&request_path)
             .send()
@@ -193,7 +211,7 @@ impl EngineClient {
         &self,
         client: &reqwest::blocking::Client,
     ) -> AppResult<String> {
-        let request_path = format!("{}/providers/current", self.base_url.trim_end_matches('/'));
+        let request_path = self.api_url("providers/current");
         let response = client
             .get(&request_path)
             .send()
@@ -386,7 +404,7 @@ impl EngineClient {
     where
         F: FnMut(&str) -> AppResult<()>,
     {
-        let request_path = format!("{}/chat", self.base_url);
+        let request_path = self.api_url("chat");
         let response = reqwest::blocking::Client::new()
             .post(&request_path)
             .json(&ChatRequestBody {
@@ -433,7 +451,7 @@ impl EngineClient {
     }
 
     pub fn create_session(&self) -> AppResult<CreatedSession> {
-        let request_path = format!("{}/sessions", self.base_url);
+        let request_path = self.api_url("sessions");
         let response = reqwest::blocking::Client::new()
             .post(&request_path)
             .send()
@@ -460,7 +478,7 @@ impl EngineClient {
     }
 
     pub fn list_sessions(&self) -> AppResult<Vec<SessionSummary>> {
-        let request_path = format!("{}/sessions", self.base_url);
+        let request_path = self.api_url("sessions");
         let response = reqwest::blocking::get(&request_path)
             .map_err(|error| format!("Could not fetch sessions from engine: {error}"))?;
 
@@ -493,7 +511,7 @@ impl EngineClient {
     }
 
     pub fn show_session(&self, session_id: &str) -> AppResult<SessionDetail> {
-        let request_path = format!("{}/sessions/{session_id}", self.base_url);
+        let request_path = self.api_url(&format!("sessions/{session_id}"));
         let response = reqwest::blocking::get(&request_path)
             .map_err(|error| format!("Could not fetch session from engine: {error}"))?;
 
@@ -515,6 +533,16 @@ impl EngineClient {
             .json::<EngineSession>()
             .map_err(|error| format!("Could not parse engine session response: {error}"))?;
 
+        let turns = response
+            .history
+            .turns
+            .into_iter()
+            .map(|turn| SessionTurn {
+                query: turn.query,
+                response: turn.response,
+            })
+            .collect::<Vec<_>>();
+
         Ok(SessionDetail {
             id: response.session_id,
             title: response.title,
@@ -522,10 +550,8 @@ impl EngineClient {
                 "Created {}, updated {}",
                 response.created_at, response.updated_at
             ),
-            recent_turns: response
-                .history
-                .turns
-                .into_iter()
+            recent_turns: turns
+                .iter()
                 .flat_map(|turn| {
                     [
                         format!("user> {}", turn.query),
@@ -533,11 +559,12 @@ impl EngineClient {
                     ]
                 })
                 .collect(),
+            turns,
         })
     }
 
     pub fn delete_session(&self, session_id: &str) -> AppResult<ActionStatus> {
-        let request_path = format!("{}/sessions/{session_id}", self.base_url);
+        let request_path = self.api_url(&format!("sessions/{session_id}"));
         let response = reqwest::blocking::Client::new()
             .delete(&request_path)
             .send()
@@ -570,7 +597,7 @@ impl EngineClient {
     }
 
     pub fn list_providers(&self) -> AppResult<Vec<ProviderSummary>> {
-        let request_path = format!("{}/providers", self.base_url);
+        let request_path = self.api_url("providers");
         let response = reqwest::blocking::get(&request_path)
             .map_err(|error| format!("Could not fetch providers from engine: {error}"))?;
 
@@ -599,7 +626,7 @@ impl EngineClient {
     }
 
     pub fn select_provider(&self, name: &str) -> AppResult<ActionStatus> {
-        let request_path = format!("{}/providers/select", self.base_url);
+        let request_path = self.api_url("providers/select");
         let response = reqwest::blocking::Client::new()
             .post(&request_path)
             .json(&SelectProviderRequest {
@@ -652,7 +679,7 @@ impl EngineClient {
         let form = reqwest::blocking::multipart::Form::new()
             .text("session_id", session_id.to_string())
             .part("file", part);
-        let request_path = format!("{}/ingest", self.base_url);
+        let request_path = self.api_url("ingest");
         let response = reqwest::blocking::Client::new()
             .post(&request_path)
             .multipart(form)
@@ -701,7 +728,7 @@ impl EngineClient {
         &self,
         prompt: &str,
     ) -> AppResult<CalendarPromptOutcome> {
-        let request_path = format!("{}/calendar/create-from-prompt", self.base_url);
+        let request_path = self.api_url("calendar/create-from-prompt");
         let response = reqwest::blocking::Client::new()
             .post(&request_path)
             .json(&CalendarPromptRequest {
@@ -742,7 +769,7 @@ impl EngineClient {
 
     pub fn list_models(&self) -> AppResult<Vec<ModelSummary>> {
         let current_model = self.current_model().ok();
-        let request_path = format!("{}/models", self.base_url);
+        let request_path = self.api_url("models");
         let response = reqwest::blocking::get(&request_path)
             .map_err(|error| format!("Could not fetch models from engine: {error}"))?;
 
@@ -876,7 +903,7 @@ impl EngineClient {
     }
 
     pub fn current_provider(&self) -> AppResult<String> {
-        let request_path = format!("{}/providers/current", self.base_url);
+        let request_path = self.api_url("providers/current");
         let response = reqwest::blocking::get(&request_path)
             .map_err(|error| format!("Could not fetch the active provider from engine: {error}"))?;
 
@@ -895,7 +922,7 @@ impl EngineClient {
     }
 
     pub fn current_model(&self) -> AppResult<String> {
-        let request_path = format!("{}/models/current", self.base_url);
+        let request_path = self.api_url("models/current");
         let response = reqwest::blocking::get(&request_path)
             .map_err(|error| format!("Could not fetch the active model from engine: {error}"))?;
 
@@ -914,7 +941,7 @@ impl EngineClient {
     }
 
     pub fn current_model_quick(&self) -> AppResult<String> {
-        let request_path = format!("{}/models/current", self.base_url);
+        let request_path = self.api_url("models/current");
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_millis(500))
             .build()
@@ -939,7 +966,7 @@ impl EngineClient {
     }
 
     pub fn select_model(&self, name: &str) -> AppResult<ActionStatus> {
-        let request_path = format!("{}/models/select", self.base_url);
+        let request_path = self.api_url("models/select");
         let response = reqwest::blocking::Client::new()
             .post(&request_path)
             .json(&SwitchModelRequest {
@@ -973,6 +1000,62 @@ impl EngineClient {
             target: response.current,
             persisted: response.persisted,
             message: response.message,
+        })
+    }
+
+    pub fn download_model<F>(&self, name: &str, mut on_event: F) -> AppResult<ActionStatus>
+    where
+        F: FnMut(&str) -> AppResult<()>,
+    {
+        let request_path = self.api_url("models/download");
+        let response = reqwest::blocking::Client::new()
+            .post(&request_path)
+            .json(&DownloadModelRequest {
+                name: name.to_string(),
+                quantization: None,
+            })
+            .send()
+            .map_err(|error| format!("Could not start model download: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Engine model download failed with HTTP {}. {}",
+                status,
+                body.trim()
+            ));
+        }
+
+        let reader = BufReader::new(response);
+        let mut saw_failure = None;
+        for line in reader.lines() {
+            let line =
+                line.map_err(|error| format!("Could not read model download stream: {error}"))?;
+            let Some(data) = line
+                .strip_prefix("data:")
+                .map(|s| s.strip_prefix(' ').unwrap_or(s).trim())
+            else {
+                continue;
+            };
+            if data.is_empty() {
+                continue;
+            }
+            on_event(data)?;
+            if data.contains("\"status\":\"failed\"") || data.contains("\"error\"") {
+                saw_failure = Some(data.to_string());
+            }
+        }
+
+        if let Some(error) = saw_failure {
+            return Err(format!("Model download failed: {error}"));
+        }
+
+        Ok(ActionStatus {
+            request_path,
+            target: name.to_string(),
+            persisted: true,
+            message: format!("Model `{name}` download finished or is available."),
         })
     }
 
@@ -1068,6 +1151,12 @@ struct CalendarPromptRequest {
 #[derive(Serialize)]
 struct SwitchModelRequest {
     name: String,
+}
+
+#[derive(Serialize)]
+struct DownloadModelRequest {
+    name: String,
+    quantization: Option<String>,
 }
 
 #[derive(Deserialize)]

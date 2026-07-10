@@ -70,6 +70,14 @@ pub struct ChatArgs {
         help = "Future session identifier managed by the engine"
     )]
     pub session_id: Option<String>,
+
+    #[arg(
+        long = "attach",
+        short = 'a',
+        value_name = "file",
+        help = "Attach and index a PDF/TXT/code file into the chat session before sending"
+    )]
+    pub attachments: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -114,6 +122,41 @@ pub struct OptionalSessionIdArg {
 pub struct OptionalNameArg {
     #[arg(value_name = "name", help = "Engine-owned provider or model name")]
     pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SearchArgs {
+    #[arg(
+        value_name = "query",
+        help = "Text to fuzzy-search across session titles and recent turns"
+    )]
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionExportArgs {
+    #[arg(
+        value_name = "id",
+        help = "Session id to export; defaults to the most recent session"
+    )]
+    pub id: Option<String>,
+
+    #[arg(
+        long,
+        short = 'f',
+        default_value = "md",
+        value_name = "md|json|pdf",
+        help = "Export format"
+    )]
+    pub format: String,
+
+    #[arg(
+        long,
+        short = 'o',
+        value_name = "path",
+        help = "Output file path; defaults to a safe session-based name"
+    )]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]

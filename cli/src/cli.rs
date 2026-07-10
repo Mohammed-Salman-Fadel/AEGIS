@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 
 use crate::args::{
     AskArgs, ChatArgs, InstallArgs, LogsArgs, OptionalNameArg, OptionalSessionIdArg, ReplArgs,
-    RequiredSessionIdArg, SaveArgs, UpgradeArgs,
+    RequiredSessionIdArg, SaveArgs, SearchArgs, SessionExportArgs, UpgradeArgs,
 };
 
 pub const HELP_EXAMPLES: &str = "\
@@ -20,6 +20,7 @@ Examples:
   aegis install --path D:\\AEGIS
   aegis open
   aegis restart
+  aegis setup
   aegis version
   aegis upgrade          (check + download latest from GitHub)
   aegis upgrade --check  (just check, don't download)
@@ -27,14 +28,19 @@ Examples:
   aegis logs engine        (last 50 lines of engine)
   aegis logs rag -n 200    (last 200 lines of RAG)
   aegis chat \"What can you do?\"
+  aegis chat --attach notes.pdf \"Summarize this\"
   aegis load 1189578c-9c96-4b4c-8015-4d0673544a6a
   aegis repl
   aegis ask --stdin
   aegis session new
+  aegis session search research
+  aegis session resume
+  aegis session export --format md
   aegis save \"my name is Sam\"
   aegis provider list
   aegis model
   aegis model list
+  aegis model setup
   aegis model switch qwen3:4b
   aegis model download qwen3:4b
   aegis status
@@ -71,6 +77,7 @@ pub enum CommandKind {
     Install(InstallArgs),
     Logs(LogsArgs),
     Restart,
+    Setup,
     Version,
     Upgrade(UpgradeArgs),
     Save(SaveArgs),
@@ -101,6 +108,9 @@ pub enum CommandKind {
 pub enum SessionCommand {
     New,
     List,
+    Search(SearchArgs),
+    Resume,
+    Export(SessionExportArgs),
     Show(RequiredSessionIdArg),
     Use(OptionalSessionIdArg),
     #[command(alias = "reset")]
@@ -116,6 +126,7 @@ pub enum ProviderCommand {
 #[derive(Debug, Clone, Subcommand)]
 pub enum ModelCommand {
     List,
+    Setup,
     #[command(alias = "select")]
     Switch(OptionalNameArg),
     Download(OptionalNameArg),

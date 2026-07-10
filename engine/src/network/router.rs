@@ -332,7 +332,9 @@ async fn handle_pdf_ingest(
         if !is_supported_ingest_file(&file_name) {
             return Err((
                 StatusCode::BAD_REQUEST,
-                format!("Unsupported file type for `{file_name}`. Only PDF and TXT are supported."),
+                format!(
+                    "Unsupported file type for `{file_name}`. Upload PDF, TXT, Markdown, JSON, or common source-code files."
+                ),
             ));
         }
 
@@ -355,7 +357,8 @@ async fn handle_pdf_ingest(
 
     for upload in uploads {
         let file_name = upload.file_name;
-        let file_path = ingest_dir.join(&file_name);
+        let stored_file_name = stored_ingest_file_name(&file_name);
+        let file_path = ingest_dir.join(&stored_file_name);
         tokio::fs::write(&file_path, upload.data)
             .await
             .map_err(|error| {
@@ -484,8 +487,74 @@ fn safe_upload_file_name(raw_file_name: Option<&str>) -> Option<String> {
 }
 
 fn is_supported_ingest_file(file_name: &str) -> bool {
-    let lower = file_name.to_lowercase();
-    lower.ends_with(".pdf") || lower.ends_with(".txt")
+    file_extension(file_name)
+        .is_some_and(|extension| extension == "pdf" || is_text_ingest_extension(&extension))
+}
+
+fn stored_ingest_file_name(file_name: &str) -> String {
+    let extension = file_extension(file_name);
+    if matches!(extension.as_deref(), Some("pdf" | "txt")) {
+        file_name.to_string()
+    } else {
+        format!("{file_name}.txt")
+    }
+}
+
+fn file_extension(file_name: &str) -> Option<String> {
+    Path::new(file_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::trim)
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| extension.to_ascii_lowercase())
+}
+
+fn is_text_ingest_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "txt"
+            | "md"
+            | "markdown"
+            | "json"
+            | "jsonl"
+            | "csv"
+            | "tsv"
+            | "log"
+            | "rs"
+            | "py"
+            | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "go"
+            | "java"
+            | "kt"
+            | "kts"
+            | "c"
+            | "h"
+            | "cpp"
+            | "hpp"
+            | "cs"
+            | "php"
+            | "rb"
+            | "swift"
+            | "scala"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "ps1"
+            | "bat"
+            | "cmd"
+            | "toml"
+            | "yaml"
+            | "yml"
+            | "xml"
+            | "html"
+            | "css"
+            | "scss"
+            | "sql"
+            | "dockerfile"
+    )
 }
 
 fn ingest_storage_dir() -> PathBuf {

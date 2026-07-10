@@ -26,7 +26,7 @@ use crate::cli::Cli;
 use crate::cli::{CommandKind, ModelCommand, ProviderCommand, SessionCommand};
 use crate::doctor::{CheckItem, DoctorReport, Health};
 use crate::engine_client::{
-    ActionStatus, CreatedSession, ModelSummary, ProviderSummary, SessionSummary,
+    ActionStatus, CreatedSession, ModelSummary, ProviderSummary, SessionDetail, SessionSummary,
 };
 use crate::install;
 use crate::menu::{self, MenuChoice};
@@ -70,10 +70,11 @@ fn dispatch_command(
         CommandKind::Install(args) => handle_install(ctx, args),
         CommandKind::Logs(args) => handle_logs(ctx, args),
         CommandKind::Restart => handle_restart(ctx),
+        CommandKind::Setup => handle_setup_wizard(ctx),
         CommandKind::Version => handle_version(ctx),
         CommandKind::Upgrade(args) => handle_upgrade(ctx, args),
         CommandKind::Save(args) => handle_save(ctx, &args.note),
-        CommandKind::Chat(args) => handle_chat(ctx, &args.prompt, args.session_id.as_deref()),
+        CommandKind::Chat(args) => handle_chat_command(ctx, args),
         CommandKind::Load(args) => handle_load(ctx, &args.id, invocation_mode),
         CommandKind::Ask(args) => handle_ask(ctx, args.stdin, args.session_id.as_deref()),
         CommandKind::Repl(args) => handle_repl(ctx, args.session_id.as_deref()),
@@ -699,6 +700,30 @@ fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {
     Ok(())
 }
 
+fn handle_chat_command(ctx: &AppContext, args: crate::args::ChatArgs) -> AppResult<()> {
+    if args.attachments.is_empty() {
+        return handle_chat(ctx, &args.prompt, args.session_id.as_deref());
+    }
+
+    let session_id = match args.session_id {
+        Some(session_id) => session_id,
+        None => {
+            let session = ctx.engine.create_session()?;
+            println!(
+                "{}",
+                ctx.ui.success(&format!(
+                    "Created session `{}` for attached context.",
+                    session.id
+                ))
+            );
+            session.id
+        }
+    };
+
+    attach_files_to_session(ctx, &session_id, &args.attachments)?;
+    handle_chat(ctx, &args.prompt, Some(&session_id))
+}
+
 fn handle_chat(ctx: &AppContext, prompt: &str, session_id: Option<&str>) -> AppResult<()> {
     let reply = stream_llm_response(ctx, |on_token| {
         ctx.engine.chat(prompt, session_id, on_token)
@@ -895,6 +920,10 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
                 print_shell_help(ctx);
                 continue;
             }
+            "/" | "palette" => {
+                handle_shell_palette(ctx)?;
+                continue;
+            }
             "banner" => {
                 ctx.print_banner();
                 continue;
@@ -959,13 +988,16 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
 fn print_shell_help(ctx: &AppContext) {
     println!("{}", ctx.ui.header("Aegis Help"));
     println!(" open                            start services and open the Web UI");
+    println!(" setup                           guided first-run setup wizard");
     println!(" status                          reveal current status of the system");
+    println!(" palette                         searchable command picker");
     println!(" chat     \"[user_prompt]\"        one-time prompt to the llm");
+    println!(" chat --attach file.pdf \"...\"    attach a file to a chat session");
     println!(" load      [session_id]          load previous sessions");
     println!(" save      [your_information]    can store personal information");
-    println!(" session   [argument]            session commands");
+    println!(" session   [argument]            session commands: list/search/resume/export");
     println!(" provider  [argument]            provider related argument");
-    println!(" model     [argument]            model related command");
+    println!(" model     [argument]            model commands: setup/list/switch/download");
     println!("");
     println!(
         " [command] --help                displays all the arguments you can pass into a command."
@@ -976,6 +1008,81 @@ fn print_shell_help(ctx: &AppContext) {
         ctx.ui
             .muted("Type `quit` or `exit` at any time to stop the CLI immediately.")
     );
+}
+
+fn handle_shell_palette(ctx: &AppContext) -> AppResult<()> {
+    let choices = vec![
+        MenuChoice::new("Open AEGIS", "open", "Start services and open the Web UI."),
+        MenuChoice::new(
+            "Guided setup",
+            "setup",
+            "Check provider, model, and runtime readiness.",
+        ),
+        MenuChoice::new(
+            "Status",
+            "status",
+            "Show engine, model, and component status.",
+        ),
+        MenuChoice::new(
+            "Model setup",
+            "model setup",
+            "List, download, and switch models.",
+        ),
+        MenuChoice::new(
+            "Resume last session",
+            "session resume",
+            "Continue the newest session.",
+        ),
+        MenuChoice::new(
+            "Search sessions",
+            "session search",
+            "Find prior sessions by title or turn text.",
+        ),
+        MenuChoice::new(
+            "Export latest session",
+            "session export",
+            "Export the newest session to Markdown.",
+        ),
+    ];
+
+    let Some(choice) =
+        menu::choose_from_stdin(&ctx.ui, "Command Palette", "Select an action: ", &choices)?
+    else {
+        println!("{}", ctx.ui.muted("No command selected."));
+        return Ok(());
+    };
+
+    match choice.value.as_str() {
+        "open" => handle_open(ctx),
+        "setup" => handle_setup_wizard(ctx),
+        "status" => show_status(ctx),
+        "model setup" => handle_model_setup(ctx),
+        "session resume" => {
+            let session = latest_session(ctx)?;
+            enter_session(ctx, &session.id, InvocationMode::Shell)
+        }
+        "session search" => {
+            if let Some(query) = prompt_for_session_tool_input(
+                ctx,
+                "Search query: ",
+                "Search cancelled; no query entered.",
+            )? {
+                let matches = search_sessions(ctx, &query)?;
+                print_sessions(ctx, &matches);
+            }
+            Ok(())
+        }
+        "session export" => {
+            let session = latest_session(ctx)?;
+            let detail = ctx.engine.show_session(&session.id)?;
+            let output = PathBuf::from(format!(
+                "{}.md",
+                safe_export_file_name(&detail.title, &detail.id)
+            ));
+            export_session_to_path(ctx, &detail, &output, "md")
+        }
+        _ => Ok(()),
+    }
 }
 
 fn open_url_in_browser(url: &str) -> AppResult<()> {
@@ -1108,6 +1215,43 @@ fn handle_session(
             let sessions = ctx.engine.list_sessions()?;
             print_sessions(ctx, &sessions);
         }
+        SessionCommand::Search(args) => {
+            println!("{}", ctx.ui.header("Session Search"));
+            let matches = search_sessions(ctx, &args.query)?;
+            print_sessions(ctx, &matches);
+            if let Some(best) = matches.first() {
+                println!();
+                println!(
+                    "{}",
+                    ctx.ui.muted(&format!(
+                        "Best match: run `aegis session use {}` or `aegis session resume` for the latest session.",
+                        best.id
+                    ))
+                );
+            }
+        }
+        SessionCommand::Resume => {
+            println!("{}", ctx.ui.header("Session Resume"));
+            let session = latest_session(ctx)?;
+            enter_session(ctx, &session.id, invocation_mode)?;
+        }
+        SessionCommand::Export(args) => {
+            println!("{}", ctx.ui.header("Session Export"));
+            let session_id = match args.id {
+                Some(id) => id,
+                None => latest_session(ctx)?.id,
+            };
+            let detail = ctx.engine.show_session(&session_id)?;
+            let format = normalize_export_format(&args.format)?;
+            let output = args.output.unwrap_or_else(|| {
+                PathBuf::from(format!(
+                    "{}.{}",
+                    safe_export_file_name(&detail.title, &detail.id),
+                    format
+                ))
+            });
+            export_session_to_path(ctx, &detail, &output, &format)?;
+        }
         SessionCommand::Show(args) => {
             println!("{}", ctx.ui.header("Session Show"));
             let detail = ctx.engine.show_session(&args.id)?;
@@ -1179,6 +1323,7 @@ fn handle_model(ctx: &AppContext, command: Option<ModelCommand>) -> AppResult<()
             let current_model = ctx.engine.current_model().ok();
             print_models(ctx, &models, current_model.as_deref());
         }
+        Some(ModelCommand::Setup) => handle_model_setup(ctx)?,
         Some(ModelCommand::Switch(args)) => {
             println!("{}", ctx.ui.header("Model Switch"));
             if let Some(name) = args.name {
@@ -1456,13 +1601,106 @@ fn handle_interactive_model_select(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn handle_model_download(ctx: &AppContext, model_name: &str) -> AppResult<()> {
-    if ctx.engine.current_provider()? != "lmstudio" {
-        println!("{}", ctx.ui.warning("Model downloads are intended for LM Studio in this build. Switch to `provider select lmstudio` first."));
+    println!(
+        "{}",
+        ctx.ui
+            .muted("Downloading through the active provider. This may take a while.")
+    );
+    let result = ctx.engine.download_model(model_name, |event| {
+        println!("  {event}");
+        Ok(())
+    })?;
+    println!("{}", ctx.ui.success(&result.message));
+    Ok(())
+}
+
+fn handle_model_setup(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Model Setup"));
+    let provider = ctx.engine.current_provider()?;
+    let current_model = ctx.engine.current_model().ok();
+    println!("Provider : {provider}");
+    println!(
+        "Active   : {}",
+        current_model.as_deref().unwrap_or("unavailable")
+    );
+    println!();
+
+    let models = ctx.engine.list_models()?;
+    print_models(ctx, &models, current_model.as_deref());
+    println!();
+
+    if !io::stdin().is_terminal() {
+        println!(
+            "{}",
+            ctx.ui.muted(
+                "Use `aegis model download <name>` then `aegis model switch <name>` to finish setup."
+            )
+        );
         return Ok(());
     }
 
-    println!("{}", ctx.ui.muted("LM Studio exposes model download through its OpenAI-compatible server; the engine currently switches providers but does not yet proxy the LM Studio download API."));
-    println!("Requested model: {model_name}");
+    let choices = vec![
+        MenuChoice::new(
+            "Switch active model",
+            "switch",
+            "Choose from models already available.",
+        ),
+        MenuChoice::new(
+            "Download model",
+            "download",
+            "Pull/download a model through the active provider.",
+        ),
+        MenuChoice::new("Keep current model", "keep", "Leave model setup unchanged."),
+    ];
+
+    let Some(choice) =
+        menu::choose_from_stdin(&ctx.ui, "Model setup", "Select an action: ", &choices)?
+    else {
+        return Ok(());
+    };
+
+    match choice.value.as_str() {
+        "switch" => handle_interactive_model_select(ctx),
+        "download" => {
+            if let Some(name) = prompt_for_session_tool_input(
+                ctx,
+                "Model name to download: ",
+                "Download cancelled; no model name entered.",
+            )? {
+                handle_model_download(ctx, &name)?;
+                println!();
+                println!(
+                    "{}",
+                    ctx.ui.muted("You can now run `aegis model switch <name>`.")
+                );
+            }
+            Ok(())
+        }
+        _ => {
+            println!("{}", ctx.ui.muted("Keeping current model setup."));
+            Ok(())
+        }
+    }
+}
+
+fn handle_setup_wizard(ctx: &AppContext) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Guided Setup"));
+    println!(
+        "{}",
+        ctx.ui.muted(
+            "This wizard checks the local stack without blocking the Web UI on model warmup."
+        )
+    );
+    println!();
+
+    show_status(ctx)?;
+    println!();
+    handle_model_setup(ctx)?;
+
+    println!();
+    println!("{}", ctx.ui.header("Finish"));
+    println!("{}", ctx.ui.success("Setup review complete."));
+    println!("{}", ctx.ui.muted("Next: run `aegis open`, or `aegis chat --attach notes.pdf \"summarize this\"` to try an attachment-aware chat."));
     Ok(())
 }
 
@@ -1476,6 +1714,83 @@ fn print_sessions(ctx: &AppContext, sessions: &[SessionSummary]) {
         println!("- {} [{}]", session.title, session.id);
         println!("  {}", session.description);
     }
+}
+
+fn latest_session(ctx: &AppContext) -> AppResult<SessionSummary> {
+    ctx.engine
+        .list_sessions()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No saved sessions are available yet.".to_string())
+}
+
+fn search_sessions(ctx: &AppContext, query: &str) -> AppResult<Vec<SessionSummary>> {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return Err("Search query cannot be empty.".to_string());
+    }
+
+    let mut scored = Vec::new();
+    for session in ctx.engine.list_sessions()? {
+        let mut haystack = format!("{} {} {}", session.title, session.id, session.description)
+            .to_ascii_lowercase();
+        if let Ok(detail) = ctx.engine.show_session(&session.id) {
+            for turn in &detail.turns {
+                haystack.push(' ');
+                haystack.push_str(&turn.query.to_ascii_lowercase());
+                haystack.push(' ');
+                haystack.push_str(&turn.response.to_ascii_lowercase());
+            }
+        }
+
+        let score = fuzzy_match_score(&haystack, &query);
+        if score > 0 {
+            scored.push((score, session));
+        }
+    }
+
+    scored.sort_by(|left, right| right.0.cmp(&left.0));
+    Ok(scored.into_iter().map(|(_, session)| session).collect())
+}
+
+fn fuzzy_match_score(haystack: &str, query: &str) -> usize {
+    if haystack.contains(query) {
+        return query.len() * 4;
+    }
+
+    let mut score = 0usize;
+    let mut search_from = 0usize;
+    for token in query.split_whitespace() {
+        if token.is_empty() {
+            continue;
+        }
+        if let Some(offset) = haystack[search_from..].find(token) {
+            score += token.len() * 2;
+            search_from += offset + token.len();
+        } else if haystack.contains(token) {
+            score += token.len();
+        }
+    }
+    score
+}
+
+fn attach_files_to_session(ctx: &AppContext, session_id: &str, paths: &[PathBuf]) -> AppResult<()> {
+    println!("{}", ctx.ui.header("Attach Files"));
+    for path in paths {
+        let outcome =
+            run_with_loading_message(ctx, &format!("Indexing {}", path.display()), || {
+                ctx.engine.ingest_document(session_id, path)
+            })?;
+        println!(
+            "{}",
+            ctx.ui.success(&format!(
+                "Attached `{}`: {} chunk(s).",
+                path.display(),
+                outcome.total_chunks
+            ))
+        );
+    }
+    Ok(())
 }
 
 fn print_providers(
@@ -1797,40 +2112,173 @@ fn handle_session_tool_export(ctx: &AppContext, session_id: &str) -> AppResult<(
         PathBuf::from(export_path)
     };
 
+    export_session_to_path(ctx, &detail, &export_path, "md")
+}
+
+fn normalize_export_format(format: &str) -> AppResult<String> {
+    match format
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "md" | "markdown" => Ok("md".to_string()),
+        "json" => Ok("json".to_string()),
+        "pdf" => Ok("pdf".to_string()),
+        other => Err(format!(
+            "Unsupported export format `{other}`. Use md, json, or pdf."
+        )),
+    }
+}
+
+fn export_session_to_path(
+    ctx: &AppContext,
+    detail: &SessionDetail,
+    export_path: &PathBuf,
+    format: &str,
+) -> AppResult<()> {
+    let format = normalize_export_format(format)?;
+    match format.as_str() {
+        "md" => fs::write(export_path, session_to_markdown(detail)),
+        "json" => fs::write(export_path, session_to_json(detail)?),
+        "pdf" => fs::write(export_path, session_to_basic_pdf(detail)?),
+        _ => unreachable!(),
+    }
+    .map_err(|error| format!("Could not write `{}`: {error}", export_path.display()))?;
+
+    println!(
+        "{}",
+        ctx.ui
+            .success(&format!("Session exported to `{}`.", export_path.display()))
+    );
+    Ok(())
+}
+
+fn session_to_markdown(detail: &SessionDetail) -> String {
     let mut transcript = String::new();
     transcript.push_str("# AEGIS Chat Export\n\n");
     transcript.push_str(&format!("Session: {}\n\n", detail.title));
     transcript.push_str(&format!("Session ID: `{}`\n\n", detail.id));
     transcript.push_str(&format!("{}\n\n", detail.note));
 
-    if detail.recent_turns.is_empty() {
+    if detail.turns.is_empty() {
         transcript.push_str("_No saved turns in this session yet._\n");
     } else {
-        for turn in detail.recent_turns {
-            if let Some(message) = turn.strip_prefix("user> ") {
-                transcript.push_str("## User\n\n");
-                transcript.push_str(message);
-                transcript.push_str("\n\n");
-            } else if let Some(message) = turn.strip_prefix("assistant> ") {
-                transcript.push_str("## AEGIS\n\n");
-                transcript.push_str(message);
-                transcript.push_str("\n\n");
-            } else {
-                transcript.push_str(&turn);
-                transcript.push_str("\n\n");
-            }
+        for turn in &detail.turns {
+            transcript.push_str("## User\n\n");
+            transcript.push_str(&turn.query);
+            transcript.push_str("\n\n## AEGIS\n\n");
+            transcript.push_str(&turn.response);
+            transcript.push_str("\n\n");
         }
     }
+    transcript
+}
 
-    fs::write(&export_path, transcript)
-        .map_err(|error| format!("Could not write `{}`: {error}", export_path.display()))?;
-    println!(
-        "{}",
-        ctx.ui
-            .success(&format!("Chat exported to `{}`.", export_path.display()))
+fn session_to_json(detail: &SessionDetail) -> AppResult<String> {
+    let turns = detail
+        .turns
+        .iter()
+        .map(|turn| serde_json::json!({ "user": turn.query, "assistant": turn.response }))
+        .collect::<Vec<_>>();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "title": detail.title,
+        "id": detail.id,
+        "note": detail.note,
+        "turns": turns,
+    }))
+    .map_err(|error| format!("Could not render session JSON: {error}"))
+}
+
+fn session_to_basic_pdf(detail: &SessionDetail) -> AppResult<Vec<u8>> {
+    let text = session_to_markdown(detail);
+    let mut lines = Vec::new();
+    for raw_line in text.lines() {
+        if raw_line.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut line = raw_line.to_string();
+        while line.chars().count() > 88 {
+            let prefix = line.chars().take(88).collect::<String>();
+            lines.push(prefix);
+            line = line.chars().skip(88).collect();
+        }
+        lines.push(line);
+    }
+
+    let lines_per_page = 52usize;
+    let page_chunks = if lines.is_empty() {
+        vec![Vec::new()]
+    } else {
+        lines
+            .chunks(lines_per_page)
+            .map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>()
+    };
+
+    let page_count = page_chunks.len();
+    let font_object_id = 3 + page_count * 2;
+    let mut objects = Vec::new();
+    objects.push("<< /Type /Catalog /Pages 2 0 R >>".to_string());
+    let page_kids = (0..page_count)
+        .map(|index| format!("{} 0 R", 3 + index * 2))
+        .collect::<Vec<_>>()
+        .join(" ");
+    objects.push(format!(
+        "<< /Type /Pages /Kids [{page_kids}] /Count {page_count} >>"
+    ));
+
+    for page_index in 0..page_count {
+        let content_object_id = 4 + page_index * 2;
+        objects.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_object_id} 0 R >> >> /Contents {content_object_id} 0 R >>"
+        ));
+
+        let mut content = String::from("BT /F1 10 Tf 50 780 Td 14 TL\n");
+        for line in &page_chunks[page_index] {
+            content.push_str(&format!("({}) Tj T*\n", escape_pdf_text(line)));
+        }
+        content.push_str("ET\n");
+        objects.push(format!(
+            "<< /Length {} >>\nstream\n{}endstream",
+            content.len(),
+            content
+        ));
+    }
+
+    objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string());
+
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes());
+    }
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
     );
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    Ok(pdf)
+}
 
-    Ok(())
+fn escape_pdf_text(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
+        .chars()
+        .filter(|ch| ch.is_ascii())
+        .collect()
 }
 
 fn safe_export_file_name(title: &str, session_id: &str) -> String {

@@ -24,6 +24,8 @@ target-engine-check
 target-cli-check
 target-cli-release
 target-cli-url-check
+target-cli-feature-check
+target-engine-feature-check
 .agents
 # Frontend / Node
 node_modules/
