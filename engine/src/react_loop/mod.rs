@@ -13,6 +13,7 @@
 //! (e.g. `switch_provider()`) for the loop's entire duration.
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::Arc;
@@ -104,6 +105,18 @@ pub struct ReActResult {
 
 pub struct ReactLoop;
 
+#[derive(Serialize)]
+struct ReasoningEvent<'a> {
+    phase: &'a str,
+    title: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    round: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<&'a str>,
+}
+
 impl ReactLoop {
     /// Run the ReAct loop for a single user query.
     ///
@@ -124,12 +137,30 @@ impl ReactLoop {
         let mut conversation = format!("[System]\n{system_prompt}\n\n[User]\n{query}");
         let mut last_call: Option<(String, String)> = None;
 
+        send_reasoning_event(
+            &tx,
+            ReasoningEvent {
+                phase: "start",
+                title: "Starting reasoning loop",
+                detail: Some("Planning whether tools are needed before answering."),
+                round: None,
+                tool: None,
+            },
+        )
+        .await;
+
         for round in 1..=MAX_ROUNDS {
-            let _ = tx
-                .send(format!(
-                    "\n[REACT: thinking (round {round}/{MAX_ROUNDS})]\n"
-                ))
-                .await;
+            send_reasoning_event(
+                &tx,
+                ReasoningEvent {
+                    phase: "thinking",
+                    title: "Thinking through next step",
+                    detail: Some("Deciding whether to answer directly or gather more context."),
+                    round: Some(round),
+                    tool: None,
+                },
+            )
+            .await;
 
             // ── call the model ──────────────────────────────────────
             // Acquire the read lock, call inference, release before
@@ -144,11 +175,17 @@ impl ReactLoop {
             let decision = match parse_react_response(&raw) {
                 Ok(d) => d,
                 Err(e) => {
-                    let _ = tx
-                        .send(format!(
-                            "\n[REACT: JSON parse error — asking model to correct: {e}]\n"
-                        ))
-                        .await;
+                    send_reasoning_event(
+                        &tx,
+                        ReasoningEvent {
+                            phase: "repair",
+                            title: "Repairing reasoning output",
+                            detail: Some("The model returned malformed tool JSON, so AEGIS is asking for a valid action."),
+                            round: Some(round),
+                            tool: None,
+                        },
+                    )
+                    .await;
                     // Re-prompt once: tell the model its JSON was invalid.
                     let correction_prompt = format!(
                         "{}\n\nYour previous response contained invalid JSON: {e}\n\
@@ -164,11 +201,17 @@ impl ReactLoop {
                         Ok(d) => d,
                         Err(e2) => {
                             // Second failure — give the user what we have.
-                            let _ = tx
-                                .send(format!(
-                                    "\n[REACT: still unparseable — falling back to text: {e2}]\n"
-                                ))
-                                .await;
+                            send_reasoning_event(
+                                &tx,
+                                ReasoningEvent {
+                                    phase: "fallback",
+                                    title: "Falling back to direct response",
+                                    detail: Some("Tool routing could not be parsed reliably, so the model response is returned directly."),
+                                    round: Some(round),
+                                    tool: None,
+                                },
+                            )
+                            .await;
                             return Ok(raw2);
                         }
                     }
@@ -177,6 +220,17 @@ impl ReactLoop {
 
             match decision {
                 ModelDecision::FinalAnswer(answer) => {
+                    send_reasoning_event(
+                        &tx,
+                        ReasoningEvent {
+                            phase: "final",
+                            title: "Final answer ready",
+                            detail: Some("The model has enough context and is composing the response."),
+                            round: Some(round),
+                            tool: None,
+                        },
+                    )
+                    .await;
                     return Ok(answer);
                 }
                 ModelDecision::Tool(tool_call) => {
@@ -201,13 +255,17 @@ impl ReactLoop {
                     );
                     if let Some(last) = &last_call {
                         if *last == call_sig {
-                            let _ = tx
-                                .send(format!(
-                                    "\n[REACT: you just made the same call (`{}`); \
-                                     try a different approach.]\n",
-                                    tool_call.tool_name()
-                                ))
-                                .await;
+                            send_reasoning_event(
+                                &tx,
+                                ReasoningEvent {
+                                    phase: "guard",
+                                    title: "Avoiding repeated tool call",
+                                    detail: Some("The same tool call was requested twice, so AEGIS is nudging the model to use a different approach."),
+                                    round: Some(round),
+                                    tool: Some(tool_call.tool_name()),
+                                },
+                            )
+                            .await;
                             conversation.push_str(&format!(
                                 "\n[Note: You just called `{}` with the same \
                                  arguments. Try a different approach or provide \
@@ -218,9 +276,17 @@ impl ReactLoop {
                         }
                     }
                     last_call = Some(call_sig);
-                    let _ = tx
-                        .send(format!("\n[REACT: calling `{}`]\n", tool_call.tool_name()))
-                        .await;
+                    send_reasoning_event(
+                        &tx,
+                        ReasoningEvent {
+                            phase: "tool_call",
+                            title: "Calling tool",
+                            detail: Some("Gathering external context before answering."),
+                            round: Some(round),
+                            tool: Some(tool_call.tool_name()),
+                        },
+                    )
+                    .await;
 
                     // Execute the tool (no lock is held during this).
                     let result = execute_tool(
@@ -236,9 +302,31 @@ impl ReactLoop {
                     let result_str = match result {
                         Ok(r) => {
                             let truncated = truncate(&r.output, MAX_TOOL_OUTPUT_CHARS);
+                            send_reasoning_event(
+                                &tx,
+                                ReasoningEvent {
+                                    phase: "tool_result",
+                                    title: "Tool result received",
+                                    detail: Some("The result was added to the reasoning context."),
+                                    round: Some(round),
+                                    tool: Some(&r.tool_name),
+                                },
+                            )
+                            .await;
                             format!("\n[Tool Result: {}]\n```\n{}\n```", r.tool_name, truncated)
                         }
                         Err(e) => {
+                            send_reasoning_event(
+                                &tx,
+                                ReasoningEvent {
+                                    phase: "tool_error",
+                                    title: "Tool returned an error",
+                                    detail: Some("The model will try another route or answer with available context."),
+                                    round: Some(round),
+                                    tool: Some(tool_call.tool_name()),
+                                },
+                            )
+                            .await;
                             format!("\n[Tool Error: {}]\n{e}", tool_call.tool_name())
                         }
                     };
@@ -249,11 +337,17 @@ impl ReactLoop {
         }
 
         // ── round limit reached — force final answer ────────────────
-        let _ = tx
-            .send(format!(
-                "\n[REACT: round limit ({MAX_ROUNDS}) reached, forcing final answer]\n"
-            ))
-            .await;
+        send_reasoning_event(
+            &tx,
+            ReasoningEvent {
+                phase: "limit",
+                title: "Reasoning limit reached",
+                detail: Some("AEGIS is forcing a final answer from the gathered context."),
+                round: Some(MAX_ROUNDS),
+                tool: None,
+            },
+        )
+        .await;
 
         let force_prompt = format!(
             "{}\n\nYou have used all {MAX_ROUNDS} rounds. \
@@ -277,6 +371,12 @@ impl ReactLoop {
                 Ok(fallback)
             }
         }
+    }
+}
+
+async fn send_reasoning_event(tx: &mpsc::Sender<String>, event: ReasoningEvent<'_>) {
+    if let Ok(json) = serde_json::to_string(&event) {
+        let _ = tx.send(format!("[REASONING_EVENT] {json}")).await;
     }
 }
 
@@ -496,6 +596,14 @@ fn validate_read_path(requested: &str) -> Result<std::path::PathBuf> {
     } else {
         candidate.to_path_buf()
     };
+
+    if candidate.is_absolute() && !candidate.starts_with(&cwd) {
+        anyhow::bail!(
+            "Access denied: `{requested}` resolves outside the \
+             allowed directory (`{}`)",
+            cwd.display()
+        );
+    }
 
     let canonical = candidate
         .canonicalize()
@@ -1296,6 +1404,7 @@ async fn search_knowledge_base(query: &str, rag_client: &RagClient, session_id: 
     }
 }
 
+#[derive(Debug)]
 enum ModelDecision {
     Tool(ToolCall),
     FinalAnswer(String),
@@ -2055,24 +2164,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn safety_guard_rejects_rm_rf() {
+    #[tokio::test]
+    async fn safety_guard_rejects_rm_rf() {
         let result = run_terminal_command("rm -rf /").await;
         assert!(result.contains("rejected"));
     }
 
-    #[test]
-    fn safety_guard_rejects_mkfs() {
+    #[tokio::test]
+    async fn safety_guard_rejects_mkfs() {
         let result = run_terminal_command("mkfs.ext4 /dev/sda1").await;
         assert!(result.contains("rejected"));
     }
 
-    #[test]
-    fn safety_guard_allows_safe_commands() {
+    #[tokio::test]
+    async fn safety_guard_allows_safe_commands() {
         // We can't actually run this in a test, but we can verify it
         // passes the safety guard by checking it doesn't contain the
         // rejection message.
-        let result = run_terminal_command("cargo check").await;
+        let result = run_terminal_command("echo ok").await;
         assert!(!result.contains("rejected"));
     }
 

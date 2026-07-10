@@ -51,7 +51,7 @@ pub fn resolve_project_path(project_id: &str) -> Option<PathBuf> {
 }
 use crate::mcp::McpManager;
 use crate::prompt_builder::{PromptBuilder, format_history};
-use crate::provider_registry::ProviderRegistry;
+use crate::provider_registry::{ProviderDescriptor, ProviderRegistry};
 use crate::rag_client::RagClient;
 use crate::react_loop::ReactLoop;
 use crate::response_style;
@@ -557,20 +557,8 @@ impl Orchestrator {
         self.memory_store.rename_session(session_id, &title).await
     }
 
-    pub fn list_providers(&self) -> Vec<(String, String, bool)> {
-        let current = self.current_provider_name();
-        vec![
-            (
-                "ollama".to_string(),
-                "Local Ollama provider".to_string(),
-                current == "ollama",
-            ),
-            (
-                "lmstudio".to_string(),
-                "LM Studio OpenAI-compatible provider".to_string(),
-                current == "lmstudio",
-            ),
-        ]
+    pub fn list_providers(&self) -> Vec<ProviderDescriptor> {
+        self.provider_registry.list_descriptors()
     }
 
     pub async fn switch_provider(&self, name: &str) -> anyhow::Result<ProviderSwitchOutcome> {
@@ -840,12 +828,23 @@ impl Orchestrator {
         // all chat modes, not just code workflows.
         // Code-oriented workflows use the ReAct loop so tools can inspect files.
         // Normal chat continues through the RAG/context path below.
-        if matches!(
+        if req.reasoning_enabled
+            || matches!(
             classification,
             crate::workflow::WorkflowId::CodeExplain
                 | crate::workflow::WorkflowId::CodeGenerate
                 | crate::workflow::WorkflowId::CodeDebug
         ) {
+            let _ = tx
+                .send(format!(
+                    "[REASONING_EVENT] {}",
+                    serde_json::json!({
+                        "phase": "route",
+                        "title": if req.reasoning_enabled { "Deep reasoning enabled" } else { "Code task routed to reasoning" },
+                        "detail": "AEGIS will decide which tools are needed before answering."
+                    })
+                ))
+                .await;
             let final_answer = ReactLoop::execute(
                 &self.inference,
                 &self.tool_registry,
@@ -1191,7 +1190,23 @@ impl Orchestrator {
                 )
             }
         };
-        let synthesis_prompt = user_profile::personalize_prompt(&synthesis_prompt);
+        let persistent_memory = user_profile::build_memory_injection(&ctx.original_query);
+        let synthesis_prompt = if persistent_memory.is_empty() {
+            ctx.trace_summary("persistent_memory", "no relevant long-term memory selected");
+            synthesis_prompt
+        } else {
+            ctx.trace_summary(
+                "persistent_memory",
+                &format!(
+                    "selected {} long-term memory entries",
+                    persistent_memory.selected_count
+                ),
+            );
+            format!(
+                "{}\n\nUSER REQUEST CONTEXT:\n{synthesis_prompt}",
+                persistent_memory.render_prompt_section()
+            )
+        };
         let synthesis_prompt =
             response_style::apply_response_style(&synthesis_prompt, req.response_style.as_deref());
 

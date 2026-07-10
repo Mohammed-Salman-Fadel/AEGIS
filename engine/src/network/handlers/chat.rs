@@ -75,6 +75,8 @@ pub struct ChatRequest {
     pub rag_top_k: Option<usize>,
     #[serde(default)]
     pub rag_similarity_threshold: Option<f64>,
+    #[serde(default)]
+    pub reasoning_enabled: bool,
 }
 
 /// Handler for POST /chat

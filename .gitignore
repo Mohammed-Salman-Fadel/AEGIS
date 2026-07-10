@@ -25,7 +25,11 @@ target-cli-check
 target-cli-release
 target-cli-url-check
 target-cli-feature-check
+target-cli-open-fix
+target-cli-memory-check
 target-engine-feature-check
+target-engine-memory-check
+
 .agents
 # Frontend / Node
 node_modules/

@@ -109,6 +109,19 @@ pub struct ParsedCalendarEvent {
 pub struct ProviderSummary {
     pub name: String,
     pub description: String,
+    pub capabilities: ProviderCapabilities,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderCapabilities {
+    pub chat: bool,
+    pub streaming: bool,
+    pub model_listing: bool,
+    pub model_download: bool,
+    pub model_unload: bool,
+    pub context_window_detection: bool,
+    pub requires_external_app: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -120,8 +133,7 @@ pub struct ModelSummary {
 
 impl EngineClient {
     pub fn from_env() -> Self {
-        let base_url =
-            env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let base_url = crate::runner::engine_base_url_from_env();
         let ollama_url =
             env::var("AEGIS_OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
         let lm_studio_url = env::var("AEGIS_LM_STUDIO_URL")
@@ -188,10 +200,9 @@ impl EngineClient {
 
     fn current_model_with_client(&self, client: &reqwest::blocking::Client) -> AppResult<String> {
         let request_path = self.api_url("models/current");
-        let response = client
-            .get(&request_path)
-            .send()
-            .map_err(|error| format!("Could not fetch the active model from engine: {error}"))?;
+        let response = client.get(&request_path).send().map_err(|error| {
+            format!("Could not fetch the active model from engine at `{request_path}`: {error}")
+        })?;
 
         if !response.status().is_success() {
             return Err(format!(
@@ -212,10 +223,9 @@ impl EngineClient {
         client: &reqwest::blocking::Client,
     ) -> AppResult<String> {
         let request_path = self.api_url("providers/current");
-        let response = client
-            .get(&request_path)
-            .send()
-            .map_err(|error| format!("Could not fetch the active provider from engine: {error}"))?;
+        let response = client.get(&request_path).send().map_err(|error| {
+            format!("Could not fetch the active provider from engine at `{request_path}`: {error}")
+        })?;
 
         if !response.status().is_success() {
             return Err(format!(
@@ -621,6 +631,8 @@ impl EngineClient {
             .map(|provider| ProviderSummary {
                 name: provider.name,
                 description: provider.description,
+                capabilities: provider.capabilities.unwrap_or_default().into(),
+                notes: provider.notes.unwrap_or_default(),
             })
             .collect())
     }
@@ -1258,6 +1270,33 @@ struct ProvidersResponse {
 struct ProviderRecord {
     name: String,
     description: String,
+    capabilities: Option<ProviderCapabilitiesRecord>,
+    notes: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Default)]
+struct ProviderCapabilitiesRecord {
+    chat: bool,
+    streaming: bool,
+    model_listing: bool,
+    model_download: bool,
+    model_unload: bool,
+    context_window_detection: bool,
+    requires_external_app: bool,
+}
+
+impl From<ProviderCapabilitiesRecord> for ProviderCapabilities {
+    fn from(record: ProviderCapabilitiesRecord) -> Self {
+        Self {
+            chat: record.chat,
+            streaming: record.streaming,
+            model_listing: record.model_listing,
+            model_download: record.model_download,
+            model_unload: record.model_unload,
+            context_window_detection: record.context_window_detection,
+            requires_external_app: record.requires_external_app,
+        }
+    }
 }
 
 #[derive(Serialize)]

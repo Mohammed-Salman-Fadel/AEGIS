@@ -128,6 +128,22 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
     );
     println!("Web UI URL: {web_ui_url}");
 
+    let loading = ctx
+        .ui
+        .start_loading_animation("Checking active model readiness");
+    let warmup_result = ctx.engine.warm_active_model_blocking();
+    loading.finish();
+
+    match warmup_result {
+        Ok(()) => println!("{}", ctx.ui.success("Active model is ready.")),
+        Err(error) => println!(
+            "{}",
+            ctx.ui.warning(&format!(
+                "The UI can open now, but the active model is not ready yet: {error}"
+            ))
+        ),
+    }
+
     match open_url_in_browser(&web_ui_url) {
         Ok(()) => {
             println!(
@@ -1601,6 +1617,23 @@ fn handle_interactive_model_select(ctx: &AppContext) -> AppResult<()> {
 }
 
 fn handle_model_download(ctx: &AppContext, model_name: &str) -> AppResult<()> {
+    let current_provider = ctx.engine.current_provider().ok();
+    if let Some(provider_name) = current_provider.as_deref() {
+        if let Ok(providers) = ctx.engine.list_providers() {
+            if let Some(provider) = providers
+                .iter()
+                .find(|provider| provider.name.eq_ignore_ascii_case(provider_name))
+            {
+                if !provider.capabilities.model_download {
+                    return Err(format!(
+                        "Provider `{}` does not support AEGIS-managed model downloads. Switch to a provider with model_download support or install the model in that provider manually.",
+                        provider.name
+                    ));
+                }
+            }
+        }
+    }
+
     println!(
         "{}",
         ctx.ui
@@ -1813,6 +1846,46 @@ fn print_providers(
             if active { " (active)" } else { "" }
         );
         println!("  {}", provider.description);
+        println!(
+            "  capabilities: {}",
+            format_provider_capabilities(&provider.capabilities)
+        );
+        for note in &provider.notes {
+            println!("  - {}", ctx.ui.muted(note));
+        }
+    }
+}
+
+fn format_provider_capabilities(
+    capabilities: &crate::engine_client::ProviderCapabilities,
+) -> String {
+    let mut enabled = Vec::new();
+    if capabilities.chat {
+        enabled.push("chat");
+    }
+    if capabilities.streaming {
+        enabled.push("streaming");
+    }
+    if capabilities.model_listing {
+        enabled.push("model-list");
+    }
+    if capabilities.model_download {
+        enabled.push("model-download");
+    }
+    if capabilities.model_unload {
+        enabled.push("model-unload");
+    }
+    if capabilities.context_window_detection {
+        enabled.push("context-window");
+    }
+    if capabilities.requires_external_app {
+        enabled.push("external-runtime");
+    }
+
+    if enabled.is_empty() {
+        "none reported".to_string()
+    } else {
+        enabled.join(", ")
     }
 }
 

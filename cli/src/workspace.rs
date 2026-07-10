@@ -204,15 +204,12 @@ impl Workspace {
         }
 
         // Default to engine URL — frontend is embedded, served on same port
-        let host = env::var("AEGIS_ENGINE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let port = env::var("AEGIS_ENGINE_PORT").unwrap_or_else(|_| "8080".to_string());
-        format!("http://{host}:{port}")
+        crate::runner::engine_base_url_from_env()
     }
 
     fn looks_like_engine_url(url: &str) -> bool {
         let url = url.trim().trim_end_matches('/');
-        let engine_url =
-            env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let engine_url = crate::runner::engine_base_url_from_env();
         let engine_url = engine_url.trim().trim_end_matches('/').to_ascii_lowercase();
         let candidate = url.to_ascii_lowercase();
 

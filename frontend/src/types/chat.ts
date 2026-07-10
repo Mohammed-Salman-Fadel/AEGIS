@@ -9,12 +9,21 @@ export interface RetrievalChunk {
   score: number;
 }
 
+export interface ReasoningEvent {
+  phase: string;
+  title: string;
+  detail?: string;
+  round?: number;
+  tool?: string;
+}
+
 export interface Message {
   role: Role;
   content: string;
   edited?: boolean;
   timestamp?: string;
   sources?: RetrievalChunk[];
+  reasoningEvents?: ReasoningEvent[];
 }
 
 export type ChatMode = 'general' | 'coder' | 'academic';

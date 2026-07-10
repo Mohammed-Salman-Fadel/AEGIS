@@ -212,6 +212,8 @@ const CODE_ACTION_VERBS: &[&str] = &[
     "explain",
     "review",
     "analyze",
+    "how does",
+    "how do",
 ];
 
 /// Returns true when `text` (pre-lowercased) contains at least one strong

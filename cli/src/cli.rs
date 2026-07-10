@@ -72,7 +72,7 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum CommandKind {
-    /// Start local AEGIS services, warm the active model, and open the Web UI.
+    /// Start local AEGIS services, check model readiness, and open the Web UI.
     Open,
     Install(InstallArgs),
     Logs(LogsArgs),

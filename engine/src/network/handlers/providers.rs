@@ -13,6 +13,19 @@ pub struct ProviderResponse {
     name: String,
     description: String,
     active: bool,
+    capabilities: ProviderCapabilitiesResponse,
+    notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct ProviderCapabilitiesResponse {
+    chat: bool,
+    streaming: bool,
+    model_listing: bool,
+    model_download: bool,
+    model_unload: bool,
+    context_window_detection: bool,
+    requires_external_app: bool,
 }
 
 #[derive(Serialize)]
@@ -39,10 +52,20 @@ pub async fn list_providers(State(state): State<AppState>) -> Json<ProviderListR
             .orchestrator
             .list_providers()
             .into_iter()
-            .map(|(name, description, active)| ProviderResponse {
-                name,
-                description,
-                active,
+            .map(|provider| ProviderResponse {
+                name: provider.name,
+                description: provider.description,
+                active: provider.active,
+                capabilities: ProviderCapabilitiesResponse {
+                    chat: provider.capabilities.chat,
+                    streaming: provider.capabilities.streaming,
+                    model_listing: provider.capabilities.model_listing,
+                    model_download: provider.capabilities.model_download,
+                    model_unload: provider.capabilities.model_unload,
+                    context_window_detection: provider.capabilities.context_window_detection,
+                    requires_external_app: provider.capabilities.requires_external_app,
+                },
+                notes: provider.capabilities.notes,
             })
             .collect(),
     })

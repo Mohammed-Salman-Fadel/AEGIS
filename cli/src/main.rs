@@ -109,8 +109,7 @@ fn main() {
 fn should_warm_active_model(command: Option<&CommandKind>) -> bool {
     matches!(
         command,
-        None | Some(CommandKind::Open)
-            | Some(CommandKind::Chat(_))
+        None | Some(CommandKind::Chat(_))
             | Some(CommandKind::Ask(_))
             | Some(CommandKind::Repl(_))
             | Some(CommandKind::Load(_))
@@ -131,7 +130,6 @@ mod tests {
     #[test]
     fn warms_for_shell_and_chat_flows() {
         assert!(should_warm_active_model(None));
-        assert!(should_warm_active_model(Some(&CommandKind::Open)));
         assert!(should_warm_active_model(Some(&CommandKind::Chat(
             ChatArgs {
                 prompt: "hello".to_string(),
@@ -139,6 +137,11 @@ mod tests {
                 attachments: Vec::new(),
             }
         ))));
+    }
+
+    #[test]
+    fn open_handles_model_readiness_without_prefailing() {
+        assert!(!should_warm_active_model(Some(&CommandKind::Open)));
     }
 
     #[test]

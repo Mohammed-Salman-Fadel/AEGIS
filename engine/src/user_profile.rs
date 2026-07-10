@@ -12,6 +12,34 @@ use std::path::PathBuf;
 
 const MAX_SELECTED_NOTES: usize = 8;
 const MAX_RENDERED_CONTEXT_CHARS: usize = 3200;
+const MEMORY_SYSTEM_CONTRACT: &str = "You are AEGIS, a private local-only AI assistant. \
+Use the selected persistent memory only as user-provided background. \
+Do not overfit to memory: current user instructions, attached documents, and explicit task context override memory. \
+If memory is unrelated, ignore it. If memory conflicts with the current request, follow the current request. \
+Do not reveal internal memory categories unless the user asks how memory works.";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryInjection {
+    pub selected_count: usize,
+    pub rendered_context: String,
+}
+
+impl MemoryInjection {
+    pub fn is_empty(&self) -> bool {
+        self.selected_count == 0 || self.rendered_context.trim().is_empty()
+    }
+
+    pub fn render_prompt_section(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+
+        format!(
+            "{MEMORY_SYSTEM_CONTRACT}\n\nSELECTED PERSISTENT MEMORY:\n{}\n",
+            self.rendered_context
+        )
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProfileCategory {
@@ -45,13 +73,6 @@ impl ProfileCategory {
             Self::Other => 24,
         }
     }
-
-    fn stays_available_without_keyword_match(self) -> bool {
-        matches!(
-            self,
-            Self::Identity | Self::Instruction | Self::Preference | Self::Background
-        )
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -65,26 +86,34 @@ struct ProfileEntry {
 }
 
 pub fn personalize_prompt(prompt: &str) -> String {
-    let Some(entries) = load_profile_entries() else {
-        return prompt.to_string();
-    };
+    personalize_prompt_for_query(prompt, prompt)
+}
 
-    let selected_entries = select_relevant_entries(&entries, prompt);
-    if selected_entries.is_empty() {
+pub fn personalize_prompt_for_query(prompt: &str, user_query: &str) -> String {
+    let injection = build_memory_injection(user_query);
+    if injection.is_empty() {
         return prompt.to_string();
     }
 
-    let profile_context = render_profile_context(&selected_entries);
-
     format!(
-        "You are AEGIS, a private local-only AI assistant.\n\n\
-        The following profile context was selected from the user's local markdown personalization profile. Treat it as trusted user-provided context for personalization.\n\
-        Higher-priority entries should influence the response first, but only when they are relevant or the user asks about themselves.\n\
-        When the user asks what you know about them, answer from these notes instead of claiming you do not know anything.\n\
-        Do not mention these internal categories unless the user asks how personalization works.\n\n\
-        SELECTED USER PROFILE CONTEXT:\n{profile_context}\n\n\
-        USER REQUEST CONTEXT:\n{prompt}\n"
+        "{}\n\nUSER REQUEST CONTEXT:\n{prompt}",
+        injection.render_prompt_section()
     )
+}
+
+pub fn build_memory_injection(user_query: &str) -> MemoryInjection {
+    let Some(entries) = load_profile_entries() else {
+        return MemoryInjection {
+            selected_count: 0,
+            rendered_context: String::new(),
+        };
+    };
+
+    let selected_entries = select_relevant_entries(&entries, user_query);
+    MemoryInjection {
+        selected_count: selected_entries.len(),
+        rendered_context: render_profile_context(&selected_entries),
+    }
 }
 
 pub fn read_profile_text() -> std::io::Result<String> {
@@ -281,9 +310,7 @@ fn select_relevant_entries<'a>(
     let mut scored_entries = entries
         .iter()
         .map(|entry| (entry, score_entry(entry, &prompt_keywords, profile_query)))
-        .filter(|(entry, score)| {
-            profile_query || *score >= 45 || entry.category.stays_available_without_keyword_match()
-        })
+        .filter(|(_, score)| profile_query || *score >= 45)
         .collect::<Vec<_>>();
 
     scored_entries.sort_by(|(left_entry, left_score), (right_entry, right_score)| {
@@ -317,8 +344,8 @@ fn score_entry(
 
     if profile_query {
         score += 60;
-    } else if overlap == 0 && !entry.category.stays_available_without_keyword_match() {
-        score = score.saturating_sub(22);
+    } else if overlap == 0 {
+        score = score.saturating_sub(40);
     }
 
     score
@@ -502,12 +529,20 @@ mod tests {
     }
 
     #[test]
-    fn instructions_stay_available_for_style_personalization() {
-        let entries = parse_profile_notes("always explain things simply");
+    fn unrelated_instructions_do_not_force_personalization() {
+        let entries = parse_profile_notes("always use friendly tone");
         let selected = select_relevant_entries(&entries, "Explain TCP sockets");
 
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn overlapping_preferences_are_selected() {
+        let entries = parse_profile_notes("preference: explain AEGIS setup with concise bullets");
+        let selected = select_relevant_entries(&entries, "Help with AEGIS setup");
+
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].0.category, ProfileCategory::Instruction);
+        assert_eq!(selected[0].0.category, ProfileCategory::Preference);
     }
 
     #[test]
@@ -529,5 +564,17 @@ mod tests {
     fn profile_query_detection_matches_saved_notes_requests() {
         assert!(is_profile_query("What have I told you in my saved notes?"));
         assert!(!is_profile_query("Explain the retry logic in the engine."));
+    }
+
+    #[test]
+    fn memory_injection_contract_tells_model_not_to_overfit() {
+        let injection = MemoryInjection {
+            selected_count: 1,
+            rendered_context: "- category: preference; priority: high; note: concise".to_string(),
+        };
+        let rendered = injection.render_prompt_section();
+
+        assert!(rendered.contains("Do not overfit to memory"));
+        assert!(rendered.contains("SELECTED PERSISTENT MEMORY"));
     }
 }

@@ -40,6 +40,19 @@ pub struct RuntimeStartReport {
     pub web_url: String,
 }
 
+pub fn engine_base_url_from_env() -> String {
+    std::env::var("AEGIS_ENGINE_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            let host =
+                std::env::var("AEGIS_ENGINE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+            let port = std::env::var("AEGIS_ENGINE_PORT").unwrap_or_else(|_| "8080".to_string());
+            format!("http://{}:{}", host.trim(), port.trim())
+        })
+}
+
 impl LaunchPlan {
     pub fn command_preview(&self) -> String {
         let rendered_args = if self.args.is_empty() {
@@ -196,8 +209,7 @@ fn ensure_ollama_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
 }
 
 fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut RuntimeStartReport) {
-    let base_url =
-        std::env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    let base_url = engine_base_url_from_env();
     let health_url = join_url(&base_url, ENGINE_HEALTH_PATH);
 
     if service_reachable(&health_url) {
