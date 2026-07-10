@@ -1,5 +1,5 @@
 // Session utility functions
-import type { Message, RetrievalChunk, EngineTurn } from '../types';
+import type { Message, RetrievalChunk, EngineTurn } from '../types/index.js';
 
 export function turnsToMessages(turns: EngineTurn[], sessionId: string): Message[] {
   return turns.flatMap((turn, turnIdx) => {

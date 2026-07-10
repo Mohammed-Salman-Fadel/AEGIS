@@ -58,8 +58,7 @@ const ENV_VAULT_PATH: &str = "AEGIS_MCP_OBSIDIAN_VAULT_PATH";
 /// On Windows, wraps the command in `cmd /c` so that `.cmd` batch files
 /// (like those installed by npm global installs) resolve correctly.
 pub fn build_obsidian_command() -> (String, Vec<String>) {
-    let raw_command = std::env::var(ENV_COMMAND)
-        .unwrap_or_else(|_| DEFAULT_COMMAND.to_string());
+    let raw_command = std::env::var(ENV_COMMAND).unwrap_or_else(|_| DEFAULT_COMMAND.to_string());
 
     let mut raw_args: Vec<String> = if let Ok(args_str) = std::env::var(ENV_ARGS) {
         args_str.split_whitespace().map(|s| s.to_string()).collect()
@@ -99,10 +98,7 @@ pub async fn register(registry: &McpRegistry) -> anyhow::Result<()> {
 }
 
 /// Helper: search Obsidian notes by query string.
-pub async fn search_notes(
-    registry: &McpRegistry,
-    query: &str,
-) -> anyhow::Result<String> {
+pub async fn search_notes(registry: &McpRegistry, query: &str) -> anyhow::Result<String> {
     let result = registry
         .call_tool(
             PROVIDER_NAME,
@@ -114,10 +110,7 @@ pub async fn search_notes(
 }
 
 /// Helper: read the contents of a specific note.
-pub async fn read_note(
-    registry: &McpRegistry,
-    note_path: &str,
-) -> anyhow::Result<String> {
+pub async fn read_note(registry: &McpRegistry, note_path: &str) -> anyhow::Result<String> {
     let result = registry
         .call_tool(
             PROVIDER_NAME,

@@ -1,6 +1,6 @@
 // Markdown parsing and rendering utilities
 import type { ReactNode } from 'react';
-import type { MarkdownBlock, MarkdownHeadingLevel } from '../types';
+import type { MarkdownBlock, MarkdownHeadingLevel } from '../types/index.js';
 
 export function normalizeAssistantMarkdownProse(content: string) {
   return content

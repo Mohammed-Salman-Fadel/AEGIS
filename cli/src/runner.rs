@@ -1,4 +1,4 @@
-﻿#![allow(dead_code)]
+#![allow(dead_code)]
 
 //! Role: subprocess scaffolding for future engine startup, installer steps, and model downloads.
 //! Called by: `commands.rs` for status previews and later by `install.rs` when real execution is approved.
@@ -21,6 +21,7 @@ use crate::workspace::Workspace;
 const ENGINE_HEALTH_PATH: &str = "/health";
 const RAG_HEALTH_PATH: &str = "/health";
 const RAG_INIT_PATH: &str = "/init";
+const OLLAMA_HEALTH_PATH: &str = "/api/tags";
 
 #[derive(Debug, Clone)]
 pub struct LaunchPlan {
@@ -79,6 +80,7 @@ pub fn ensure_local_runtime(ui: &Ui, workspace: &Workspace) -> RuntimeStartRepor
     }
 
     ensure_rag_runtime(workspace, &logs_dir, &mut report);
+    ensure_ollama_runtime(workspace, &logs_dir, &mut report);
     ensure_engine_runtime(workspace, &logs_dir, &mut report);
     render_runtime_report(ui, &report);
 
@@ -149,6 +151,50 @@ fn ensure_rag_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Runti
     }
 }
 
+fn ensure_ollama_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut RuntimeStartReport) {
+    if !uses_ollama_provider() {
+        return;
+    }
+
+    let base_url =
+        std::env::var("AEGIS_OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+    let health_url = join_url(&base_url, OLLAMA_HEALTH_PATH);
+
+    if service_reachable(&health_url) {
+        report.already_running.push(format!("Ollama ({base_url})"));
+        return;
+    }
+
+    if existing_background_process_running(logs_dir, "Ollama") {
+        report.warnings.push(format!(
+            "Ollama appears to already be starting, but `{health_url}` is not healthy yet. Check `{}`.",
+            log_path(logs_dir, "Ollama").display()
+        ));
+        return;
+    }
+
+    let plan = LaunchPlan {
+        label: "Ollama".to_string(),
+        program: "ollama".to_string(),
+        args: vec!["serve".to_string()],
+        cwd: workspace.root.clone(),
+        env: Vec::new(),
+    };
+
+    match spawn_background(&plan, logs_dir) {
+        Ok(()) => {
+            report.started.push("Ollama".to_string());
+            if !wait_for_service(&health_url, Duration::from_secs(25)) {
+                report.warnings.push(format!(
+                    "Ollama was started in the background but did not answer `{health_url}` yet. Model warmup may fail until Ollama is ready. Check `{}`.",
+                    log_path(logs_dir, &plan.label).display()
+                ));
+            }
+        }
+        Err(error) => report.warnings.push(error),
+    }
+}
+
 fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut RuntimeStartReport) {
     let base_url =
         std::env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
@@ -165,9 +211,9 @@ fn ensure_engine_runtime(workspace: &Workspace, logs_dir: &Path, report: &mut Ru
     ensure_ollama_model(report);
 
     let Some(plan) = engine_launch_plan(workspace) else {
-        report
-            .warnings
-            .push("Engine was not started because no engine binary or Cargo.toml was found.".to_string());
+        report.warnings.push(
+            "Engine was not started because no engine binary or Cargo.toml was found.".to_string(),
+        );
         return;
     };
 
@@ -227,7 +273,9 @@ fn probe_ollama_cli() -> bool {
                         // SAFETY: We're modifying our own process's PATH to find Ollama.
                         // This is safe because it only affects the current process, not the
                         // system or other processes, and it only appends to the existing PATH.
-                        unsafe { std::env::set_var("PATH", format!("{};{}", dir, current)); }
+                        unsafe {
+                            std::env::set_var("PATH", format!("{};{}", dir, current));
+                        }
                     }
                 }
             }
@@ -249,13 +297,14 @@ fn which_program(name: &str) -> bool {
 
 /// Check if Ollama has at least one model pulled. If not, pull the default model.
 fn ensure_ollama_model(report: &mut RuntimeStartReport) {
-    let default_model = std::env::var("AEGIS_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
+    let default_model =
+        std::env::var("AEGIS_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
 
     // First check if ollama is reachable at all
     if !probe_ollama_cli() {
         report.warnings.push(
             "Ollama CLI not found on PATH. Install Ollama and pull a model before using AEGIS."
-                .to_string()
+                .to_string(),
         );
         return;
     }
@@ -264,7 +313,7 @@ fn ensure_ollama_model(report: &mut RuntimeStartReport) {
     if !service_reachable("http://127.0.0.1:11434/api/tags") {
         report.warnings.push(
             "Ollama server is not running on http://127.0.0.1:11434. Start it with `ollama serve`."
-                .to_string()
+                .to_string(),
         );
         return;
     }
@@ -349,6 +398,9 @@ fn ensure_frontend_runtime(
             "--".to_string(),
             "--host".to_string(),
             "127.0.0.1".to_string(),
+            "--port".to_string(),
+            workspace.frontend_dev_port().unwrap_or(5173).to_string(),
+            "--strictPort".to_string(),
         ],
         cwd: workspace.frontend_dir.clone(),
         env: Vec::new(),
@@ -385,13 +437,11 @@ pub fn engine_launch_plan(workspace: &Workspace) -> Option<LaunchPlan> {
                 ),
                 (
                     "AEGIS_ENGINE_HOST".to_string(),
-                    std::env::var("AEGIS_ENGINE_HOST")
-                        .unwrap_or_else(|_| "127.0.0.1".to_string()),
+                    std::env::var("AEGIS_ENGINE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
                 ),
                 (
                     "AEGIS_ENGINE_PORT".to_string(),
-                    std::env::var("AEGIS_ENGINE_PORT")
-                        .unwrap_or_else(|_| "8080".to_string()),
+                    std::env::var("AEGIS_ENGINE_PORT").unwrap_or_else(|_| "8080".to_string()),
                 ),
             ],
         });
@@ -699,6 +749,12 @@ pub fn join_url(base_url: &str, path: &str) -> String {
     )
 }
 
+fn uses_ollama_provider() -> bool {
+    std::env::var("AEGIS_INFERENCE_PROVIDER")
+        .map(|provider| matches!(provider.trim().to_ascii_lowercase().as_str(), "" | "ollama"))
+        .unwrap_or(true)
+}
+
 fn python_program_for_rag(rag_dir: &Path) -> String {
     let windows_venv = rag_dir.join("rag-env").join("Scripts").join("python.exe");
     if windows_venv.exists() {
@@ -815,7 +871,10 @@ pub fn logs_dir_path(workspace: &crate::workspace::Workspace) -> PathBuf {
 pub fn read_service_log(logs_dir: &Path, service: &str, n: usize) -> AppResult<String> {
     let log_path = log_path(logs_dir, service);
     if !log_path.exists() {
-        return Err(format!("No log file found for `{service}` at `{}`.", log_path.display()));
+        return Err(format!(
+            "No log file found for `{service}` at `{}`.",
+            log_path.display()
+        ));
     }
     let content = fs::read_to_string(&log_path)
         .map_err(|e| format!("Could not read `{}`: {e}", log_path.display()))?;

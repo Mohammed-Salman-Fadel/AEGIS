@@ -58,7 +58,7 @@ impl McpClient {
                     );
                     false
                 }
-                Ok(None) => true,    // still running
+                Ok(None) => true, // still running
                 Err(e) => {
                     warn!(
                         "MCP process `{}` try_wait error: {e}; assuming dead",
@@ -67,7 +67,7 @@ impl McpClient {
                     false
                 }
             },
-            None => false,           // never started
+            None => false, // never started
         }
     }
 
@@ -99,9 +99,13 @@ impl McpClient {
             .stderr(Stdio::inherit())
             .spawn()?;
 
-        let mut stdin = child.stdin.take()
+        let mut stdin = child
+            .stdin
+            .take()
             .ok_or_else(|| anyhow::anyhow!("MCP child had no stdin"))?;
-        let stdout = child.stdout.take()
+        let stdout = child
+            .stdout
+            .take()
             .ok_or_else(|| anyhow::anyhow!("MCP child had no stdout"))?;
         let mut reader = BufReader::new(stdout);
 
@@ -189,7 +193,9 @@ impl McpClient {
 
         // Try the write.  If the pipe is broken the process has died
         // between ensure_started and now — restart and retry once.
-        let stdin = self.stdin.as_mut()
+        let stdin = self
+            .stdin
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MCP stdin not available"))?;
 
         if let Err(e) = stdin.write_all(req_str.as_bytes()).await {
@@ -199,7 +205,9 @@ impl McpClient {
             self.stdout_reader = None;
             self.ensure_started().await?;
 
-            let stdin = self.stdin.as_mut()
+            let stdin = self
+                .stdin
+                .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("MCP stdin not available after restart"))?;
             stdin.write_all(req_str.as_bytes()).await?;
             stdin.flush().await?;
@@ -208,7 +216,9 @@ impl McpClient {
         }
 
         // ── read the response ──────────────────────────────────────────
-        let reader = self.stdout_reader.as_mut()
+        let reader = self
+            .stdout_reader
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MCP stdout not available"))?;
 
         let resp_json = loop {

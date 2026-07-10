@@ -131,13 +131,8 @@ impl EngineClient {
         }
     }
 
-    pub fn warm_active_model_in_background(&self) {
-        let client = self.clone();
-        let _ = thread::Builder::new()
-            .name("aegis-active-model-warmup".to_string())
-            .spawn(move || {
-                let _ = client.warm_active_model_silently();
-            });
+    pub fn warm_active_model_blocking(&self) -> AppResult<()> {
+        self.warm_active_model_silently()
     }
 
     fn warm_active_model_silently(&self) -> AppResult<()> {
@@ -997,7 +992,10 @@ impl EngineClient {
         for line in reader.lines() {
             let line =
                 line.map_err(|error| format!("Could not read engine chat stream: {error}"))?;
-            if let Some(data) = line.strip_prefix("data:").map(|s| s.strip_prefix(' ').unwrap_or(s)) {
+            if let Some(data) = line
+                .strip_prefix("data:")
+                .map(|s| s.strip_prefix(' ').unwrap_or(s))
+            {
                 event_lines.push(data.to_string());
                 continue;
             }

@@ -29,7 +29,7 @@ pub mod registry;
 pub mod types;
 
 use registry::McpRegistry;
-use types::{McpToolResult, McpProvider};
+use types::{McpProvider, McpToolResult};
 
 /// Top-level manager for all MCP provider interactions.
 /// Held by the [`Orchestrator`](crate::orchestrator::Orchestrator) as a single field.
@@ -58,7 +58,9 @@ impl McpManager {
                 Err(e) => tracing::warn!("Failed to register Obsidian MCP provider: {}", e),
             }
         } else {
-            tracing::debug!("Obsidian MCP provider not configured (set AEGIS_MCP_OBSIDIAN_VAULT_PATH)");
+            tracing::debug!(
+                "Obsidian MCP provider not configured (set AEGIS_MCP_OBSIDIAN_VAULT_PATH)"
+            );
         }
     }
 
@@ -69,7 +71,9 @@ impl McpManager {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> anyhow::Result<McpToolResult> {
-        self.registry.call_tool(provider_name, tool_name, arguments).await
+        self.registry
+            .call_tool(provider_name, tool_name, arguments)
+            .await
     }
 
     /// List all registered providers and their tools.
@@ -78,7 +82,10 @@ impl McpManager {
     }
 
     /// Get tools for a specific provider.
-    pub async fn get_provider_tools(&self, provider_name: &str) -> anyhow::Result<Vec<types::McpTool>> {
+    pub async fn get_provider_tools(
+        &self,
+        provider_name: &str,
+    ) -> anyhow::Result<Vec<types::McpTool>> {
         self.registry.get_provider_tools(provider_name).await
     }
 

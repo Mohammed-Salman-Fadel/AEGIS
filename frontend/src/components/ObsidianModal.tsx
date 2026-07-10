@@ -6,6 +6,30 @@ import { AssistantMarkdown } from './AssistantMarkdown';
 
 type ObsidianTab = 'search' | 'read' | 'create' | 'tree' | 'graph';
 
+interface GraphNode {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  connections: number;
+}
+
+interface GraphEdge {
+  source: string;
+  target: string;
+}
+
+interface GraphSimulation {
+  nodes: GraphNode[];
+  nodeMap: Map<string, GraphNode>;
+  edges: GraphEdge[];
+  w: number;
+  h: number;
+}
+
 interface TreeNode {
   name: string;
   children: Map<string, TreeNode>;
@@ -448,7 +472,7 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
 function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const simRef = useRef<any>(null);
+  const simRef = useRef<GraphSimulation | null>(null);
   const resetFnRef = useRef<(() => void) | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -479,7 +503,7 @@ function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
 
     const cx = w / 2;
     const cy = h / 2;
-    const nodes = (data.nodes || []).map((n: any) => ({
+    const nodes: GraphNode[] = (data.nodes || []).map((n: any) => ({
       id: n.id,
       name: n.name,
       x: cx + (Math.random() - 0.5) * 4,
@@ -579,9 +603,10 @@ function InteractiveGraph({ data, isDark }: { data: any; isDark: boolean }) {
 
   // Render on zoom/pan/select via transform
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvasEl = canvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container) return;
+    if (!canvasEl || !container) return;
+    const canvas = canvasEl;
 
     const ctx = canvas.getContext('2d')!;
 

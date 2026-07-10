@@ -1,7 +1,7 @@
 // Individual chat message bubble with editing, sources, TTS, copy, and patch apply
 import { Bot, User, Edit3, Copy, Check, BookOpen, Volume2, VolumeX, FileCode } from 'lucide-react';
 import type { Message, CodeProject } from '../types';
-import { copyTextToClipboard, extractUnifiedDiff, fitTextareaToContent } from '../lib';
+import { extractUnifiedDiff, fitTextareaToContent } from '../lib';
 import { AssistantMarkdown } from './AssistantMarkdown';
 import { useT } from '../lib/i18n';
 

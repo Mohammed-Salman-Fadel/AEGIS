@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from typing import Any
+import base64
 import os
 import signal
 
@@ -138,21 +139,27 @@ def configure_voice(keep_cached: bool):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/ocr")
-async def ocr_image(file: UploadFile = File(None), body: dict = None):
+async def ocr_image(request: Request, file: UploadFile = File(None)):
     """Extracts text from an uploaded image using Tesseract OCR.
-    Accepts either a file upload (multipart) or base64-encoded image in JSON body ({"image": "<base64>", "filename": "image.png"})."""
+    Accepts either a file upload (multipart) or base64-encoded image in JSON body."""
     try:
         from PIL import Image
         import pytesseract
         import io
-        import base64
 
         if file:
             content = await file.read()
-        elif body and "image" in body:
-            content = base64.b64decode(body["image"])
         else:
-            raise HTTPException(status_code=400, detail="No image provided. Upload a file or send base64 data.")
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+
+            image_b64 = body.get("image") if isinstance(body, dict) else None
+            if image_b64:
+                content = base64.b64decode(image_b64)
+            else:
+                raise HTTPException(status_code=400, detail="No image provided. Upload a file or send base64 data.")
 
         image = Image.open(io.BytesIO(content))
         text = pytesseract.image_to_string(image)

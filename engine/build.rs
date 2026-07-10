@@ -7,7 +7,9 @@ fn main() {
     // Developers should run `npm run dev` in frontend/ for hot-reload.
     #[cfg(feature = "dev")]
     {
-        println!("cargo:warning=DEV MODE: Skipping frontend build. Use Vite dev server on port 5173 for hot-reload.");
+        println!(
+            "cargo:warning=DEV MODE: Skipping frontend build. Use Vite dev server on port 5173 for hot-reload."
+        );
         return;
     }
 

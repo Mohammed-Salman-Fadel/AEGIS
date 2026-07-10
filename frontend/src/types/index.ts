@@ -8,7 +8,7 @@ export type {
   MarkdownHeadingLevel,
   MarkdownBlock,
   ImportPhase,
-} from './chat';
+} from './chat.js';
 
 export type {
   CatalogModel,
@@ -17,14 +17,14 @@ export type {
   ProviderResponse,
   ProviderListResponse,
   ModelDownloadState,
-} from './models';
+} from './models.js';
 
 export type {
   EngineSessionSummary,
   EngineSessionsResponse,
   EngineTurn,
   EngineSession,
-} from './sessions';
+} from './sessions.js';
 
 export type {
   CalendarResult,
@@ -32,7 +32,7 @@ export type {
   OutlookCalendar,
   OutlookCalendarsResponse,
   OutlookCalendarSelectionResponse,
-} from './calendar';
+} from './calendar.js';
 
 export type {
   FileSystemHandlePermissionDescriptor,
@@ -42,14 +42,14 @@ export type {
   FileSystemWritableFileStream,
   ProjectFileSnapshot,
   CodeProject,
-} from './projects';
+} from './projects.js';
 
 export type {
   ThemeMode,
   AppearanceTheme,
   SettingsTab,
   ResponseStyle,
-} from './settings';
+} from './settings.js';
 
 export type {
   SystemStats,
@@ -57,5 +57,6 @@ export type {
   IndexedDocument,
   IngestResponse,
   DeleteIndexedDocumentResponse,
+  ProfileResponse,
   InferenceStats,
-} from './system';
+} from './system.js';

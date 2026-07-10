@@ -4,9 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "prebuild": "powershell -ExecutionPolicy Bypass -File ../tools/sync-installer-download.ps1",
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:installer": "powershell -ExecutionPolicy Bypass -File ../tools/verify-installer-release.ps1 -SkipBuild",
+    "verify:release": "powershell -ExecutionPolicy Bypass -File ../tools/verify-installer-release.ps1"
   },
   "dependencies": {
     "lucide-react": "^1.8.0",

@@ -31,7 +31,12 @@ export interface DeleteIndexedDocumentResponse {
   deleted_chunks: number;
 }
 
-import type { EngineSession } from './sessions';
+export interface ProfileResponse {
+  contents: string;
+  path: string;
+}
+
+import type { EngineSession } from './sessions.js';
 
 export interface InferenceStats {
   latency: number;

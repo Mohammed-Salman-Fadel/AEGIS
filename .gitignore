@@ -20,7 +20,11 @@ engine/Cargo.lock
 .cargo-target-*/
 cli/target/
 target/
-
+target-engine-check
+target-cli-check
+target-cli-release
+target-cli-url-check
+.agents
 # Frontend / Node
 node_modules/
 frontend/node_modules/

@@ -38,12 +38,20 @@ const DEFAULT_WORKFLOW: WorkflowDef = WorkflowDef {
 
 const DOCUMENT_QA_WORKFLOW: WorkflowDef = WorkflowDef {
     id: WorkflowId::DocumentQA,
-    phases: &[Phase::RagRetrieve { top_k: 5 }, Phase::Compact, Phase::Synthesize],
+    phases: &[
+        Phase::RagRetrieve { top_k: 5 },
+        Phase::Compact,
+        Phase::Synthesize,
+    ],
 };
 
 const SUMMARIZE_WORKFLOW: WorkflowDef = WorkflowDef {
     id: WorkflowId::Summarize,
-    phases: &[Phase::RagRetrieve { top_k: 8 }, Phase::Compact, Phase::Synthesize],
+    phases: &[
+        Phase::RagRetrieve { top_k: 8 },
+        Phase::Compact,
+        Phase::Synthesize,
+    ],
 };
 
 const CODE_EXPLAIN_WORKFLOW: WorkflowDef = WorkflowDef {

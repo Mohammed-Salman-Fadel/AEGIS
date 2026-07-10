@@ -140,7 +140,9 @@ impl McpClient {
                     anyhow::bail!("EOF while waiting for MCP response");
                 }
                 let trimmed = line.trim();
-                if trimmed.is_empty() { continue; }
+                if trimmed.is_empty() {
+                    continue;
+                }
 
                 // Accumulate into buffer to handle multi-line JSON
                 json_buf.push_str(trimmed);
@@ -199,7 +201,9 @@ impl McpClient {
             let mut line = String::new();
             loop {
                 line.clear();
-                let n = reader.read_line(&mut line).await
+                let n = reader
+                    .read_line(&mut line)
+                    .await
                     .map_err(|e| anyhow::anyhow!("Failed to read MCP tools response: {}", e))?;
                 if n == 0 {
                     anyhow::bail!("EOF while listing MCP tools");

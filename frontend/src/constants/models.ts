@@ -1,5 +1,5 @@
 // Model catalog and provider tag constants
-import type { CatalogModel, ResponseStyle } from '../types';
+import type { CatalogModel, ResponseStyle } from '../types/index.js';
 
 export const MODEL_PROVIDER_TAGS = [
   'All',

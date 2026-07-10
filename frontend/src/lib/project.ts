@@ -1,5 +1,5 @@
 // Project file scanning and snapshot building utilities
-import type { ProjectFileSnapshot, FileSystemDirectoryHandle } from '../types';
+import type { ProjectFileSnapshot, FileSystemDirectoryHandle } from '../types/index.js';
 import {
   MAX_PROJECT_FILES,
   MAX_PROJECT_FILE_BYTES,
@@ -7,7 +7,7 @@ import {
   IGNORED_PROJECT_DIRECTORIES,
   IGNORED_PROJECT_FILES,
   CODE_PROJECT_EXTENSIONS,
-} from '../constants';
+} from '../constants/index.js';
 
 export function projectFileExtension(path: string) {
   const dotIndex = path.lastIndexOf('.');

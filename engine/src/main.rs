@@ -22,7 +22,6 @@ mod tool_registry;
 mod user_profile;
 mod workflow;
 
-use anyhow::Context;
 use config::{AppConfig, InferenceProvider};
 use inference::InferenceBackend;
 
@@ -79,32 +78,11 @@ async fn main() -> anyhow::Result<()> {
         config.python_path,
         mcp_manager,
     );
-    orchestrator
-        .warm_active_model()
-        .await
-        .context("AEGIS engine startup aborted because the active model could not be warmed.")?;
-
-    // Eagerly query and store the real context window from the inference backend.
-    // This avoids a hardcoded default for the first `context_usage()` call.
-    {
-        let model_name = orchestrator.current_model_name();
-        let backend_window = orchestrator
-            .call_inference_context_window(&model_name)
-            .await;
-        if let Some(window) = backend_window {
-            orchestrator
-                .set_model_context_window(&model_name, window);
-            tracing::info!(
-                model = %model_name,
-                context_window = window,
-                "Discovered model context window from inference backend."
-            );
-        } else {
-            tracing::info!(
-                model = %model_name,
-                "Backend did not report a context window; using default.",
-            );
-        }
+    if let Err(error) = orchestrator.warm_active_model().await {
+        tracing::warn!(
+            error = %error,
+            "Active model could not be warmed during engine startup; continuing so /health can report readiness."
+        );
     }
 
     let state = network::state::AppState::new(orchestrator);

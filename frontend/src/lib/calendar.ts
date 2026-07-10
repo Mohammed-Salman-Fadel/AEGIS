@@ -1,5 +1,5 @@
 // Calendar helper utilities
-import type { OutlookCalendar } from '../types';
+import type { OutlookCalendar } from '../types/index.js';
 
 export function cleanOutlookCalendarName(name: string) {
   return name.replace(/\s*\(this computer only\)\s*/gi, ' ').replace(/\s+/g, ' ').trim();

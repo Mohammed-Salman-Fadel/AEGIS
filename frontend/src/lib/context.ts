@@ -1,6 +1,6 @@
 // Context usage API helpers
-import type { ContextUsage } from '../types';
-import { API_BASE, EMPTY_CONTEXT_USAGE } from '../constants';
+import type { ContextUsage } from '../types/index.js';
+import { API_BASE } from '../constants/index.js';
 
 export function normalizeContextUsage(data: Partial<ContextUsage>): ContextUsage {
   return {

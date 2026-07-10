@@ -272,7 +272,9 @@ fn is_document_scoped(text: &str) -> bool {
         "this report",
     ];
 
-    let has_reference = document_references.iter().any(|phrase| text.contains(phrase));
+    let has_reference = document_references
+        .iter()
+        .any(|phrase| text.contains(phrase));
     if !has_reference {
         return false;
     }
@@ -502,7 +504,11 @@ mod tests {
     fn debug_request_triggers_code_debug() {
         let c = Classifier::new();
         assert_eq!(
-            c.classify("Debug this Rust function, it's not working", false, "general"),
+            c.classify(
+                "Debug this Rust function, it's not working",
+                false,
+                "general"
+            ),
             WorkflowId::CodeDebug
         );
     }
@@ -531,7 +537,11 @@ mod tests {
     fn implement_class_triggers_code_generate() {
         let c = Classifier::new();
         assert_eq!(
-            c.classify("Create a new function for handling API requests", false, "general"),
+            c.classify(
+                "Create a new function for handling API requests",
+                false,
+                "general"
+            ),
             WorkflowId::CodeGenerate
         );
     }

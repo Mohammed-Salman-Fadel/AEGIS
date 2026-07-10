@@ -8,9 +8,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::runner::{LaunchPlan, run_foreground};
 use crate::ui::Ui;
 use crate::workspace::Workspace;
-use crate::runner::{run_foreground, LaunchPlan};
 
 #[derive(Debug, Clone)]
 pub struct InstallPlan {
@@ -35,7 +35,11 @@ pub enum SkipCondition {
     /// Skip if path exists (file or directory)
     PathExists(PathBuf),
     /// Skip if running `<program> <args>` produces stdout/stderr containing `contains`
-    CmdOutputContains { program: String, args: Vec<String>, contains: String },
+    CmdOutputContains {
+        program: String,
+        args: Vec<String>,
+        contains: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -59,8 +63,8 @@ pub fn build_install_plan(
     install_root: PathBuf,
     install_root_source: impl Into<String>,
 ) -> InstallPlan {
-    let default_model = std::env::var("AEGIS_DEFAULT_MODEL")
-        .unwrap_or_else(|_| "qwen3:4b".to_string());
+    let default_model =
+        std::env::var("AEGIS_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
 
     let aegis_dir = install_root.join(".aegis");
     let config_dir = aegis_dir.join("config");
@@ -93,7 +97,11 @@ pub fn build_install_plan(
         description: format!("Create venv at `{}`", rag_venv_dir.display()),
         action: InstallAction::RunCommand {
             program: python_cmd.into(),
-            args: vec!["-m".into(), "venv".into(), rag_venv_dir.to_string_lossy().to_string()],
+            args: vec![
+                "-m".into(),
+                "venv".into(),
+                rag_venv_dir.to_string_lossy().to_string(),
+            ],
             cwd: Some(install_root.clone()),
         },
         skip_if: Some(SkipCondition::PathExists(rag_venv_python.clone())),
@@ -159,8 +167,13 @@ pub fn build_install_plan(
     // Step 7-9: Create .aegis directory structure (create_dir_all is already safe)
     steps.push(InstallStep {
         name: "Create AEGIS config directory".into(),
-        description: format!("Create `{}` with config/, logs/, sessions/", aegis_dir.display()),
-        action: InstallAction::CreateDir { path: config_dir.clone() },
+        description: format!(
+            "Create `{}` with config/, logs/, sessions/",
+            aegis_dir.display()
+        ),
+        action: InstallAction::CreateDir {
+            path: config_dir.clone(),
+        },
         skip_if: Some(SkipCondition::PathExists(config_dir.join("aegis.toml"))),
     });
 
@@ -216,7 +229,9 @@ model = "{}"
     // Step 11: Pull default model from Ollama (skip if already pulled)
     steps.push(InstallStep {
         name: format!("Pull default model `{default_model}` from Ollama"),
-        description: format!("Run `ollama pull {default_model}` to download the default local model"),
+        description: format!(
+            "Run `ollama pull {default_model}` to download the default local model"
+        ),
         action: InstallAction::RunCommand {
             program: "ollama".into(),
             args: vec!["pull".into(), default_model.clone()],
@@ -244,18 +259,20 @@ model = "{}"
 fn check_skip(condition: &SkipCondition) -> bool {
     match condition {
         SkipCondition::PathExists(path) => path.exists(),
-        SkipCondition::CmdOutputContains { program, args, contains } => {
-            Command::new(program)
-                .args(args)
-                .output()
-                .ok()
-                .map(|o| {
-                    let stdout = String::from_utf8_lossy(&o.stdout);
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    stdout.contains(contains) || stderr.contains(contains)
-                })
-                .unwrap_or(false)
-        }
+        SkipCondition::CmdOutputContains {
+            program,
+            args,
+            contains,
+        } => Command::new(program)
+            .args(args)
+            .output()
+            .ok()
+            .map(|o| {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                stdout.contains(contains) || stderr.contains(contains)
+            })
+            .unwrap_or(false),
     }
 }
 
@@ -308,16 +325,14 @@ pub fn execute_install_plan(ui: &Ui, plan: &InstallPlan) -> Result<(), Vec<Strin
                     }
                 }
             }
-            InstallAction::CreateDir { path } => {
-                match fs::create_dir_all(path) {
-                    Ok(()) => println!("  {} Created", ui.success("OK")),
-                    Err(e) => {
-                        let msg = format!("Could not create `{}`: {e}", path.display());
-                        println!("  {}", ui.error(&msg));
-                        errors.push(msg);
-                    }
+            InstallAction::CreateDir { path } => match fs::create_dir_all(path) {
+                Ok(()) => println!("  {} Created", ui.success("OK")),
+                Err(e) => {
+                    let msg = format!("Could not create `{}`: {e}", path.display());
+                    println!("  {}", ui.error(&msg));
+                    errors.push(msg);
                 }
-            }
+            },
             InstallAction::WriteFile { path, content } => {
                 if let Some(parent) = path.parent() {
                     let _ = fs::create_dir_all(parent);
@@ -350,13 +365,21 @@ pub fn execute_install_plan(ui: &Ui, plan: &InstallPlan) -> Result<(), Vec<Strin
 
     if errors.is_empty() {
         println!("{}", ui.success("Installation complete!"));
-        println!("{}", ui.muted("Run `aegis open` to start the system, or `aegis doctor` to verify readiness."));
+        println!(
+            "{}",
+            ui.muted(
+                "Run `aegis open` to start the system, or `aegis doctor` to verify readiness."
+            )
+        );
         Ok(())
     } else {
-        println!("{}", ui.error(&format!(
-            "Installation finished with {} error(s):",
-            errors.len()
-        )));
+        println!(
+            "{}",
+            ui.error(&format!(
+                "Installation finished with {} error(s):",
+                errors.len()
+            ))
+        );
         for e in &errors {
             println!("  • {e}");
         }

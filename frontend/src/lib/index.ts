@@ -1,6 +1,6 @@
 // Barrel export for all lib utilities
 
-export { normalizeContextUsage, fetchContextUsage, formatTokenMeter } from './context';
+export { normalizeContextUsage, fetchContextUsage, formatTokenMeter } from './context.js';
 export {
   normalizeAssistantMarkdownProse,
   normalizeAssistantMarkdown,
@@ -8,11 +8,11 @@ export {
   renderInlineMarkdown,
   renderHighlightedCodeLine,
   normalizedCodeLanguage,
-} from './markdown';
-export { createConversationPdf, safeExportFileName, downloadConversationPdf } from './pdf';
-export { scanProjectDirectory, buildProjectSnapshot, findProjectFile, shouldReadProjectFile } from './project';
-export { extractUnifiedDiff, parsePatchTarget, applySimpleUnifiedDiff } from './diff';
-export { extractSseEvents, sseEventData, splitAssistantStreamSegments } from './sse';
+} from './markdown.js';
+export { createConversationPdf, safeExportFileName, downloadConversationPdf } from './pdf.js';
+export { scanProjectDirectory, buildProjectSnapshot, findProjectFile, shouldReadProjectFile } from './project.js';
+export { extractUnifiedDiff, parsePatchTarget, applySimpleUnifiedDiff } from './diff.js';
+export { extractSseEvents, sseEventData, splitAssistantStreamSegments } from './sse.js';
 export {
   loadStoredTheme,
   loadStoredVoiceLowRamMode,
@@ -24,10 +24,10 @@ export {
   loadStoredPinnedSessionIds,
   loadStoredResponseStyle,
   loadStoredAppearanceTheme,
-} from './storage';
-export { cleanOutlookCalendarName, isVisibleOutlookCalendar, outlookCalendarLabel } from './calendar';
-export { sanitizeTextForTts } from './tts';
-export { copyTextToClipboard } from './clipboard';
-export { fitTextareaToContent, isFatalUiError, importPhaseLabel, sessionUpdatedAtMs, formatSessionLastAccessed } from './ui';
-export { parseWelcomeMessages, randomWelcomeMessage, profileDisplayName, personalizeWelcomeMessage } from './profile';
-export { turnsToMessages, mergeIndexedDocuments } from './sessions';
+} from './storage.js';
+export { cleanOutlookCalendarName, isVisibleOutlookCalendar, outlookCalendarLabel } from './calendar.js';
+export { sanitizeTextForTts } from './tts.js';
+export { copyTextToClipboard } from './clipboard.js';
+export { fitTextareaToContent, isFatalUiError, importPhaseLabel, sessionUpdatedAtMs, formatSessionLastAccessed } from './ui.js';
+export { parseWelcomeMessages, randomWelcomeMessage, profileDisplayName, personalizeWelcomeMessage } from './profile.js';
+export { turnsToMessages, mergeIndexedDocuments } from './sessions.js';

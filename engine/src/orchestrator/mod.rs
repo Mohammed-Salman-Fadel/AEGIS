@@ -11,7 +11,7 @@ use crate::config::InferenceProvider;
 use crate::context::RequestContext;
 use crate::inference::InferenceBackend;
 use crate::memory_store::{MemoryStore, Session, SessionSummary};
-use crate::model_registry::{ModelRegistry, DEFAULT_CONTEXT_WINDOW};
+use crate::model_registry::{DEFAULT_CONTEXT_WINDOW, ModelRegistry};
 use crate::network::handlers::chat::ChatRequest;
 use crate::plan_parser::{PlanParser, StepResult};
 
@@ -20,7 +20,13 @@ use crate::plan_parser::{PlanParser, StepResult};
 pub fn resolve_project_path(project_id: &str) -> Option<PathBuf> {
     let sanitized: String = project_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let base = std::env::var("AEGIS_DATA_DIR")
         .map(PathBuf::from)
@@ -43,11 +49,11 @@ pub fn resolve_project_path(project_id: &str) -> Option<PathBuf> {
         });
     Some(base.join("projects").join(sanitized))
 }
-use crate::prompt_builder::{format_history, PromptBuilder};
+use crate::mcp::McpManager;
+use crate::prompt_builder::{PromptBuilder, format_history};
 use crate::provider_registry::ProviderRegistry;
 use crate::rag_client::RagClient;
 use crate::react_loop::ReactLoop;
-use crate::mcp::McpManager;
 use crate::response_style;
 use crate::tool_registry::ToolRegistry;
 use crate::user_profile;
@@ -617,7 +623,8 @@ impl Orchestrator {
         let active_model = self.model_registry.current_model_name();
         if let Ok(window) = backend.context_window(&active_model).await {
             if let Some(real_window) = window {
-                self.model_registry.set_context_window(&active_model, real_window);
+                self.model_registry
+                    .set_context_window(&active_model, real_window);
             }
         }
         drop(backend);
@@ -653,8 +660,7 @@ impl Orchestrator {
             .context_window(&model_name)
             .await
         {
-            self.model_registry
-                .set_context_window(&model_name, window);
+            self.model_registry.set_context_window(&model_name, window);
             tracing::info!(
                 "Discovered context window for `{model_name}`: {} tokens",
                 window
@@ -698,7 +704,8 @@ impl Orchestrator {
         if self.model_registry.current_context_window(next_model) == DEFAULT_CONTEXT_WINDOW {
             if let Ok(window) = self.inference.read().await.context_window(next_model).await {
                 if let Some(real_window) = window {
-                    self.model_registry.set_context_window(next_model, real_window);
+                    self.model_registry
+                        .set_context_window(next_model, real_window);
                 }
             }
         }
@@ -796,8 +803,7 @@ impl Orchestrator {
         );
         ctx.trace_summary("classify", &format!("{:?}", classification));
 
-        if req.attachments.is_empty()
-            && crate::classifier::message_refers_to_document(&req.message)
+        if req.attachments.is_empty() && crate::classifier::message_refers_to_document(&req.message)
         {
             let final_answer = "No document is attached to this conversation. Please import a document into this conversation first, then ask me to summarize it.".to_string();
             let _ = tx.send(final_answer.clone()).await;
@@ -832,59 +838,52 @@ impl Orchestrator {
         // choose to call them iteratively, or produce a final answer directly
         // if no tools are needed.  This makes the system truly agentic for
         // all chat modes, not just code workflows.
-        // The loop is bounded by MAX_ROUNDS so it always terminates.
-        let react_project_path = if matches!(
+        // Code-oriented workflows use the ReAct loop so tools can inspect files.
+        // Normal chat continues through the RAG/context path below.
+        if matches!(
             classification,
             crate::workflow::WorkflowId::CodeExplain
                 | crate::workflow::WorkflowId::CodeGenerate
                 | crate::workflow::WorkflowId::CodeDebug
         ) {
-            req.code_project_path.as_deref()
-        } else {
-            None
-        };
+            let final_answer = ReactLoop::execute(
+                &self.inference,
+                &self.tool_registry,
+                &self.rag_client,
+                &req.message,
+                &working_session_id,
+                &ctx.model.name,
+                req.code_project_path.as_deref(),
+                tx.clone(),
+            )
+            .await?;
 
-        let final_answer = ReactLoop::execute(
-            &self.inference,
-            &self.tool_registry,
-            &self.rag_client,
-            &req.message,
-            &working_session_id,
-            &ctx.model.name,
-            react_project_path,
-            tx.clone(),
-        )
-        .await?;
+            // Send the final answer as a single chunk.
+            let _ = tx.send(final_answer.clone()).await;
 
-        // Send the final answer as a single chunk.
-        let _ = tx.send(final_answer.clone()).await;
+            if let Some(session_id) = persisted_session_id.as_deref() {
+                self.memory_store
+                    .append_turn_with_edit(
+                        session_id,
+                        &req.message,
+                        &final_answer,
+                        &ctx.model.name,
+                        &ctx.trace,
+                        req.edit_from_turn_index,
+                        req.edit_from_turn_index.is_some(),
+                        None,
+                        None,
+                    )
+                    .await?;
 
-        if let Some(session_id) = persisted_session_id.as_deref() {
-            self.memory_store
-                .append_turn_with_edit(
-                    session_id,
-                    &req.message,
-                    &final_answer,
-                    &ctx.model.name,
-                    &ctx.trace,
-                    req.edit_from_turn_index,
-                    req.edit_from_turn_index.is_some(),
-                    None,
-                    None,
-                )
-                .await?;
-
-            if should_title_first_turn_session {
-                self.title_first_turn_session(
-                    session_id,
-                    &req.message,
-                    &ctx.model.name,
-                )
-                .await;
+                if should_title_first_turn_session {
+                    self.title_first_turn_session(session_id, &req.message, &ctx.model.name)
+                        .await;
+                }
             }
-        }
 
-        return Ok(final_answer);
+            return Ok(final_answer);
+        }
 
         let rag_enabled = req.rag_enabled.unwrap_or(true);
         let rag_top_k = req.rag_top_k.unwrap_or(5);
@@ -893,12 +892,20 @@ impl Orchestrator {
         // 1. RAG is strictly session-scoped. If this turn has no current-session
         // attachments, or RAG is disabled, do not query the global RAG store at all.
         let (mut relevant_chunks, rag_metrics) = if req.attachments.is_empty() || !rag_enabled {
-            ctx.trace_summary("rag", "no current-session document attachments or RAG disabled");
+            ctx.trace_summary(
+                "rag",
+                "no current-session document attachments or RAG disabled",
+            );
             (Vec::new(), None)
         } else {
             match self
                 .rag_client
-                .retrieve(&ctx.original_query, rag_top_k, rag_threshold, &working_session_id)
+                .retrieve(
+                    &ctx.original_query,
+                    rag_top_k,
+                    rag_threshold,
+                    &working_session_id,
+                )
                 .await
             {
                 Ok(outcome) => (outcome.chunks, Some(outcome.metrics)),
@@ -997,11 +1004,15 @@ impl Orchestrator {
             .filter(|context| !context.is_empty())
             .unwrap_or_default();
 
-        // Query RAG for project files if a project is active  
+        // Query RAG for project files if a project is active
         let mut project_rag_chunks = Vec::new();
         if let Some(ref project_id) = req.code_project_id {
             let project_session = format!("__project__{project_id}");
-            match self.rag_client.retrieve(&ctx.original_query, 8, 0.0, &project_session).await {
+            match self
+                .rag_client
+                .retrieve(&ctx.original_query, 8, 0.0, &project_session)
+                .await
+            {
                 Ok(outcome) => {
                     project_rag_chunks = outcome.chunks;
                     if let Ok(json) = serde_json::to_string(&outcome.metrics) {
@@ -1154,10 +1165,7 @@ impl Orchestrator {
             // Inject conversation history so the model has multi-turn context
             let history_text = format_history(&ctx.history);
             if history_text != "<empty>" {
-                prompt.push_str(&format!(
-                    "CONVERSATION HISTORY:\n{}\n\n",
-                    history_text
-                ));
+                prompt.push_str(&format!("CONVERSATION HISTORY:\n{}\n\n", history_text));
             }
 
             prompt.push_str(&format!("USER QUERY: {}", ctx.original_query));
@@ -1248,7 +1256,12 @@ impl Orchestrator {
                         .await;
 
                     match outcome {
-                        Ok(o) if !o.chunks.is_empty() => o.chunks.into_iter().map(|c| c.text).collect::<Vec<_>>().join("\n---\n"),
+                        Ok(o) if !o.chunks.is_empty() => o
+                            .chunks
+                            .into_iter()
+                            .map(|c| c.text)
+                            .collect::<Vec<_>>()
+                            .join("\n---\n"),
                         _ => "No relevant information was found in the document.".to_string(),
                     }
                 }

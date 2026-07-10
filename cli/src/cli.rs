@@ -15,6 +15,7 @@ use crate::args::{
 pub const HELP_EXAMPLES: &str = "\
 Examples:
   aegis
+  aegis open
   aegis install
   aegis install --path D:\\AEGIS
   aegis open
@@ -65,8 +66,9 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum CommandKind {
-    Install(InstallArgs),
+    /// Start local AEGIS services, warm the active model, and open the Web UI.
     Open,
+    Install(InstallArgs),
     Logs(LogsArgs),
     Restart,
     Version,

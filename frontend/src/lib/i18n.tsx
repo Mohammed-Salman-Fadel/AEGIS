@@ -1,7 +1,7 @@
 // Lightweight i18n context and hook for AEGIS translations
 import { createContext, useContext, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import translations, { type Language } from './translations';
+import translations, { type Language } from './translations.js';
 
 export type { Language };
 

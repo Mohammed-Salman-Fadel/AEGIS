@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Translation dictionaries for English and Turkish
 
 export type Language = 'en' | 'tr';

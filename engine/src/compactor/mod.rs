@@ -86,7 +86,12 @@ mod tests {
     use crate::context::{ConversationHistory, Turn};
     use chrono::Utc;
 
-    fn make_turn(query: &str, response: &str, prompt_tokens: Option<usize>, completion_tokens: Option<usize>) -> Turn {
+    fn make_turn(
+        query: &str,
+        response: &str,
+        prompt_tokens: Option<usize>,
+        completion_tokens: Option<usize>,
+    ) -> Turn {
         Turn {
             query: query.to_string(),
             response: response.to_string(),

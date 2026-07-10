@@ -1,8 +1,11 @@
 // PDF generation and export utilities
-import type { Message, IndexedDocument } from '../types';
+import type { Message, IndexedDocument } from '../types/index.js';
 
 function escapePdfText(text: string) {
-  return text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '?').replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
 }
 
 function wrapPdfLine(line: string, maxLength: number) {
@@ -80,7 +83,7 @@ export function createConversationPdf(options: {
   options.messages.forEach((msg) => {
     const label = `${speakerLabel(msg.role)} | ${formatExportTimestamp(msg.timestamp)}${msg.edited ? ' | edited' : ''}`;
     addLine(label);
-    msg.content.split('\n').forEach((line) => {
+    msg.content.split('\n').forEach((line: string) => {
       wrapPdfLine(line, maxCharsPerLine).forEach((wrappedLine) => addLine(`  ${wrappedLine}`));
     });
     addLine('');

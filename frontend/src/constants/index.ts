@@ -1,6 +1,6 @@
 // Barrel export for all constants
 
-export { API_BASE } from './api';
+export { API_BASE } from './api.js';
 
 export {
   THEME_STORAGE_KEY,
@@ -16,7 +16,7 @@ export {
   LANGUAGE_STORAGE_KEY,
   OBSIDIAN_VAULT_PATH_KEY,
   OBSIDIAN_ENABLED_KEY,
-} from './storage';
+} from './storage.js';
 
 export {
   MAX_PROJECT_FILES,
@@ -26,7 +26,7 @@ export {
   IGNORED_PROJECT_FILES,
   CODE_PROJECT_EXTENSIONS,
   DEFAULT_WELCOME_MESSAGES,
-} from './app';
+} from './app.js';
 
 export {
   MODEL_PROVIDER_TAGS,
@@ -34,4 +34,4 @@ export {
   EMPTY_CONTEXT_USAGE,
   RESPONSE_STYLE_OPTIONS,
   APPEARANCE_THEME_OPTIONS,
-} from './models';
+} from './models.js';

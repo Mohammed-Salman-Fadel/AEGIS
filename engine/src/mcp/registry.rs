@@ -3,11 +3,11 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex};
+use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use super::client::McpClient;
-use super::types::{McpProvider, McpProviderKind, McpToolResult, McpTool};
+use super::types::{McpProvider, McpProviderKind, McpTool, McpToolResult};
 
 /// Manages a collection of MCP providers.
 pub struct McpRegistry {
@@ -67,7 +67,12 @@ impl McpRegistry {
                 info!(
                     "Registered MCP provider '{}' with {} tools",
                     name,
-                    self.providers.read().await.last().map(|p| p.tools.len()).unwrap_or(0)
+                    self.providers
+                        .read()
+                        .await
+                        .last()
+                        .map(|p| p.tools.len())
+                        .unwrap_or(0)
                 );
             }
             McpProviderKind::Http { .. } => {
@@ -95,11 +100,7 @@ impl McpRegistry {
 
     /// Check if a provider with the given name is registered.
     pub async fn has_provider(&self, name: &str) -> bool {
-        self.providers
-            .read()
-            .await
-            .iter()
-            .any(|p| p.name == name)
+        self.providers.read().await.iter().any(|p| p.name == name)
     }
 
     /// Call a tool on a specific provider.

@@ -36,7 +36,8 @@ pub async fn create_session(
     State(state): State<AppState>,
     body: Option<Json<serde_json::Value>>,
 ) -> Result<Json<Session>, (StatusCode, String)> {
-    let title = body.as_ref()
+    let title = body
+        .as_ref()
         .and_then(|b| b.get("title"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());

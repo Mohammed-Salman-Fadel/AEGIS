@@ -21,7 +21,7 @@ mod workspace;
 
 use clap::Parser;
 
-use cli::Cli;
+use cli::{Cli, CommandKind, SessionCommand};
 use engine_client::EngineClient;
 use ui::Ui;
 use workspace::Workspace;
@@ -39,7 +39,11 @@ pub(crate) struct AppContext {
 
 impl AppContext {
     pub(crate) fn print_banner(&self) {
-        let active_model = self.engine.current_model_quick().ok();
+        let active_model = self
+            .engine
+            .current_model_quick()
+            .or_else(|_| self.engine.current_model())
+            .ok();
         self.ui
             .print_banner(&banner::render_with_model(active_model.as_deref()));
     }
@@ -68,7 +72,22 @@ fn main() {
     // - Vite Web UI on the configured localhost UI port
     // This is intentionally best-effort so commands can still explain what is missing.
     runner::ensure_local_runtime(&ctx.ui, &ctx.workspace);
-    ctx.engine.warm_active_model_in_background();
+
+    if should_warm_active_model(cli.command.as_ref()) {
+        let loading = ctx.ui.start_loading_animation("Warming active model");
+        let warmup_result = ctx.engine.warm_active_model_blocking();
+        loading.finish();
+
+        if let Err(error) = warmup_result {
+            eprintln!(
+                "{}",
+                ctx.ui.error(&format!(
+                    "Error: could not warm the active model before startup: {error}"
+                ))
+            );
+            std::process::exit(1);
+        }
+    }
 
     // The banner stays a presentation concern. Main decides whether it appears,
     // then hands off all command behavior to `commands.rs`.
@@ -84,5 +103,51 @@ fn main() {
             eprintln!("{}", ctx.ui.error(&format!("Error: {error}")));
             std::process::exit(1);
         }
+    }
+}
+
+fn should_warm_active_model(command: Option<&CommandKind>) -> bool {
+    matches!(
+        command,
+        None | Some(CommandKind::Open)
+            | Some(CommandKind::Chat(_))
+            | Some(CommandKind::Ask(_))
+            | Some(CommandKind::Repl(_))
+            | Some(CommandKind::Load(_))
+            | Some(CommandKind::Session {
+                command: SessionCommand::New
+            })
+            | Some(CommandKind::Session {
+                command: SessionCommand::Use(_)
+            })
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::args::{ChatArgs, InstallArgs};
+
+    #[test]
+    fn warms_for_shell_and_chat_flows() {
+        assert!(should_warm_active_model(None));
+        assert!(should_warm_active_model(Some(&CommandKind::Open)));
+        assert!(should_warm_active_model(Some(&CommandKind::Chat(
+            ChatArgs {
+                prompt: "hello".to_string(),
+                session_id: None,
+            }
+        ))));
+    }
+
+    #[test]
+    fn skips_install_commands() {
+        assert!(!should_warm_active_model(Some(&CommandKind::Install(
+            InstallArgs {
+                path: None,
+                plan_only: false,
+                yes: false,
+            }
+        ))));
     }
 }

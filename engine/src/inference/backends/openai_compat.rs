@@ -81,16 +81,17 @@ impl OpenAiCompatBackend {
             let body = response.text().await.unwrap_or_default();
 
             if status.as_u16() == 404 || status.as_u16() == 405 {
-                last_error = Some(anyhow::anyhow!("{error_prefix} endpoint `{path}` was not available for model `{model}`: {body}"));
+                last_error = Some(anyhow::anyhow!(
+                    "{error_prefix} endpoint `{path}` was not available for model `{model}`: {body}"
+                ));
                 continue;
             }
 
             anyhow::bail!("{error_prefix} error {status} for model `{model}`: {body}");
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            anyhow::anyhow!("{error_prefix} failed for model `{model}`.")
-        }))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("{error_prefix} failed for model `{model}`.")))
     }
 
     async fn post_model_management_variants(
@@ -117,9 +118,8 @@ impl OpenAiCompatBackend {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            anyhow::anyhow!("{error_prefix} failed for model `{model}`.")
-        }))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("{error_prefix} failed for model `{model}`.")))
     }
 }
 
@@ -307,10 +307,7 @@ impl InferenceBackend for OpenAiCompatBackend {
 
     async fn warm_model(&self, model: &str) -> anyhow::Result<()> {
         self.post_model_management_variants(
-            &[
-                "/api/v1/models/load",
-                "/api/v0/models/load",
-            ],
+            &["/api/v1/models/load", "/api/v0/models/load"],
             "LM Studio load",
             model,
         )
@@ -319,10 +316,7 @@ impl InferenceBackend for OpenAiCompatBackend {
 
     async fn unload_model(&self, model: &str) -> anyhow::Result<()> {
         self.post_model_management_variants(
-            &[
-                "/api/v1/models/unload",
-                "/api/v0/models/unload",
-            ],
+            &["/api/v1/models/unload", "/api/v0/models/unload"],
             "LM Studio unload",
             model,
         )

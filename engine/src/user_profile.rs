@@ -91,7 +91,8 @@ pub fn read_profile_text() -> std::io::Result<String> {
     match fs::read_to_string(profile_file_path()) {
         Ok(contents) => Ok(contents),
         Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound && legacy_profile_file_path().exists() =>
+            if error.kind() == std::io::ErrorKind::NotFound
+                && legacy_profile_file_path().exists() =>
         {
             fs::read_to_string(legacy_profile_file_path())
         }

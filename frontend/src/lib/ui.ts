@@ -1,5 +1,5 @@
 // General UI utility functions
-import type { ImportPhase } from '../types';
+import type { ImportPhase } from '../types/index.js';
 
 export function fitTextareaToContent(textarea: HTMLTextAreaElement) {
   textarea.style.height = '0px';

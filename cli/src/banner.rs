@@ -78,6 +78,6 @@ fn fit_to_width(text: &str, width: usize) -> String {
 pub fn should_render_banner(command: Option<&CommandKind>) -> bool {
     matches!(
         command,
-        None | Some(CommandKind::Ask(_)) | Some(CommandKind::Repl(_))
+        None | Some(CommandKind::Open) | Some(CommandKind::Ask(_)) | Some(CommandKind::Repl(_))
     )
 }

@@ -1,87 +1,68 @@
 # AEGIS Installer
 
-The `installer` module is responsible for preparing the local environment required to run AEGIS. Its
-purpose is to simplify first-time setup and reduce the technical overhead of configuring a local-only
-AI system.
+The installer should support this first-run path:
 
-The installer is intended to support the user before normal system operation begins. It ensures that
-the required components, runtime dependencies, and local configuration are available so that the CLI
-and the Rust engine can operate correctly.
+1. The user downloads `AEGIS-Windows-x64.exe` from the landing page.
+2. The user runs the executable.
+3. Required local dependencies are installed or validated immediately.
+4. The user runs `aegis open`.
+5. AEGIS starts the local backend services, warms the active model, and opens the Web UI.
 
-## Responsibilities
+## Current Release Contract
 
-The installer is responsible for:
+The repository now verifies the parts of that path that are visible from source:
 
-- preparing the local environment for AEGIS
-- obtaining or validating the correct release/build for the user’s platform
-- checking required dependencies and local runtime prerequisites
-- verifying the availability of Ollama and at least one compatible local model
-- validating any required Python/RAG-related runtime dependencies if applicable
-- creating the required local directories, files, and configuration paths
-- performing first-time setup and initialization tasks
-- guiding the user when dependencies are missing or incorrectly configured
+- `installer/AEGIS-Windows-x64.exe` is the source binary for the landing-page download.
+- `landing page/public/downloads/AEGIS-Windows-x64.exe` is synchronized from the installer binary before builds.
+- `landing page/dist/downloads/AEGIS-Windows-x64.exe` is verified to match the installer binary.
+- The CLI exposes `aegis open`.
+- `aegis open` participates in startup model warmup and opens the configured Web UI URL.
 
-## Role in the System
+Run the full source-side verification from the repository root:
 
-The installer is not part of the runtime AI workflow. It does not process prompts, communicate with
-the model directly during normal use, or control request orchestration.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\verify-installation-pipeline.ps1
+```
 
-Its role is to prepare the system so that the other major components can function correctly,
-especially:
+Use this stricter mode before public releases:
 
-- the Rust engine
-- the CLI
-- the Python RAG subsystem
-- local runtime dependencies such as Ollama
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\verify-installation-pipeline.ps1 -RequireInstallerSource
+```
 
-## Setup Flow
+## Important Gap
 
-The installer is expected to support a setup flow similar to the following:
+This directory currently contains a built Windows installer binary, but no installer source or build
+recipe such as an NSIS `.nsi`, Inno Setup `.iss`, WiX project, or equivalent packaging manifest.
 
-1. Obtain or validate the correct AEGIS build for the host platform.
-2. Check whether required local dependencies are available.
-3. Validate the Ollama installation and model availability.
-4. Validate Python/RAG-related runtime dependencies if needed.
-5. Create required directories, paths, and local configuration files.
-6. Prepare the system for first-time startup.
-7. Report setup status clearly to the user.
+That means the repository can verify that users download the correct binary, but it cannot prove or
+rebuild what the installer does after launch. In particular, source-side verification cannot confirm
+that the installer downloads Python, Node, Ollama, models, service assets, or PATH entries.
 
-## Dependency Validation
+For a fully reproducible release pipeline, add the installer source and make it responsible for:
 
-The installer may check for items such as:
+- installing or validating the AEGIS CLI binary
+- adding the CLI installation directory to PATH
+- installing or validating Ollama
+- pulling or validating the default local model
+- installing or validating the Python runtime used by `python-services`
+- installing Python dependencies for the RAG service
+- installing or packaging the Web UI runtime/build
+- installing or packaging the Rust engine runtime
+- writing `AEGIS_INSTALL_ROOT` or the saved install-root preference
+- running a post-install health check that confirms `aegis open` can start the local stack
 
-- operating system compatibility
-- local architecture compatibility
-- Ollama installation
-- presence of at least one local model
-- Python runtime availability
-- required package dependencies
-- writable local paths for indexes, logs, or configuration
-- connectivity between the expected local components
+## Local Runtime Expectations
 
-## User Experience Goals
+At runtime, the CLI auto-starts local services unless `AEGIS_NO_AUTOSTART` is set to `1`, `true`,
+`yes`, or `on`.
 
-The installer should aim to:
+The current source-tree launcher expects these components:
 
-- reduce manual setup effort
-- provide clear feedback when something is missing
-- keep the system easy to initialize on a fresh machine
-- make local-only deployment practical for users with moderate technical experience
+- RAG service from `python-services`
+- Rust engine from `engine`
+- Web UI from `frontend`
 
-## Future Possibilities
-
-Possible future extensions for the installer include:
-
-- automated dependency installation where appropriate
-- release-aware update handling
-- guided setup flows for different operating systems
-- validation of optional MCP integrations
-- more advanced first-run configuration support
-
-These are possible additions and are not all required for the initial version.
-
-## Summary
-
-The installer is the setup and environment preparation component of AEGIS. Its value lies in making
-the local-only system easier to initialize, validate, and operate by ensuring that all required
-dependencies and runtime prerequisites are in place before the main application is used.
+The current launcher is developer-friendly because it can run those services from source. A packaged
+installer should either install the same source layout plus dependencies, or update the launcher to
+prefer packaged service binaries/assets before falling back to development commands.

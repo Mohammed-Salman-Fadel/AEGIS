@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 use crate::inference::InferenceBackend;
 use crate::rag_client::RagClient;
@@ -136,10 +136,7 @@ impl ReactLoop {
             // tool execution so writes can proceed between rounds.
             let raw = {
                 let inference = inference_lock.read().await;
-                let prompt = format!(
-                    "{}\n\n[Assistant — respond with JSON only]",
-                    conversation
-                );
+                let prompt = format!("{}\n\n[Assistant — respond with JSON only]", conversation);
                 call_with_retry(&**inference, &prompt, model_name, round).await?
             };
 
@@ -194,9 +191,12 @@ impl ReactLoop {
                             | ToolCall::Zotero(q) => q.clone(),
                             ToolCall::WriteFile(p, _c) => p.clone(),
                             ToolCall::SearchFiles(p, _) => p.clone(),
-                            ToolCall::GitStatus(p) | ToolCall::ListDirectory(p)
-                            | ToolCall::Calculate(p) | ToolCall::KnowledgeSearch(p)
-                            | ToolCall::OcrImage(p) | ToolCall::DescribeImage(p) => p.clone(),
+                            ToolCall::GitStatus(p)
+                            | ToolCall::ListDirectory(p)
+                            | ToolCall::Calculate(p)
+                            | ToolCall::KnowledgeSearch(p)
+                            | ToolCall::OcrImage(p)
+                            | ToolCall::DescribeImage(p) => p.clone(),
                         },
                     );
                     if let Some(last) = &last_call {
@@ -219,10 +219,7 @@ impl ReactLoop {
                     }
                     last_call = Some(call_sig);
                     let _ = tx
-                        .send(format!(
-                            "\n[REACT: calling `{}`]\n",
-                            tool_call.tool_name()
-                        ))
+                        .send(format!("\n[REACT: calling `{}`]\n", tool_call.tool_name()))
                         .await;
 
                     // Execute the tool (no lock is held during this).
@@ -239,16 +236,10 @@ impl ReactLoop {
                     let result_str = match result {
                         Ok(r) => {
                             let truncated = truncate(&r.output, MAX_TOOL_OUTPUT_CHARS);
-                            format!(
-                                "\n[Tool Result: {}]\n```\n{}\n```",
-                                r.tool_name, truncated
-                            )
+                            format!("\n[Tool Result: {}]\n```\n{}\n```", r.tool_name, truncated)
                         }
                         Err(e) => {
-                            format!(
-                                "\n[Tool Error: {}]\n{e}",
-                                tool_call.tool_name()
-                            )
+                            format!("\n[Tool Error: {}]\n{e}", tool_call.tool_name())
                         }
                     };
 
@@ -300,14 +291,13 @@ async fn call_with_retry(
     match first {
         Ok(v) => return Ok(v),
         Err(e) => {
-            tracing::warn!(
-                "ReAct round {round} inference failed (will retry once): {e}"
-            );
+            tracing::warn!("ReAct round {round} inference failed (will retry once): {e}");
             // Short backoff, then retry.
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            inference.call(prompt, model).await.with_context(|| {
-                format!("ReAct round {round} inference failed after retry")
-            })
+            inference
+                .call(prompt, model)
+                .await
+                .with_context(|| format!("ReAct round {round} inference failed after retry"))
         }
     }
 }
@@ -378,9 +368,7 @@ async fn execute_tool(
                     Ok(()) => Ok(ToolResult {
                         tool_name: "write_file".into(),
                         input: format!("{path} ({size} bytes)"),
-                        output: format!(
-                            "Successfully wrote {size} bytes to `{path}`."
-                        ),
+                        output: format!("Successfully wrote {size} bytes to `{path}`."),
                     }),
                     Err(e) => Ok(ToolResult {
                         tool_name: "write_file".into(),
@@ -402,7 +390,7 @@ async fn execute_tool(
             })
         }
         ToolCall::Calculate(expr) => {
-            let output = calculate_expression(expr);
+            let output = calculate_expression(expr)?;
             Ok(ToolResult {
                 tool_name: "calculate".into(),
                 input: expr.clone(),
@@ -548,10 +536,24 @@ fn validate_write_path(requested: &str) -> Result<std::path::PathBuf> {
     // Block writes to sensitive system paths regardless of cwd.
     let candidate_lower = candidate.to_string_lossy().to_lowercase();
     let system_paths = [
-        "/etc/", "/usr/", "/bin/", "/boot/", "/dev/", "/proc/", "/sys/",
-        "/var/", "/lib/", "/lib64/", "/opt/", "/root/", "/sbin/",
-        "c:\\windows", "c:\\program files", "c:\\programdata",
-        "c:\\system volume information", "c:\\boot",
+        "/etc/",
+        "/usr/",
+        "/bin/",
+        "/boot/",
+        "/dev/",
+        "/proc/",
+        "/sys/",
+        "/var/",
+        "/lib/",
+        "/lib64/",
+        "/opt/",
+        "/root/",
+        "/sbin/",
+        "c:\\windows",
+        "c:\\program files",
+        "c:\\programdata",
+        "c:\\system volume information",
+        "c:\\boot",
     ];
     if system_paths.iter().any(|p| candidate_lower.contains(p)) {
         anyhow::bail!(
@@ -618,17 +620,32 @@ async fn run_terminal_command(command: &str) -> String {
     // Deny-list of known-dangerous binary names (first word of command).
     let first_word = normalised.split_whitespace().next().unwrap_or("");
     let dangerous_binaries = [
-        "rm", "dd", "mkfs", "mkfs.ext4", "mkfs.ext3", "mkfs.ext2",
-        "mkfs.xfs", "mkfs.btrfs", "mkfs.fat", "fdisk", "parted",
-        "shred", "wipefs", "blockdev", "hdparm",
+        "rm",
+        "dd",
+        "mkfs",
+        "mkfs.ext4",
+        "mkfs.ext3",
+        "mkfs.ext2",
+        "mkfs.xfs",
+        "mkfs.btrfs",
+        "mkfs.fat",
+        "fdisk",
+        "parted",
+        "shred",
+        "wipefs",
+        "blockdev",
+        "hdparm",
     ];
     if dangerous_binaries.contains(&first_word) {
         // Whitelist safe uses of `rm`: only rm with non-root paths.
         if first_word == "rm" {
             let args: Vec<&str> = normalised.split_whitespace().skip(1).collect();
             let has_glob_root = args.iter().any(|a| {
-                *a == "/" || *a == "/*" || a.starts_with("/dev/")
-                    || *a == "--no-preserve-root" || a.starts_with("/sys/")
+                *a == "/"
+                    || *a == "/*"
+                    || a.starts_with("/dev/")
+                    || *a == "--no-preserve-root"
+                    || a.starts_with("/sys/")
                     || a.starts_with("/proc/")
             });
             if !has_glob_root {
@@ -651,9 +668,16 @@ async fn run_terminal_command(command: &str) -> String {
     // Check for destructive redirects to block devices.
     let lower = command.to_lowercase();
     let destructive_redirects = [
-        "> /dev/sd", "> /dev/nvme", "> /dev/vd", "> /dev/mmcblk",
-        "> /dev/sda", "> /dev/sdb", "> /dev/sdc",
-        "of=/dev/sd", "of=/dev/nvme", "of=/dev/vd",
+        "> /dev/sd",
+        "> /dev/nvme",
+        "> /dev/vd",
+        "> /dev/mmcblk",
+        "> /dev/sda",
+        "> /dev/sdb",
+        "> /dev/sdc",
+        "of=/dev/sd",
+        "of=/dev/nvme",
+        "of=/dev/vd",
     ];
     if destructive_redirects.iter().any(|p| lower.contains(p)) {
         return "Command rejected: writing directly to block devices is not \
@@ -965,7 +989,8 @@ async fn ocr_image_command(path: &str, tx: &mpsc::Sender<String>) -> String {
             if b.len() as u64 > MAX_IMAGE_BYTES {
                 return format!(
                     "Image too large ({} bytes). Maximum is {} MB. Compress or resize first.",
-                    b.len(), MAX_IMAGE_BYTES / 1_000_000
+                    b.len(),
+                    MAX_IMAGE_BYTES / 1_000_000
                 );
             }
             b
@@ -973,7 +998,9 @@ async fn ocr_image_command(path: &str, tx: &mpsc::Sender<String>) -> String {
         Err(e) => return format!("Could not read `{path}`: {e}"),
     };
 
-    let _ = tx.send("\n[REACT: sending to OCR service...]\n".into()).await;
+    let _ = tx
+        .send("\n[REACT: sending to OCR service...]\n".into())
+        .await;
 
     let b64 = {
         use base64::Engine;
@@ -983,35 +1010,33 @@ async fn ocr_image_command(path: &str, tx: &mpsc::Sender<String>) -> String {
     let body = serde_json::json!({ "image": b64, "filename": path });
 
     let resp = SHARED_HTTP_CLIENT
-        .post("http://127.0.0.1:8000/api/ocr")
+        .post("http://127.0.0.1:8000/ocr")
         .json(&body)
         .timeout(std::time::Duration::from_secs(60))
         .send()
         .await;
 
     match resp {
-        Ok(r) if r.status().is_success() => {
-            match r.json::<serde_json::Value>().await {
-                Ok(json) => {
-                    let text = json["text"].as_str().unwrap_or("(no text returned)");
-                    if text.trim().is_empty() {
-                        "OCR returned no text. The image may be blank or contain \
+        Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+            Ok(json) => {
+                let text = json["text"].as_str().unwrap_or("(no text returned)");
+                if text.trim().is_empty() {
+                    "OCR returned no text. The image may be blank or contain \
                          only non-text content (charts, diagrams, photos)."
-                            .to_string()
-                    } else {
-                        format!("OCR Result:\n{text}")
-                    }
+                        .to_string()
+                } else {
+                    format!("OCR Result:\n{text}")
                 }
-                Err(e) => format!("OCR service returned invalid response: {e}"),
             }
-        }
+            Err(e) => format!("OCR service returned invalid response: {e}"),
+        },
         Ok(r) => {
             format!("OCR service returned error (HTTP {})", r.status())
         }
         Err(e) => {
             format!(
                 "Could not reach OCR service at localhost:8000. \
-                 Make sure the Python RAG service is running: {e}"
+                 Make sure the Python OCR/RAG service is running: {e}"
             )
         }
     }
@@ -1035,7 +1060,8 @@ async fn describe_image_command(path: &str, tx: &mpsc::Sender<String>) -> String
             if b.len() as u64 > MAX_IMAGE_BYTES {
                 return format!(
                     "Image too large ({} bytes). Maximum is {} MB. Compress or resize first.",
-                    b.len(), MAX_IMAGE_BYTES / 1_000_000
+                    b.len(),
+                    MAX_IMAGE_BYTES / 1_000_000
                 );
             }
             b
@@ -1043,7 +1069,9 @@ async fn describe_image_command(path: &str, tx: &mpsc::Sender<String>) -> String
         Err(e) => return format!("Could not read `{path}`: {e}"),
     };
 
-    let _ = tx.send("\n[REACT: sending to vision model...]\n".into()).await;
+    let _ = tx
+        .send("\n[REACT: sending to vision model...]\n".into())
+        .await;
 
     let b64 = {
         use base64::Engine;
@@ -1067,8 +1095,8 @@ async fn describe_image_command(path: &str, tx: &mpsc::Sender<String>) -> String
         "options": { "num_predict": 512 }
     });
 
-    let ollama_url = std::env::var("OLLAMA_HOST")
-        .unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let ollama_url =
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
 
     let resp = SHARED_HTTP_CLIENT
         .post(format!("{ollama_url}/api/chat"))
@@ -1078,19 +1106,17 @@ async fn describe_image_command(path: &str, tx: &mpsc::Sender<String>) -> String
         .await;
 
     match resp {
-        Ok(r) if r.status().is_success() => {
-            match r.json::<serde_json::Value>().await {
-                Ok(json) => {
-                    let text = json
-                        .get("message")
-                        .and_then(|m| m.get("content"))
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("(no description returned)");
-                    format!("Image Description:\n{text}")
-                }
-                Err(e) => format!("Vision model returned invalid response: {e}"),
+        Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+            Ok(json) => {
+                let text = json
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("(no description returned)");
+                format!("Image Description:\n{text}")
             }
-        }
+            Err(e) => format!("Vision model returned invalid response: {e}"),
+        },
         Ok(r) if r.status() == 404 => {
             format!(
                 "Vision model `{vision_model}` not found. Run `ollama pull {vision_model}` or \
@@ -1126,6 +1152,150 @@ fn infer_mime_type(path: &str) -> &'static str {
     }
 }
 
+fn calculate_expression(expr: &str) -> Result<String> {
+    struct Parser<'a> {
+        chars: std::iter::Peekable<std::str::Chars<'a>>,
+    }
+
+    impl<'a> Parser<'a> {
+        fn skip_ws(&mut self) {
+            while matches!(self.chars.peek(), Some(ch) if ch.is_whitespace()) {
+                self.chars.next();
+            }
+        }
+
+        fn parse_number(&mut self) -> Result<f64> {
+            self.skip_ws();
+            let mut buf = String::new();
+            if matches!(self.chars.peek(), Some('+') | Some('-')) {
+                buf.push(self.chars.next().unwrap());
+            }
+            while let Some(ch) = self.chars.peek().copied() {
+                if ch.is_ascii_digit() || ch == '.' {
+                    buf.push(ch);
+                    self.chars.next();
+                } else {
+                    break;
+                }
+            }
+            if buf.is_empty() || buf == "+" || buf == "-" {
+                anyhow::bail!("expected a number");
+            }
+            Ok(buf
+                .parse::<f64>()
+                .with_context(|| format!("could not parse number `{buf}`"))?)
+        }
+
+        fn parse_factor(&mut self) -> Result<f64> {
+            self.skip_ws();
+            match self.chars.peek().copied() {
+                Some('(') => {
+                    self.chars.next();
+                    let value = self.parse_expr()?;
+                    self.skip_ws();
+                    match self.chars.next() {
+                        Some(')') => Ok(value),
+                        _ => anyhow::bail!("missing closing `)`"),
+                    }
+                }
+                Some(_) => self.parse_number(),
+                None => anyhow::bail!("expected an expression"),
+            }
+        }
+
+        fn parse_term(&mut self) -> Result<f64> {
+            let mut value = self.parse_factor()?;
+            loop {
+                self.skip_ws();
+                let op = match self.chars.peek().copied() {
+                    Some('*') => '*',
+                    Some('/') => '/',
+                    _ => break,
+                };
+                self.chars.next();
+                let rhs = self.parse_factor()?;
+                value = match op {
+                    '*' => value * rhs,
+                    '/' => {
+                        if rhs == 0.0 {
+                            anyhow::bail!("division by zero");
+                        }
+                        value / rhs
+                    }
+                    _ => unreachable!(),
+                };
+            }
+            Ok(value)
+        }
+
+        fn parse_expr(&mut self) -> Result<f64> {
+            let mut value = self.parse_term()?;
+            loop {
+                self.skip_ws();
+                let op = match self.chars.peek().copied() {
+                    Some('+') => '+',
+                    Some('-') => '-',
+                    _ => break,
+                };
+                self.chars.next();
+                let rhs = self.parse_term()?;
+                value = match op {
+                    '+' => value + rhs,
+                    '-' => value - rhs,
+                    _ => unreachable!(),
+                };
+            }
+            Ok(value)
+        }
+    }
+
+    let mut parser = Parser {
+        chars: expr.chars().peekable(),
+    };
+    let value = parser.parse_expr()?;
+    parser.skip_ws();
+    if parser.chars.peek().is_some() {
+        anyhow::bail!("unexpected trailing input in expression");
+    }
+
+    Ok(if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    })
+}
+
+async fn search_knowledge_base(query: &str, rag_client: &RagClient, session_id: &str) -> String {
+    match rag_client.retrieve(query, 5, 0.0, session_id).await {
+        Ok(outcome) if outcome.chunks.is_empty() => {
+            "No relevant knowledge chunks were found.".to_string()
+        }
+        Ok(outcome) => {
+            let mut output = String::new();
+            output.push_str(&format!(
+                "RAG results: {} chunks, avg similarity {:.3}, backend {}\n",
+                outcome.metrics.chunk_count,
+                outcome.metrics.avg_similarity,
+                outcome.metrics.backend
+            ));
+            for chunk in outcome.chunks {
+                output.push_str(&format!(
+                    "\n---\n[{}] {}{}\n{}",
+                    chunk.source,
+                    chunk
+                        .page
+                        .map(|page| format!("page {page} "))
+                        .unwrap_or_default(),
+                    format!("score {:.3}", chunk.score),
+                    chunk.text
+                ));
+            }
+            output
+        }
+        Err(error) => format!("Knowledge search failed: {error}"),
+    }
+}
+
 enum ModelDecision {
     Tool(ToolCall),
     FinalAnswer(String),
@@ -1142,9 +1312,8 @@ struct ReActResponse {
 
 fn parse_react_response(raw: &str) -> Result<ModelDecision> {
     let json = extract_json(raw);
-    let parsed: ReActResponse = serde_json::from_str(&json).with_context(|| {
-        format!("Failed to parse model JSON response:\n{raw}")
-    })?;
+    let parsed: ReActResponse = serde_json::from_str(&json)
+        .with_context(|| format!("Failed to parse model JSON response:\n{raw}"))?;
 
     if let Some(answer) = parsed.answer {
         let answer = answer.trim().to_string();
@@ -1166,15 +1335,11 @@ fn parse_react_response(raw: &str) -> Result<ModelDecision> {
                 let path = args
                     .get("path")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("write_file tool missing 'path' argument")
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("write_file tool missing 'path' argument"))?;
                 let content = args
                     .get("content")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("write_file tool missing 'content' argument")
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("write_file tool missing 'content' argument"))?;
                 ToolCall::WriteFile(path.to_string(), content.to_string())
             }
             "search_files" | "find" => {
@@ -1203,27 +1368,19 @@ fn parse_react_response(raw: &str) -> Result<ModelDecision> {
                 let path = args
                     .get("path")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("git_status tool missing 'path' argument")
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("git_status tool missing 'path' argument"))?;
                 ToolCall::GitStatus(path.to_string())
             }
             "list_directory" | "ls" => {
-                let path = args
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("list_directory tool missing 'path' argument")
-                    })?;
+                let path = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!("list_directory tool missing 'path' argument")
+                })?;
                 ToolCall::ListDirectory(path.to_string())
             }
             "search_knowledge" | "knowledge" => {
-                let query = args
-                    .get("query")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("search_knowledge tool missing 'query' argument")
-                    })?;
+                let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!("search_knowledge tool missing 'query' argument")
+                })?;
                 ToolCall::KnowledgeSearch(query.to_string())
             }
             "read_file" | "read" => {
@@ -1253,18 +1410,13 @@ fn parse_react_response(raw: &str) -> Result<ModelDecision> {
                 let path = args
                     .get("path")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("ocr_image tool missing 'path' argument")
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("ocr_image tool missing 'path' argument"))?;
                 ToolCall::OcrImage(path.to_string())
             }
             "describe_image" | "vision" | "describe" => {
-                let path = args
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("describe_image tool missing 'path' argument")
-                    })?;
+                let path = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!("describe_image tool missing 'path' argument")
+                })?;
                 ToolCall::DescribeImage(path.to_string())
             }
             "zotero" => {
@@ -1283,9 +1435,7 @@ fn parse_react_response(raw: &str) -> Result<ModelDecision> {
         return Ok(ModelDecision::Tool(tool_call));
     }
 
-    anyhow::bail!(
-        "Model response did not contain a tool call or final answer.\nResponse:\n{raw}"
-    )
+    anyhow::bail!("Model response did not contain a tool call or final answer.\nResponse:\n{raw}")
 }
 
 fn extract_json(raw: &str) -> String {
@@ -1408,11 +1558,7 @@ fn truncate(s: &str, max: usize) -> String {
         return s.to_string();
     }
     // Find the byte offset of the `max`-th character boundary.
-    let cutoff = s
-        .char_indices()
-        .nth(max)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
+    let cutoff = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
     let mut result: String = s[..cutoff].to_string();
     result.push_str(&format!("\n[Truncated to {max} characters]"));
     result
@@ -1423,7 +1569,7 @@ fn truncate(s: &str, max: usize) -> String {
 /// Safe arithmetic expression evaluator using recursive descent parsing.
 /// Supports: +, -, *, /, %, ^ (power), parentheses, basic math constants/functions.
 /// Returns a string result or a descriptive error — never panics.
-fn calculate_expression(expr: &str) -> String {
+fn calculate_expression_legacy(expr: &str) -> String {
     let trimmed = expr.trim();
     if trimmed.is_empty() {
         return "Error: empty expression.".to_string();
@@ -1452,7 +1598,10 @@ fn eval_arithmetic(expr: &str) -> Result<f64, String> {
     let result = parse_expr(&chars, &mut pos)?;
     skip_whitespace(&chars, &mut pos);
     if pos < chars.len() {
-        return Err(format!("Unexpected character `{}` at position {pos}", chars[pos]));
+        return Err(format!(
+            "Unexpected character `{}` at position {pos}",
+            chars[pos]
+        ));
     }
     Ok(result)
 }
@@ -1461,10 +1610,20 @@ fn parse_expr(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     let mut left = parse_term(chars, pos)?;
     loop {
         skip_whitespace(chars, pos);
-        if *pos >= chars.len() { break; }
+        if *pos >= chars.len() {
+            break;
+        }
         match chars[*pos] {
-            '+' => { *pos += 1; let right = parse_term(chars, pos)?; left += right; }
-            '-' => { *pos += 1; let right = parse_term(chars, pos)?; left -= right; }
+            '+' => {
+                *pos += 1;
+                let right = parse_term(chars, pos)?;
+                left += right;
+            }
+            '-' => {
+                *pos += 1;
+                let right = parse_term(chars, pos)?;
+                left -= right;
+            }
             _ => break,
         }
     }
@@ -1475,19 +1634,29 @@ fn parse_term(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     let mut left = parse_power(chars, pos)?;
     loop {
         skip_whitespace(chars, pos);
-        if *pos >= chars.len() { break; }
+        if *pos >= chars.len() {
+            break;
+        }
         match chars[*pos] {
-            '*' => { *pos += 1; let right = parse_power(chars, pos)?; left *= right; }
+            '*' => {
+                *pos += 1;
+                let right = parse_power(chars, pos)?;
+                left *= right;
+            }
             '/' => {
                 *pos += 1;
                 let right = parse_power(chars, pos)?;
-                if right == 0.0 { return Err("Division by zero.".to_string()); }
+                if right == 0.0 {
+                    return Err("Division by zero.".to_string());
+                }
                 left /= right;
             }
             '%' => {
                 *pos += 1;
                 let right = parse_power(chars, pos)?;
-                if right == 0.0 { return Err("Modulo by zero.".to_string()); }
+                if right == 0.0 {
+                    return Err("Modulo by zero.".to_string());
+                }
                 left = left % right;
             }
             _ => break,
@@ -1509,17 +1678,27 @@ fn parse_power(chars: &[char], pos: &mut usize) -> Result<f64, String> {
 
 fn parse_unary(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     skip_whitespace(chars, pos);
-    if *pos >= chars.len() { return Err("Unexpected end of expression.".to_string()); }
+    if *pos >= chars.len() {
+        return Err("Unexpected end of expression.".to_string());
+    }
     match chars[*pos] {
-        '+' => { *pos += 1; parse_atom(chars, pos) }
-        '-' => { *pos += 1; Ok(-parse_atom(chars, pos)?) }
+        '+' => {
+            *pos += 1;
+            parse_atom(chars, pos)
+        }
+        '-' => {
+            *pos += 1;
+            Ok(-parse_atom(chars, pos)?)
+        }
         _ => parse_atom(chars, pos),
     }
 }
 
 fn parse_atom(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     skip_whitespace(chars, pos);
-    if *pos >= chars.len() { return Err("Unexpected end of expression.".to_string()); }
+    if *pos >= chars.len() {
+        return Err("Unexpected end of expression.".to_string());
+    }
 
     // Parenthesized sub-expression
     if chars[*pos] == '(' {
@@ -1536,9 +1715,19 @@ fn parse_atom(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     // Number (integer or decimal)
     if chars[*pos].is_ascii_digit() || chars[*pos] == '.' {
         let start = *pos;
-        while *pos < chars.len() && (chars[*pos].is_ascii_digit() || chars[*pos] == '.' || chars[*pos] == 'e' || chars[*pos] == 'E' || chars[*pos] == '+' || chars[*pos] == '-') {
+        while *pos < chars.len()
+            && (chars[*pos].is_ascii_digit()
+                || chars[*pos] == '.'
+                || chars[*pos] == 'e'
+                || chars[*pos] == 'E'
+                || chars[*pos] == '+'
+                || chars[*pos] == '-')
+        {
             // Handle scientific notation properly
-            if (chars[*pos] == '+' || chars[*pos] == '-') && *pos > start && (chars[*pos - 1] == 'e' || chars[*pos - 1] == 'E') {
+            if (chars[*pos] == '+' || chars[*pos] == '-')
+                && *pos > start
+                && (chars[*pos - 1] == 'e' || chars[*pos - 1] == 'E')
+            {
                 *pos += 1;
             } else if chars[*pos] == '+' || chars[*pos] == '-' {
                 break; // End of number, operator follows
@@ -1547,7 +1736,9 @@ fn parse_atom(chars: &[char], pos: &mut usize) -> Result<f64, String> {
             }
         }
         let num_str: String = chars[start..*pos].iter().collect();
-        return num_str.parse::<f64>().map_err(|_| format!("Invalid number: `{num_str}`"));
+        return num_str
+            .parse::<f64>()
+            .map_err(|_| format!("Invalid number: `{num_str}`"));
     }
 
     // Named constants / functions: pi, e, sqrt(), abs(), round(), floor(), ceil(), sin(), cos(), tan(), log(), ln()
@@ -1585,15 +1776,21 @@ fn parse_atom(chars: &[char], pos: &mut usize) -> Result<f64, String> {
                     "acos" => Ok(arg.acos()),
                     "atan" => Ok(arg.atan()),
                     "ln" | "log" => {
-                        if arg <= 0.0 { return Err("Logarithm of non-positive number.".to_string()); }
+                        if arg <= 0.0 {
+                            return Err("Logarithm of non-positive number.".to_string());
+                        }
                         Ok(arg.ln())
                     }
                     "log2" => {
-                        if arg <= 0.0 { return Err("Logarithm of non-positive number.".to_string()); }
+                        if arg <= 0.0 {
+                            return Err("Logarithm of non-positive number.".to_string());
+                        }
                         Ok(arg.log2())
                     }
                     "log10" => {
-                        if arg <= 0.0 { return Err("Logarithm of non-positive number.".to_string()); }
+                        if arg <= 0.0 {
+                            return Err("Logarithm of non-positive number.".to_string());
+                        }
                         Ok(arg.log10())
                     }
                     "exp" => Ok(arg.exp()),
@@ -1605,7 +1802,10 @@ fn parse_atom(chars: &[char], pos: &mut usize) -> Result<f64, String> {
             _ => Err(format!("Unknown identifier: `{name}`")),
         }
     } else {
-        Err(format!("Unexpected character `{}` at position {pos}", chars[*pos]))
+        Err(format!(
+            "Unexpected character `{}` at position {pos}",
+            chars[*pos]
+        ))
     }
 }
 
@@ -1615,7 +1815,7 @@ fn skip_whitespace(chars: &[char], pos: &mut usize) {
     }
 }
 
-async fn search_knowledge_base(
+async fn search_knowledge_base_legacy(
     query: &str,
     rag_client: &RagClient,
     session_id: &str,
@@ -1685,8 +1885,7 @@ mod tests {
 
     #[test]
     fn parses_search_tool() {
-        let input =
-            r#"{"thought":"need code","tool":"search","arguments":{"query":"sort fn"}}"#;
+        let input = r#"{"thought":"need code","tool":"search","arguments":{"query":"sort fn"}}"#;
         match parse_react_response(input).unwrap() {
             ModelDecision::Tool(ToolCall::Search(q)) => assert_eq!(q, "sort fn"),
             _ => panic!("Expected Tool(Search)"),
@@ -1754,8 +1953,9 @@ mod tests {
     #[test]
     fn validate_read_path_rejects_traversal_escape() {
         let err = validate_read_path("../../../../etc/passwd").unwrap_err();
-        assert!(err.to_string().contains("Access denied")
-            || err.to_string().contains("does not exist"));
+        assert!(
+            err.to_string().contains("Access denied") || err.to_string().contains("does not exist")
+        );
     }
 
     #[test]
@@ -1769,7 +1969,8 @@ mod tests {
 
     #[test]
     fn parses_run_terminal_tool() {
-        let input = r#"{"thought":"compile","tool":"run_terminal","arguments":{"command":"cargo check"}}"#;
+        let input =
+            r#"{"thought":"compile","tool":"run_terminal","arguments":{"command":"cargo check"}}"#;
         match parse_react_response(input).unwrap() {
             ModelDecision::Tool(ToolCall::RunTerminal(cmd)) => assert_eq!(cmd, "cargo check"),
             _ => panic!("Expected Tool(RunTerminal)"),
@@ -1779,7 +1980,8 @@ mod tests {
     #[test]
     fn parses_terminal_alias() {
         // "terminal" is an alias for "run_terminal"
-        let input = r#"{"thought":"compile","tool":"terminal","arguments":{"command":"cargo check"}}"#;
+        let input =
+            r#"{"thought":"compile","tool":"terminal","arguments":{"command":"cargo check"}}"#;
         match parse_react_response(input).unwrap() {
             ModelDecision::Tool(ToolCall::RunTerminal(cmd)) => assert_eq!(cmd, "cargo check"),
             _ => panic!("Expected Tool(RunTerminal)"),
@@ -1833,7 +2035,8 @@ mod tests {
 
     #[test]
     fn parses_search_files_without_dir() {
-        let input = r#"{"thought":"finding","tool":"search_files","arguments":{"pattern":"Cargo.toml"}}"#;
+        let input =
+            r#"{"thought":"finding","tool":"search_files","arguments":{"pattern":"Cargo.toml"}}"#;
         match parse_react_response(input).unwrap() {
             ModelDecision::Tool(ToolCall::SearchFiles(p, d)) => {
                 assert_eq!(p, "Cargo.toml");
@@ -1895,7 +2098,8 @@ mod tests {
 
     #[test]
     fn parses_describe_image_tool() {
-        let input = r#"{"thought":"describe","tool":"describe_image","arguments":{"path":"diagram.png"}}"#;
+        let input =
+            r#"{"thought":"describe","tool":"describe_image","arguments":{"path":"diagram.png"}}"#;
         match parse_react_response(input).unwrap() {
             ModelDecision::Tool(ToolCall::DescribeImage(p)) => assert_eq!(p, "diagram.png"),
             _ => panic!("Expected Tool(DescribeImage)"),

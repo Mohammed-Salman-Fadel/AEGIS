@@ -3,10 +3,10 @@
 //! Called by: `POST /projects/ingest`
 //! Calls into: `Orchestrator.rag_client`
 
-use std::path::Path;
+use crate::network::state::AppState;
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
-use crate::network::state::AppState;
+use std::path::Path;
 
 #[derive(Deserialize)]
 pub struct ProjectIngestRequest {
@@ -32,8 +32,12 @@ pub async fn ingest_project_files(
     Json(payload): Json<ProjectIngestRequest>,
 ) -> Result<Json<ProjectIngestResponse>, (StatusCode, String)> {
     let project_dir = dirs_project_dir(&payload.project_id);
-    tokio::fs::create_dir_all(&project_dir).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create project directory: {}", e)))?;
+    tokio::fs::create_dir_all(&project_dir).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create project directory: {}", e),
+        )
+    })?;
 
     // Clean previous files
     if let Ok(mut entries) = tokio::fs::read_dir(&project_dir).await {
@@ -61,7 +65,10 @@ pub async fn ingest_project_files(
                 if !resolved.starts_with(&canonical_project_dir) {
                     return Err((
                         StatusCode::BAD_REQUEST,
-                        format!("Access denied: `{}` resolves outside project directory", file.path),
+                        format!(
+                            "Access denied: `{}` resolves outside project directory",
+                            file.path
+                        ),
                     ));
                 }
             }
@@ -73,7 +80,10 @@ pub async fn ingest_project_files(
                             if !canon_parent.starts_with(&canonical_project_dir) {
                                 return Err((
                                     StatusCode::BAD_REQUEST,
-                                    format!("Access denied: `{}` resolves outside project directory", file.path),
+                                    format!(
+                                        "Access denied: `{}` resolves outside project directory",
+                                        file.path
+                                    ),
                                 ));
                             }
                         }
@@ -90,15 +100,23 @@ pub async fn ingest_project_files(
         if let Some(parent) = file_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
-        tokio::fs::write(&file_path, &file.content).await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write project file {}: {}", file.path, e)))?;
+        tokio::fs::write(&file_path, &file.content)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to write project file {}: {}", file.path, e),
+                )
+            })?;
 
         // Index through RAG using a project-scoped session ID
         let session_id = format!("__project__{}", &payload.project_id);
-        if let Err(e) = state.orchestrator.rag_client.ingest(
-            file_path.to_string_lossy().to_string(),
-            &session_id,
-        ).await {
+        if let Err(e) = state
+            .orchestrator
+            .rag_client
+            .ingest(file_path.to_string_lossy().to_string(), &session_id)
+            .await
+        {
             tracing::warn!("Failed to index project file {}: {}", file.path, e);
         } else {
             indexed += 1;
@@ -113,14 +131,19 @@ pub async fn ingest_project_files(
 }
 
 fn dirs_project_dir(project_id: &str) -> std::path::PathBuf {
-    let sanitized: String = project_id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+    let sanitized: String = project_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let base = std::env::var("AEGIS_DATA_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs_data_dir().join("AEGIS")
-        });
+        .unwrap_or_else(|_| dirs_data_dir().join("AEGIS"));
     base.join("projects").join(sanitized)
 }
 

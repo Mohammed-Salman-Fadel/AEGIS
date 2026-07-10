@@ -9,6 +9,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::mem;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use clap::Parser;
 use crossterm::cursor::{MoveDown, MoveToColumn, MoveUp};
@@ -65,8 +66,8 @@ fn dispatch_command(
     invocation_mode: InvocationMode,
 ) -> AppResult<()> {
     match command {
-        CommandKind::Install(args) => handle_install(ctx, args),
         CommandKind::Open => handle_open(ctx),
+        CommandKind::Install(args) => handle_install(ctx, args),
         CommandKind::Logs(args) => handle_logs(ctx, args),
         CommandKind::Restart => handle_restart(ctx),
         CommandKind::Version => handle_version(ctx),
@@ -101,6 +102,7 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
         report.warnings(),
         report.missing()
     );
+    print_next_step_footer(ctx);
     if io::stdin().is_terminal() {
         println!();
         println!("{}", ctx.ui.header("Live Shell"));
@@ -111,6 +113,42 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
             )
         );
     }
+    Ok(())
+}
+
+fn handle_open(ctx: &AppContext) -> AppResult<()> {
+    let web_ui_url = ctx.workspace.web_ui_url();
+
+    println!("{}", ctx.ui.header("Open AEGIS"));
+    println!(
+        "{}",
+        ctx.ui
+            .success("Local services have been started or confirmed running.")
+    );
+    println!("Web UI URL: {web_ui_url}");
+
+    match open_url_in_browser(&web_ui_url) {
+        Ok(()) => {
+            println!(
+                "{}",
+                ctx.ui.success("Opening AEGIS in your default browser now.")
+            );
+        }
+        Err(error) => {
+            println!(
+                "{}",
+                ctx.ui.warning(&format!(
+                    "Could not open the browser automatically: {error}"
+                ))
+            );
+            println!(
+                "{}",
+                ctx.ui
+                    .muted("If the browser did not open, paste the Web UI URL above manually.")
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -170,7 +208,11 @@ fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult
     println!();
 
     if !args.yes {
-        println!("{}", ctx.ui.warning("Dry-run mode: showing plan. Pass `--yes` to execute."));
+        println!(
+            "{}",
+            ctx.ui
+                .warning("Dry-run mode: showing plan. Pass `--yes` to execute.")
+        );
         install::print_install_plan(&ctx.ui, &plan);
         return Ok(());
     }
@@ -191,11 +233,12 @@ fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult
     }
 }
 
-fn handle_open(ctx: &AppContext) -> AppResult<()> {
+fn handle_installed_runtime_open_preview(ctx: &AppContext) -> AppResult<()> {
     println!("{}", ctx.ui.header("AEGIS Open"));
     println!(
         "{}",
-        ctx.ui.muted("Starting local AEGIS services and opening the web interface...")
+        ctx.ui
+            .muted("Starting local AEGIS services and opening the web interface...")
     );
     println!();
 
@@ -206,7 +249,10 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
         .join("rag-env")
         .join("Scripts")
         .join("python.exe");
-    let aegis_config = install_root.join(".aegis").join("config").join("aegis.toml");
+    let aegis_config = install_root
+        .join(".aegis")
+        .join("config")
+        .join("aegis.toml");
 
     let engine_url =
         std::env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
@@ -241,10 +287,16 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
 
             crate::runner::spawn_background(&plan, &install_root.join(".aegis").join("logs"))?;
 
-            if crate::runner::wait_for_service(&crate::runner::join_url(&rag_url, "/health"), std::time::Duration::from_secs(15)) {
+            if crate::runner::wait_for_service(
+                &crate::runner::join_url(&rag_url, "/health"),
+                std::time::Duration::from_secs(15),
+            ) {
                 println!("  {} RAG is ready", ctx.ui.success("✓"));
             } else {
-                println!("  {} RAG started but not yet healthy (check logs)", ctx.ui.warning("⚠"));
+                println!(
+                    "  {} RAG started but not yet healthy (check logs)",
+                    ctx.ui.warning("⚠")
+                );
             }
         } else {
             println!(
@@ -272,16 +324,25 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
                     ("AEGIS_RAG_URL".to_string(), rag_url.clone()),
                     ("AEGIS_ENGINE_HOST".to_string(), "127.0.0.1".to_string()),
                     ("AEGIS_ENGINE_PORT".to_string(), "8080".to_string()),
-                    ("AEGIS_CONFIG_PATH".to_string(), aegis_config.to_string_lossy().to_string()),
+                    (
+                        "AEGIS_CONFIG_PATH".to_string(),
+                        aegis_config.to_string_lossy().to_string(),
+                    ),
                 ],
             };
 
             crate::runner::spawn_background(&plan, &install_root.join(".aegis").join("logs"))?;
 
-            if crate::runner::wait_for_service(&crate::runner::join_url(&engine_url, "/health"), std::time::Duration::from_secs(30)) {
+            if crate::runner::wait_for_service(
+                &crate::runner::join_url(&engine_url, "/health"),
+                std::time::Duration::from_secs(30),
+            ) {
                 println!("  {} Engine is ready", ctx.ui.success("✓"));
             } else {
-                println!("  {} Engine started but not yet healthy (check logs)", ctx.ui.warning("⚠"));
+                println!(
+                    "  {} Engine started but not yet healthy (check logs)",
+                    ctx.ui.warning("⚠")
+                );
             }
         } else {
             println!(
@@ -296,22 +357,20 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
 
     // 3. Open browser
     println!("{} Opening web UI...", ctx.ui.info("3/3"));
-    let web_url = "http://localhost:8080";
+    let web_url = ctx.workspace.web_ui_url();
     println!("  Web UI: {web_url}");
 
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("explorer")
-            .arg(web_url)
-            .spawn();
+        let _ = std::process::Command::new("explorer").arg(&web_url).spawn();
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open").arg(web_url).spawn();
+        let _ = std::process::Command::new("open").arg(&web_url).spawn();
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = std::process::Command::new("xdg-open").arg(web_url).spawn();
+        let _ = std::process::Command::new("xdg-open").arg(&web_url).spawn();
     }
 
     println!();
@@ -320,7 +379,11 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
     println!("  API       : {engine_url}");
     println!("  RAG       : {rag_url}");
     println!();
-    println!("{}", ctx.ui.muted("Press Ctrl+C to stop all services (if running from a terminal)."));
+    println!(
+        "{}",
+        ctx.ui
+            .muted("Press Ctrl+C to stop all services (if running from a terminal).")
+    );
 
     Ok(())
 }
@@ -399,15 +462,26 @@ fn handle_version(ctx: &AppContext) -> AppResult<()> {
     // Engine version from /api/health
     let engine_info = ctx.engine.health();
     if engine_info.reachable {
-        println!("  Engine : {} ({})", engine_info.note, engine_info.request_path);
+        println!(
+            "  Engine : {} ({})",
+            engine_info.note, engine_info.request_path
+        );
     } else {
-        println!("  Engine : {} ({})", ctx.ui.warning("not reachable"), engine_info.request_path);
+        println!(
+            "  Engine : {} ({})",
+            ctx.ui.warning("not reachable"),
+            engine_info.request_path
+        );
     }
 
     // Rust info
     println!("  Rust   : {}", rustc_version());
     println!();
-    println!("{}", ctx.ui.muted("Run `aegis upgrade --check` to see if a newer version is available."));
+    println!(
+        "{}",
+        ctx.ui
+            .muted("Run `aegis upgrade --check` to see if a newer version is available.")
+    );
     Ok(())
 }
 
@@ -466,14 +540,24 @@ fn handle_upgrade(ctx: &AppContext, args: crate::args::UpgradeArgs) -> AppResult
     println!();
 
     if args.check {
-        println!("{}", ctx.ui.muted("Run `aegis upgrade` without --check to download and install."));
+        println!(
+            "{}",
+            ctx.ui
+                .muted("Run `aegis upgrade` without --check to download and install.")
+        );
         return Ok(());
     }
 
     // Find the installer asset
-    let assets = body["assets"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let assets = body["assets"]
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
     let installer_asset = assets.iter().find(|a| {
-        a["name"].as_str().map(|n| n.contains("AEGIS-Windows-x64") || n.ends_with(".exe")).unwrap_or(false)
+        a["name"]
+            .as_str()
+            .map(|n| n.contains("AEGIS-Windows-x64") || n.ends_with(".exe"))
+            .unwrap_or(false)
     });
 
     let (asset_name, download_url) = match installer_asset {
@@ -483,13 +567,17 @@ fn handle_upgrade(ctx: &AppContext, args: crate::args::UpgradeArgs) -> AppResult
         ),
         None => {
             // Fallback: try to find any binary asset
-            let first = assets.first().map(|a| (
-                a["name"].as_str().unwrap_or("unknown"),
-                a["browser_download_url"].as_str().unwrap_or(""),
-            ));
+            let first = assets.first().map(|a| {
+                (
+                    a["name"].as_str().unwrap_or("unknown"),
+                    a["browser_download_url"].as_str().unwrap_or(""),
+                )
+            });
             match first {
                 Some((name, url)) => (name, url),
-                None => return Err("No downloadable assets found in the latest release.".to_string()),
+                None => {
+                    return Err("No downloadable assets found in the latest release.".to_string());
+                }
             }
         }
     };
@@ -499,11 +587,19 @@ fn handle_upgrade(ctx: &AppContext, args: crate::args::UpgradeArgs) -> AppResult
 
     // Confirm
     if !args.yes {
-        println!("{}", ctx.ui.warning("This will download and install the new version."));
+        println!(
+            "{}",
+            ctx.ui
+                .warning("This will download and install the new version.")
+        );
         print!("  Proceed? [y/N]: ");
-        std::io::stdout().flush().map_err(|e| format!("IO error: {e}"))?;
+        std::io::stdout()
+            .flush()
+            .map_err(|e| format!("IO error: {e}"))?;
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input).map_err(|e| format!("IO error: {e}"))?;
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| format!("IO error: {e}"))?;
         if !input.trim().eq_ignore_ascii_case("y") {
             println!("{}", ctx.ui.muted("Upgrade cancelled."));
             return Ok(());
@@ -532,19 +628,39 @@ fn handle_upgrade(ctx: &AppContext, args: crate::args::UpgradeArgs) -> AppResult
     // Determine where to save
     let workspace = &ctx.workspace;
     let dest_dir = workspace.install_root.join("bin");
-    std::fs::create_dir_all(&dest_dir).map_err(|e| format!("Could not create `{}`: {e}", dest_dir.display()))?;
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|e| format!("Could not create `{}`: {e}", dest_dir.display()))?;
 
     // Save as new version alongside current
-    let ext = if asset_name.ends_with(".exe") { "exe" } else { asset_name.split('.').last().unwrap_or("bin") };
+    let ext = if asset_name.ends_with(".exe") {
+        "exe"
+    } else {
+        asset_name.split('.').last().unwrap_or("bin")
+    };
     let dest_path = dest_dir.join(format!("aegis-upgrade-v{latest_tag}.{ext}"));
     std::fs::write(&dest_path, &bytes)
         .map_err(|e| format!("Could not write to `{}`: {e}", dest_path.display()))?;
 
     println!("  Saved to: {}", dest_path.display());
     println!();
-    println!("{}", ctx.ui.success(&format!("Upgrade v{latest_tag} downloaded.")));
-    println!("{}", ctx.ui.muted("To apply, close AEGIS and replace your current aegis.exe with this file."));
-    println!("{}", ctx.ui.muted(&format!("  copy /Y \"{}\" \"{}\"", dest_path.display(), ctx.workspace.cli_dir.join("aegis.exe").display())));
+    println!(
+        "{}",
+        ctx.ui
+            .success(&format!("Upgrade v{latest_tag} downloaded."))
+    );
+    println!(
+        "{}",
+        ctx.ui
+            .muted("To apply, close AEGIS and replace your current aegis.exe with this file.")
+    );
+    println!(
+        "{}",
+        ctx.ui.muted(&format!(
+            "  copy /Y \"{}\" \"{}\"",
+            dest_path.display(),
+            ctx.workspace.cli_dir.join("aegis.exe").display()
+        ))
+    );
 
     Ok(())
 }
@@ -556,9 +672,11 @@ fn rustc_version() -> String {
         .output()
         .ok();
     match output {
-        Some(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("unknown").to_string()
-        }
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .next()
+            .unwrap_or("unknown")
+            .to_string(),
         _ => "not found".to_string(),
     }
 }
@@ -840,6 +958,7 @@ fn run_interactive_shell(ctx: &AppContext) -> AppResult<()> {
 
 fn print_shell_help(ctx: &AppContext) {
     println!("{}", ctx.ui.header("Aegis Help"));
+    println!(" open                            start services and open the Web UI");
     println!(" status                          reveal current status of the system");
     println!(" chat     \"[user_prompt]\"        one-time prompt to the llm");
     println!(" load      [session_id]          load previous sessions");
@@ -857,6 +976,42 @@ fn print_shell_help(ctx: &AppContext) {
         ctx.ui
             .muted("Type `quit` or `exit` at any time to stop the CLI immediately.")
     );
+}
+
+fn open_url_in_browser(url: &str) -> AppResult<()> {
+    let mut command = browser_open_command(url);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let status = command
+        .status()
+        .map_err(|error| format!("browser launch command failed: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("browser launch exited with status {status}"))
+    }
+}
+
+fn browser_open_command(url: &str) -> Command {
+    if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        return command;
+    }
+
+    if cfg!(target_os = "macos") {
+        let mut command = Command::new("open");
+        command.arg(url);
+        return command;
+    }
+
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    command
 }
 
 fn handle_load(
@@ -1104,6 +1259,8 @@ fn show_status(ctx: &AppContext) -> AppResult<()> {
             );
         }
     }
+    println!();
+    print_next_step_footer(ctx);
     Ok(())
 }
 
@@ -2206,6 +2363,17 @@ fn print_action_status(_ctx: &AppContext, status: ActionStatus) {
     println!("{}", status.message);
 }
 
+fn print_next_step_footer(ctx: &AppContext) {
+    println!();
+    println!("{}", ctx.ui.header("Next Steps"));
+    println!(
+        "{}",
+        ctx.ui.muted(
+            "Run `aegis doctor` for fixes, `aegis install --plan-only` for setup guidance, or `aegis chat` once the engine is healthy."
+        )
+    );
+}
+
 fn run_with_loading_message<T, F>(ctx: &AppContext, message: &str, operation: F) -> AppResult<T>
 where
     F: FnOnce() -> AppResult<T>,
@@ -2294,6 +2462,19 @@ mod tests {
                 command: ProviderCommand::Select(args),
             }) => assert_eq!(args.name.as_deref(), Some("lmstudio")),
             _ => panic!("expected provider select command"),
+        }
+    }
+
+    #[test]
+    fn parses_open_command() {
+        let parsed = parse_shell_cli("aegis open").unwrap();
+        let Some(cli) = parsed else {
+            panic!("shell parser should produce a CLI command");
+        };
+
+        match cli.command {
+            Some(CommandKind::Open) => {}
+            _ => panic!("expected open command"),
         }
     }
 

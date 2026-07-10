@@ -342,7 +342,11 @@ async fn stream_lmstudio_download(
         model.to_string()
     } else {
         // HuggingFace-style name — wrap in lmstudio-community URL
-        let slug = model.trim().to_lowercase().replace('_', "-").replace(' ', "-");
+        let slug = model
+            .trim()
+            .to_lowercase()
+            .replace('_', "-")
+            .replace(' ', "-");
         format!("https://huggingface.co/lmstudio-community/{slug}")
     };
 
@@ -373,7 +377,9 @@ async fn stream_lmstudio_download(
         } else {
             String::new()
         };
-        anyhow::bail!("LM Studio download error {status} for model `{model}`:{hint}\n\nBody: {body}");
+        anyhow::bail!(
+            "LM Studio download error {status} for model `{model}`:{hint}\n\nBody: {body}"
+        );
     }
 
     let initial_status = response.json::<LmStudioDownloadStatus>().await?;

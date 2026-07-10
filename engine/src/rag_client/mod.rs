@@ -224,11 +224,17 @@ impl RagClient {
             .unwrap_or(0) as usize)
     }
 
-    pub async fn transcribe(&self, audio_bytes: Vec<u8>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let form = reqwest::multipart::Form::new()
-            .part("file", reqwest::multipart::Part::bytes(audio_bytes).file_name("voice.wav"));
+    pub async fn transcribe(
+        &self,
+        audio_bytes: Vec<u8>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let form = reqwest::multipart::Form::new().part(
+            "file",
+            reqwest::multipart::Part::bytes(audio_bytes).file_name("voice.wav"),
+        );
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/transcribe", self.base_url))
             .multipart(form)
             .send()
@@ -243,8 +249,12 @@ impl RagClient {
         Ok(data["text"].as_str().unwrap_or("").to_string())
     }
 
-    pub async fn synthesize(&self, text: String) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let response = self.client
+    pub async fn synthesize(
+        &self,
+        text: String,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let response = self
+            .client
             .get(format!("{}/synthesize", self.base_url))
             .query(&[("text", &text)])
             .send()
@@ -259,8 +269,12 @@ impl RagClient {
         Ok(bytes.to_vec())
     }
 
-    pub async fn configure_voice(&self, keep_cached: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let response = self.client
+    pub async fn configure_voice(
+        &self,
+        keep_cached: bool,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let response = self
+            .client
             .post(format!("{}/voice/config", self.base_url))
             .query(&[("keep_cached", &keep_cached.to_string())])
             .send()

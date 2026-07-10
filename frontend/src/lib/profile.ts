@@ -1,5 +1,5 @@
 // Profile and welcome message utilities
-import { DEFAULT_WELCOME_MESSAGES } from '../constants';
+import { DEFAULT_WELCOME_MESSAGES } from '../constants/index.js';
 
 export function parseWelcomeMessages(markdown: string) {
   const messages = markdown

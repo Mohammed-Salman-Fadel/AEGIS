@@ -1,6 +1,9 @@
 use super::{handlers, state::AppState};
 use crate::memory_store::Session;
 use crate::network::handlers::chat::ChatRequest;
+use axum::body::Body;
+use axum::http::Request;
+use axum::response::Response;
 use axum::{
     Json, Router,
     extract::{
@@ -16,17 +19,14 @@ use rust_embed::Embed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
-    collections::HashMap,
 };
 use sysinfo::System;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
 use tracing::warn;
-use axum::body::Body;
-use axum::http::Request;
-use axum::response::Response;
 
 /// Embedded frontend dist/ using rust-embed.
 /// The build.rs ensures dist/ is populated before engine compiles.
@@ -39,16 +39,16 @@ struct FrontendAssets;
 fn mime_type(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "html" => "text/html; charset=utf-8",
-        "css"  => "text/css; charset=utf-8",
-        "js"   => "application/javascript",
-        "svg"  => "image/svg+xml",
-        "png"  => "image/png",
-        "ico"  => "image/x-icon",
+        "css" => "text/css; charset=utf-8",
+        "js" => "application/javascript",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
         "json" => "application/json",
         "woff2" => "font/woff2",
         "woff" => "font/woff",
-        "ttf"  => "font/ttf",
-        _      => "application/octet-stream",
+        "ttf" => "font/ttf",
+        _ => "application/octet-stream",
     }
 }
 
@@ -58,13 +58,21 @@ async fn handle_download(axum::extract::Path(path): axum::extract::Path<String>)
     let downloads_dir = std::env::var("AEGIS_DOWNLOADS_DIR").unwrap_or_else(|_| {
         // Default: alongside frontend/dist/ (repo root/downloads/)
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        manifest.parent().unwrap_or(&manifest).join("downloads").to_string_lossy().to_string()
+        manifest
+            .parent()
+            .unwrap_or(&manifest)
+            .join("downloads")
+            .to_string_lossy()
+            .to_string()
     });
 
     let file_path = PathBuf::from(&downloads_dir).join(&path);
 
     // Prevent directory traversal
-    if file_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if file_path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Response::builder()
             .status(StatusCode::FORBIDDEN)
             .body(Body::from("Forbidden"))
@@ -76,7 +84,13 @@ async fn handle_download(axum::extract::Path(path): axum::extract::Path<String>)
             let mime = mime_type(&file_path);
             Response::builder()
                 .header("Content-Type", mime)
-                .header("Content-Disposition", &format!("attachment; filename=\"{}\"", file_path.file_name().unwrap_or_default().to_string_lossy()))
+                .header(
+                    "Content-Disposition",
+                    &format!(
+                        "attachment; filename=\"{}\"",
+                        file_path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
+                )
                 .body(Body::from(bytes))
                 .unwrap_or_else(|_| Response::new(Body::from("Internal error")))
         }
@@ -103,7 +117,8 @@ async fn handle_static(uri: axum::http::Uri) -> Response<Body> {
     }
 
     // Default to index.html for root or SPA routes
-    let asset_path = if requested_path.is_empty() || !FrontendAssets::get(requested_path).is_some() {
+    let asset_path = if requested_path.is_empty() || !FrontendAssets::get(requested_path).is_some()
+    {
         "index.html"
     } else {
         requested_path
@@ -194,7 +209,8 @@ async fn handle_chat_ws(
                 code_project_name: None,
                 code_project_path: None,
                 code_project_context: None,
-                code_project_id: None,                rag_enabled,
+                code_project_id: None,
+                rag_enabled,
                 rag_top_k,
                 rag_similarity_threshold,
             };
@@ -598,8 +614,17 @@ pub fn create_router(state: AppState) -> Router {
                 "http://127.0.0.1:5173".parse().unwrap(),
                 "http://localhost:5173".parse().unwrap(),
             ])
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::PATCH])
-            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::DELETE,
+                Method::PATCH,
+            ])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+            ])
     };
 
     Router::new()
@@ -618,17 +643,29 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::providers::select_provider),
         )
         .route("/api/models", get(handlers::models::list_models))
-        .route("/api/models/ollama", get(handlers::models::list_ollama_models))
+        .route(
+            "/api/models/ollama",
+            get(handlers::models::list_ollama_models),
+        )
         .route("/api/models/current", get(handlers::models::current_model))
         .route("/api/models/select", post(handlers::models::select_model))
-        .route("/api/models/download", post(handlers::models::download_model))
-        .route("/api/models/pull", post(handlers::models::pull_ollama_model))
+        .route(
+            "/api/models/download",
+            post(handlers::models::download_model),
+        )
+        .route(
+            "/api/models/pull",
+            post(handlers::models::pull_ollama_model),
+        )
         .route(
             "/api/profile",
             get(handlers::profile::get_profile).put(handlers::profile::save_profile),
         )
         .route("/api/context/usage", get(handlers::context::usage))
-        .route("/api/calendar/event", post(handlers::calendar::create_event))
+        .route(
+            "/api/calendar/event",
+            post(handlers::calendar::create_event),
+        )
         .route(
             "/api/calendar/create-from-prompt",
             post(handlers::calendar::create_from_prompt),
@@ -650,7 +687,10 @@ pub fn create_router(state: AppState) -> Router {
             "/api/ingest",
             post(handle_pdf_ingest).layer(DefaultBodyLimit::max(MAX_INGEST_UPLOAD_BYTES)),
         )
-        .route("/api/ingest/document", delete(handle_ingest_document_delete))
+        .route(
+            "/api/ingest/document",
+            delete(handle_ingest_document_delete),
+        )
         .route("/api/index/progress", get(handle_progress_ws))
         .route("/api/chat/stream", get(handle_chat_ws))
         .route("/api/voice/transcribe", post(handle_voice_transcribe))

@@ -9,8 +9,9 @@
     "strict": true,
     "rootDir": ".",
     "outDir": ".test-dist",
+    "jsx": "react-jsx",
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["src/lib/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/lib/**/*.ts", "src/lib/**/*.tsx", "tests/**/*.ts"]
 }

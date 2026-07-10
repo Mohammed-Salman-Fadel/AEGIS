@@ -1,5 +1,5 @@
 // LocalStorage read helpers for persisted UI state
-import type { ResponseStyle } from '../types';
+import type { ResponseStyle } from '../types/index.js';
 import {
   THEME_STORAGE_KEY,
   APPEARANCE_THEME_STORAGE_KEY,
@@ -11,7 +11,7 @@ import {
   RAG_ENABLED_STORAGE_KEY,
   RAG_TOP_K_STORAGE_KEY,
   RAG_THRESHOLD_STORAGE_KEY,
-} from '../constants';
+} from '../constants/index.js';
 
 export function loadStoredTheme(): 'dark' | 'light' | 'system' {
   if (typeof window === 'undefined') return 'dark';

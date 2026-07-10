@@ -89,7 +89,7 @@ export default function App() {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
-  const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(loadStoredAppearanceTheme as AppearanceTheme);
+  const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>(() => loadStoredAppearanceTheme() as AppearanceTheme);
   const [isStreaming, setIsStreaming] = useState(false);
   const [messageQueue, setMessageQueue] = useState<string[]>([]);
   const messageQueueRef = useRef<string[]>([]);
@@ -586,7 +586,9 @@ export default function App() {
     const project = codeProjects.find((p) => p.id === projectId);
     if (!project) { setProjectPermissionRequestId(null); return; }
     try {
-      const permission = (await project.rootHandle.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
+      const permission = project.rootHandle.requestPermission
+        ? await project.rootHandle.requestPermission({ mode: 'readwrite' })
+        : 'denied';
       setCodeProjects((cur) => cur.map((p) => p.id === projectId ? { ...p, writable: permission === 'granted' } : p));
       setProjectEditMessage(permission === 'granted' ? `AEGIS can apply approved patches inside ${project.name}.` : `${project.name} remains read-only until write access is granted.`);
     } catch (e) { setProjectEditMessage(e instanceof Error ? e.message : t('error.could_not_request_permission')); }
@@ -608,10 +610,13 @@ export default function App() {
     const parts = normalized.split('/');
     let dir: FileSystemDirectoryHandle = project.rootHandle;
     for (let i = 0; i < parts.length - 1; i++) {
+      if (!dir.getDirectoryHandle) throw new Error('This project folder does not support creating subdirectories.');
       dir = await dir.getDirectoryHandle(parts[i], { create: true });
     }
     const fileName = parts[parts.length - 1];
+    if (!dir.getFileHandle) throw new Error('This project folder does not support creating files.');
     const fileHandle = await dir.getFileHandle(fileName, { create: true });
+    if (!fileHandle.createWritable) throw new Error('This file handle does not support writing.');
     const writable = await fileHandle.createWritable();
     await writable.write(content);
     await writable.close();
@@ -633,14 +638,17 @@ export default function App() {
     const targetPath = parsePatchTarget(diff);
     if (!targetPath) { setError(t('error.patch_no_diff')); return; }
     const targetFile = findProjectFile(activeProject, targetPath);
-    const isNewFile = !targetFile;
     try {
       if (targetFile) {
         // Edit existing file — verify write permission first
         if (!targetFile.handle.createWritable) { setError(t('error.patch_no_diff')); return; }
-        const perm = await targetFile.handle.queryPermission({ mode: 'readwrite' });
+        const perm = targetFile.handle.queryPermission
+          ? await targetFile.handle.queryPermission({ mode: 'readwrite' })
+          : 'denied';
         if (perm !== 'granted') {
-          const req = await targetFile.handle.requestPermission({ mode: 'readwrite' });
+          const req = targetFile.handle.requestPermission
+            ? await targetFile.handle.requestPermission({ mode: 'readwrite' })
+            : 'denied';
           if (req !== 'granted') { setError('Write permission denied by browser.'); return; }
           setCodeProjects((cur) => cur.map((p) => p.id === activeProject.id ? { ...p, writable: true } : p));
         }

@@ -1,4 +1,4 @@
-﻿//! Role: repository and component path discovery for the CLI scaffold.
+//! Role: repository and component path discovery for the CLI scaffold.
 //! Called by: `main.rs`, `doctor.rs`, `install.rs`, and `runner.rs`.
 //! Calls into: the local filesystem only.
 //! Owns: workspace root detection, component location, and component scaffold/readiness notes.
@@ -183,7 +183,7 @@ impl Workspace {
     pub fn web_ui_url(&self) -> String {
         if let Ok(url) = env::var("AEGIS_WEB_URL") {
             let url = url.trim();
-            if !url.is_empty() {
+            if !url.is_empty() && !Self::looks_like_engine_url(url) {
                 return url.to_string();
             }
         }
@@ -207,6 +207,26 @@ impl Workspace {
         let host = env::var("AEGIS_ENGINE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = env::var("AEGIS_ENGINE_PORT").unwrap_or_else(|_| "8080".to_string());
         format!("http://{host}:{port}")
+    }
+
+    fn looks_like_engine_url(url: &str) -> bool {
+        let url = url.trim().trim_end_matches('/');
+        let engine_url =
+            env::var("AEGIS_ENGINE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let engine_url = engine_url.trim().trim_end_matches('/').to_ascii_lowercase();
+        let candidate = url.to_ascii_lowercase();
+
+        if candidate == engine_url {
+            return true;
+        }
+
+        matches!(
+            candidate.as_str(),
+            "http://localhost:8080"
+                | "http://127.0.0.1:8080"
+                | "https://localhost:8080"
+                | "https://127.0.0.1:8080"
+        )
     }
 
     pub fn installer_readme(&self) -> PathBuf {
@@ -386,7 +406,7 @@ impl Workspace {
         ]
     }
 
-    fn frontend_dev_port(&self) -> Option<u16> {
+    pub(crate) fn frontend_dev_port(&self) -> Option<u16> {
         let vite_config = self.frontend_vite_config();
         let source = fs::read_to_string(vite_config).ok()?;
         let marker = "port:";

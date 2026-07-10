@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use axum::{
     Json,
     extract::State,
@@ -7,6 +6,7 @@ use axum::{
 use futures::Stream;
 use serde::Deserialize;
 use std::convert::Infallible;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
@@ -18,7 +18,13 @@ use crate::network::state::AppState;
 fn resolve_project_path(project_id: &str) -> Option<PathBuf> {
     let sanitized: String = project_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let base = std::env::var("AEGIS_DATA_DIR")
         .map(PathBuf::from)
