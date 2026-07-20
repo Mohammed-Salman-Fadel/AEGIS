@@ -64,7 +64,7 @@ pub fn build_install_plan(
     install_root_source: impl Into<String>,
 ) -> InstallPlan {
     let default_model =
-        std::env::var("AEGIS_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
+        std::env::var("AEGIS_DEFAULT_MODEL").unwrap_or_else(|_| "llama3.2:latest".to_string());
 
     let aegis_dir = install_root.join(".aegis");
     let config_dir = aegis_dir.join("config");

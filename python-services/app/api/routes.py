@@ -63,7 +63,9 @@ def query_documents(request: QueryRequest):
     """
     try:
         top_k = min(request.top_k, MAX_TOP_K)
-        return retrieval_service.query(request.query, top_k, request.session_id)
+        if request.scope == "session" and not (request.session_id or "").strip():
+            raise HTTPException(status_code=400, detail={"error": "session_id is required for session-scoped search"})
+        return retrieval_service.query(request.query, top_k, request.session_id, request.scope)
     except Exception as e:
         raise HTTPException(status_code=500, detail={"error": f"Query failed: {str(e)}"})
 

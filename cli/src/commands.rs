@@ -23,7 +23,7 @@ use crossterm::{execute, queue};
 
 use crate::banner;
 use crate::cli::Cli;
-use crate::cli::{CommandKind, ModelCommand, ProviderCommand, SessionCommand};
+use crate::cli::{CodeCommand, CommandKind, ModelCommand, ProviderCommand, SessionCommand};
 use crate::doctor::{CheckItem, DoctorReport, Health};
 use crate::engine_client::{
     ActionStatus, CreatedSession, ModelSummary, ProviderSummary, SessionDetail, SessionSummary,
@@ -31,6 +31,7 @@ use crate::engine_client::{
 use crate::install;
 use crate::menu::{self, MenuChoice};
 use crate::signals;
+use crate::ui::RuntimeState;
 use crate::user_profile;
 use crate::workspace::ComponentState;
 use crate::{AppContext, AppResult};
@@ -75,8 +76,22 @@ fn dispatch_command(
         CommandKind::Upgrade(args) => handle_upgrade(ctx, args),
         CommandKind::Save(args) => handle_save(ctx, &args.note),
         CommandKind::Chat(args) => handle_chat_command(ctx, args),
+        CommandKind::Code { command } => match command {
+            CodeCommand::Inspect(args) => crate::coding::inspect(ctx, args),
+            CodeCommand::Task(args) => crate::coding::task(ctx, args),
+            CodeCommand::Plan(args) => crate::coding::show_plan(ctx, args),
+            CodeCommand::Checkpoints(args) => crate::coding::checkpoints(ctx, args),
+            CodeCommand::Restore(args) => crate::coding::restore_checkpoint(ctx, args),
+        },
+        CommandKind::Explain(args) => crate::coding::explain(ctx, args),
+        CommandKind::Find(args) => crate::coding::find(ctx, args),
+        CommandKind::Fix(args) => crate::coding::task(ctx, args),
+        CommandKind::Test(args) => crate::coding::test_affected(ctx, args),
+        CommandKind::Review(args) => crate::coding::review(ctx, args),
         CommandKind::Load(args) => handle_load(ctx, &args.id, invocation_mode),
-        CommandKind::Ask(args) => handle_ask(ctx, args.stdin, args.session_id.as_deref()),
+        CommandKind::Ask(args) => {
+            handle_ask(ctx, args.stdin, args.session_id.as_deref(), args.copy)
+        }
         CommandKind::Repl(args) => handle_repl(ctx, args.session_id.as_deref()),
         CommandKind::Session { command } => handle_session(ctx, command, invocation_mode),
         CommandKind::Provider { command } => handle_provider(ctx, command),
@@ -96,7 +111,7 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
     println!("Workspace : {}", ctx.workspace.root.display());
     println!("Web UI URL: {web_ui_url}");
     println!();
-    println!("{}", ctx.ui.header("Readiness Snapshot"));
+    println!("{}", ctx.ui.section("Readiness Snapshot"));
     println!(
         "{} blocking issue(s), {} warning(s), {} missing item(s)",
         report.blocking_issues(),
@@ -106,7 +121,7 @@ fn show_home(ctx: &AppContext) -> AppResult<()> {
     print_next_step_footer(ctx);
     if io::stdin().is_terminal() {
         println!();
-        println!("{}", ctx.ui.header("Live Shell"));
+        println!("{}", ctx.ui.section("Live Shell"));
         println!(
             "{}",
             ctx.ui.muted(
@@ -122,12 +137,25 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
 
     println!("{}", ctx.ui.header("Open AEGIS"));
     println!(
-        "{}",
-        ctx.ui
-            .success("Local services have been started or confirmed running.")
+        "{} Waiting for the engine and Web UI to become ready.",
+        ctx.ui.runtime_badge(RuntimeState::Starting)
     );
     println!("Web UI URL: {web_ui_url}");
 
+    let engine_health = ctx.engine.health();
+    if !engine_health.reachable {
+        println!(
+            "{} The AEGIS engine is not responding at {}. The browser was not opened. Check `.aegis\\logs\\engine.log` and run `aegis doctor` for recovery steps.",
+            ctx.ui.runtime_badge(RuntimeState::Degraded),
+            engine_health.base_url
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{} Loading the active model into memory.",
+        ctx.ui.runtime_badge(RuntimeState::Warming)
+    );
     let loading = ctx
         .ui
         .start_loading_animation("Checking active model readiness");
@@ -135,13 +163,30 @@ fn handle_open(ctx: &AppContext) -> AppResult<()> {
     loading.finish();
 
     match warmup_result {
-        Ok(()) => println!("{}", ctx.ui.success("Active model is ready.")),
-        Err(error) => println!(
-            "{}",
-            ctx.ui.warning(&format!(
-                "The UI can open now, but the active model is not ready yet: {error}"
-            ))
+        Ok(()) => println!(
+            "{} Active model is loaded; inference is ready.",
+            ctx.ui.runtime_badge(RuntimeState::Ready)
         ),
+        Err(error) => println!(
+            "{} The UI is available, but model inference is unavailable: {}",
+            ctx.ui.runtime_badge(RuntimeState::Degraded),
+            error
+        ),
+    }
+
+    if std::env::var("AEGIS_NO_BROWSER").ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    }) {
+        println!(
+            "{}",
+            ctx.ui.success(
+                "AEGIS is ready. Browser auto-open was skipped because AEGIS_NO_BROWSER is enabled."
+            )
+        );
+        return Ok(());
     }
 
     match open_url_in_browser(&web_ui_url) {
@@ -250,6 +295,7 @@ fn handle_install(ctx: &AppContext, args: crate::args::InstallArgs) -> AppResult
     }
 }
 
+#[allow(dead_code)] // Retained as an installer diagnostic until the packaged launcher fully replaces it.
 fn handle_installed_runtime_open_preview(ctx: &AppContext) -> AppResult<()> {
     println!("{}", ctx.ui.header("AEGIS Open"));
     println!(
@@ -718,7 +764,7 @@ fn handle_save(ctx: &AppContext, note: &str) -> AppResult<()> {
 
 fn handle_chat_command(ctx: &AppContext, args: crate::args::ChatArgs) -> AppResult<()> {
     if args.attachments.is_empty() {
-        return handle_chat(ctx, &args.prompt, args.session_id.as_deref());
+        return handle_chat(ctx, &args.prompt, args.session_id.as_deref(), args.copy);
     }
 
     let session_id = match args.session_id {
@@ -737,10 +783,15 @@ fn handle_chat_command(ctx: &AppContext, args: crate::args::ChatArgs) -> AppResu
     };
 
     attach_files_to_session(ctx, &session_id, &args.attachments)?;
-    handle_chat(ctx, &args.prompt, Some(&session_id))
+    handle_chat(ctx, &args.prompt, Some(&session_id), args.copy)
 }
 
-fn handle_chat(ctx: &AppContext, prompt: &str, session_id: Option<&str>) -> AppResult<()> {
+fn handle_chat(
+    ctx: &AppContext,
+    prompt: &str,
+    session_id: Option<&str>,
+    copy: bool,
+) -> AppResult<()> {
     let reply = stream_llm_response(ctx, |on_token| {
         ctx.engine.chat(prompt, session_id, on_token)
     })?;
@@ -748,10 +799,19 @@ fn handle_chat(ctx: &AppContext, prompt: &str, session_id: Option<&str>) -> AppR
         println!();
         println!("Endpoint: {}", reply.request_path);
     }
+    if copy {
+        copy_to_clipboard(&reply.message)?;
+        println!("{}", ctx.ui.success("Response copied to clipboard."));
+    }
     Ok(())
 }
 
-fn handle_ask(ctx: &AppContext, read_from_stdin: bool, session_id: Option<&str>) -> AppResult<()> {
+fn handle_ask(
+    ctx: &AppContext,
+    read_from_stdin: bool,
+    session_id: Option<&str>,
+    copy: bool,
+) -> AppResult<()> {
     println!("{}", ctx.ui.header("Ask Scaffold"));
 
     if !read_from_stdin {
@@ -790,7 +850,39 @@ fn handle_ask(ctx: &AppContext, read_from_stdin: bool, session_id: Option<&str>)
     if ctx.ui.verbose {
         println!("Endpoint: {}", reply.request_path);
     }
+    if copy {
+        copy_to_clipboard(&reply.message)?;
+        println!("{}", ctx.ui.success("Response copied to clipboard."));
+    }
     Ok(())
+}
+
+fn copy_to_clipboard(text: &str) -> AppResult<()> {
+    #[cfg(windows)]
+    {
+        let mut child = Command::new("clip.exe")
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("Could not open the Windows clipboard: {error}"))?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Could not open clipboard input.".to_string())?
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("Could not write to the clipboard: {error}"))?;
+        let status = child
+            .wait()
+            .map_err(|error| format!("Clipboard command failed: {error}"))?;
+        if !status.success() {
+            return Err("The Windows clipboard command did not complete successfully.".to_string());
+        }
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = text;
+        Err("Clipboard output is currently supported on Windows installations.".to_string())
+    }
 }
 
 fn handle_repl(ctx: &AppContext, session_id: Option<&str>) -> AppResult<()> {
@@ -843,7 +935,7 @@ fn handle_repl(ctx: &AppContext, session_id: Option<&str>) -> AppResult<()> {
     Ok(())
 }
 
-fn stream_llm_response<F>(
+pub(crate) fn stream_llm_response<F>(
     ctx: &AppContext,
     operation: F,
 ) -> AppResult<crate::engine_client::ChatReply>
@@ -1008,6 +1100,8 @@ fn print_shell_help(ctx: &AppContext) {
     println!(" status                          reveal current status of the system");
     println!(" palette                         searchable command picker");
     println!(" chat     \"[user_prompt]\"        one-time prompt to the llm");
+    println!(" code inspect [--path .]         detect repository and build context");
+    println!(" code task \"[task]\"             investigate, preview, and approve code changes");
     println!(" chat --attach file.pdf \"...\"    attach a file to a chat session");
     println!(" load      [session_id]          load previous sessions");
     println!(" save      [your_information]    can store personal information");
@@ -1038,6 +1132,11 @@ fn handle_shell_palette(ctx: &AppContext) -> AppResult<()> {
             "Status",
             "status",
             "Show engine, model, and component status.",
+        ),
+        MenuChoice::new(
+            "Inspect coding workspace",
+            "code inspect",
+            "Detect repository, languages, build tools, and working-tree state.",
         ),
         MenuChoice::new(
             "Model setup",
@@ -1072,6 +1171,12 @@ fn handle_shell_palette(ctx: &AppContext) -> AppResult<()> {
         "open" => handle_open(ctx),
         "setup" => handle_setup_wizard(ctx),
         "status" => show_status(ctx),
+        "code inspect" => crate::coding::inspect(
+            ctx,
+            crate::args::CodeWorkspaceArgs {
+                path: PathBuf::from("."),
+            },
+        ),
         "model setup" => handle_model_setup(ctx),
         "session resume" => {
             let session = latest_session(ctx)?;
@@ -1108,15 +1213,11 @@ fn open_url_in_browser(url: &str) -> AppResult<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    let status = command
-        .status()
+    command
+        .spawn()
         .map_err(|error| format!("browser launch command failed: {error}"))?;
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("browser launch exited with status {status}"))
-    }
+    Ok(())
 }
 
 fn browser_open_command(url: &str) -> Command {

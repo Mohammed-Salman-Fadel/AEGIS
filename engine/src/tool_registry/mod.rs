@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct ToolRegistry {
-    python_path: String,
+    semble_path: String,
     semble_mcp: Arc<Mutex<McpClient>>,
     zotero_mcp: Arc<Mutex<McpClient>>,
 }
@@ -13,9 +13,10 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     pub fn new(python_path: &str, semble_path: &str) -> Self {
         // Initialize Semble MCP
-        let client = McpClient::new(
+        let client = McpClient::new_in_directory(
             python_path,
-            vec!["-c", "from semble.cli import main; main()", semble_path],
+            vec!["-c", "from semble.cli import main; main()"],
+            semble_path,
         );
 
         // Initialize Zotero MCP
@@ -23,7 +24,7 @@ impl ToolRegistry {
         let zotero_client = McpClient::new(python_path, vec!["-m", "zotero_mcp.cli", "serve"]);
 
         Self {
-            python_path: python_path.to_string(),
+            semble_path: semble_path.to_string(),
             semble_mcp: Arc::new(Mutex::new(client)),
             zotero_mcp: Arc::new(Mutex::new(zotero_client)),
         }
@@ -34,20 +35,18 @@ impl ToolRegistry {
         input: &str,
         project_path: Option<&str>,
     ) -> Result<String> {
-        let args = json!({ "query": input });
-        let result = if let Some(project_path) = project_path
+        let repository = project_path
             .map(str::trim)
             .filter(|project_path| !project_path.is_empty())
-        {
-            let mut client = McpClient::new(
-                &self.python_path,
-                vec!["-c", "from semble.cli import main; main()", project_path],
-            );
-            client.call_tool("search", args).await?
-        } else {
-            let mut client = self.semble_mcp.lock().await;
-            client.call_tool("search", args).await?
-        };
+            .unwrap_or(&self.semble_path);
+        let args = json!({
+            "query": input,
+            "repo": repository,
+            "top_k": 5,
+            "max_snippet_lines": 10
+        });
+        let mut client = self.semble_mcp.lock().await;
+        let result = client.call_tool("search", args).await?;
 
         format_mcp_text_content(result)
     }

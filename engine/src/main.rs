@@ -24,6 +24,10 @@ mod workflow;
 
 use config::{AppConfig, InferenceProvider};
 use inference::InferenceBackend;
+use tokio::time::{Duration, sleep, timeout};
+
+const STARTUP_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(90);
+const STARTUP_WARMUP_ATTEMPTS: usize = 3;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -57,12 +61,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let rag_client = std::sync::Arc::new(rag_client::RagClient::new(config.rag.base_url.clone()));
-    if let Err(e) = rag_client.init().await {
-        tracing::warn!(
-            "Failed to initialize RAG client: {}. Ensure python RAG is running.",
-            e
-        );
-    }
+    let startup_rag_client = std::sync::Arc::clone(&rag_client);
     let memory_store = memory_store::MemoryStore::new().await;
 
     let mcp_manager = mcp::McpManager::new().await;
@@ -78,18 +77,72 @@ async fn main() -> anyhow::Result<()> {
         config.python_path,
         mcp_manager,
     );
-    if let Err(error) = orchestrator.warm_active_model().await {
-        tracing::warn!(
-            error = %error,
-            "Active model could not be warmed during engine startup; continuing so /health can report readiness."
-        );
-    }
 
     let state = network::state::AppState::new(orchestrator);
+    let startup_orchestrator = std::sync::Arc::clone(&state.orchestrator);
     let app = network::router::create_router(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("AEGIS engine listening on http://{bind_addr}");
+
+    // Network availability is the first startup milestone. RAG initialization
+    // and model loading can be slow on a cold machine, but neither should keep
+    // the Web UI or recovery/settings endpoints offline.
+    tokio::spawn(async move {
+        match timeout(STARTUP_INITIALIZATION_TIMEOUT, startup_rag_client.init()).await {
+            Ok(Ok(())) => tracing::info!("RAG client initialized in the background"),
+            Ok(Err(error)) => tracing::warn!(
+                error = %error,
+                "RAG initialization is unavailable; the engine and UI remain usable."
+            ),
+            Err(_) => tracing::warn!(
+                "RAG initialization timed out in the background; it will retry when retrieval is requested."
+            ),
+        }
+    });
+
+    tokio::spawn(async move {
+        for attempt in 1..=STARTUP_WARMUP_ATTEMPTS {
+            match timeout(
+                STARTUP_INITIALIZATION_TIMEOUT,
+                startup_orchestrator.warm_active_model(),
+            )
+            .await
+            {
+                Ok(Ok(())) => {
+                    tracing::info!("Active model warmed in the background");
+                    return;
+                }
+                Ok(Err(error)) if attempt < STARTUP_WARMUP_ATTEMPTS => {
+                    tracing::warn!(
+                        attempt,
+                        error = %error,
+                        "Active model is not ready yet; retrying background warmup."
+                    );
+                }
+                Err(_) if attempt < STARTUP_WARMUP_ATTEMPTS => {
+                    tracing::warn!(
+                        attempt,
+                        "Active model warmup timed out; retrying in the background."
+                    );
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        error = %error,
+                        "Active model could not be warmed during startup; the UI remains available for recovery."
+                    );
+                    return;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "Active model warmup timed out during startup; the UI remains available for recovery."
+                    );
+                    return;
+                }
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+    });
 
     axum::serve(listener, app).await?;
     Ok(())

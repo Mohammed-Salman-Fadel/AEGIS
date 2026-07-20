@@ -1,4 +1,5 @@
 use std::env;
+use std::path::PathBuf;
 use std::sync::RwLock;
 
 use crate::config::InferenceProvider;
@@ -45,7 +46,8 @@ impl ProviderRegistry {
         match self.active_provider.write() {
             Ok(mut active_provider) => {
                 let previous = active_provider.clone();
-                *active_provider = provider;
+                *active_provider = provider.clone();
+                persist_provider(&provider);
                 previous
             }
             Err(_) => default_provider(),
@@ -78,7 +80,56 @@ fn default_provider() -> InferenceProvider {
     env::var("AEGIS_INFERENCE_PROVIDER")
         .ok()
         .and_then(|value| InferenceProvider::from_env_value(&value).ok())
+        .or_else(read_persisted_provider)
         .unwrap_or(InferenceProvider::Ollama)
+}
+
+fn aegis_data_dir() -> PathBuf {
+    env::var("AEGIS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                env::var("APPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("AEGIS")
+            } else {
+                env::var("XDG_DATA_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        env::var("HOME")
+                            .map(|home| PathBuf::from(home).join(".local/share"))
+                            .unwrap_or_else(|_| PathBuf::from("."))
+                    })
+                    .join("AEGIS")
+            }
+        })
+}
+
+fn persisted_provider_path() -> PathBuf {
+    aegis_data_dir().join("active_provider.txt")
+}
+
+fn read_persisted_provider() -> Option<InferenceProvider> {
+    std::fs::read_to_string(persisted_provider_path())
+        .ok()
+        .and_then(|value| InferenceProvider::from_env_value(value.trim()).ok())
+}
+
+fn persist_provider(provider: &InferenceProvider) {
+    let path = persisted_provider_path();
+    if let Some(parent) = path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            tracing::warn!("Could not create AEGIS provider settings directory: {error}");
+            return;
+        }
+    }
+    if let Err(error) = std::fs::write(&path, provider.as_str()) {
+        tracing::warn!(
+            path = %path.display(),
+            "Could not persist active provider selection: {error}"
+        );
+    }
 }
 
 impl InferenceProvider {

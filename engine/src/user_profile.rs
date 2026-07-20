@@ -307,10 +307,12 @@ fn select_relevant_entries<'a>(
     let prompt_keywords = extract_keywords(prompt).into_iter().collect::<HashSet<_>>();
     let profile_query = is_profile_query(prompt);
 
+    // Persistent profile entries are deliberately considered on every turn.
+    // Scoring controls ordering when the profile is larger than the prompt
+    // budget; it must not silently make saved memories disappear.
     let mut scored_entries = entries
         .iter()
         .map(|entry| (entry, score_entry(entry, &prompt_keywords, profile_query)))
-        .filter(|(_, score)| profile_query || *score >= 45)
         .collect::<Vec<_>>();
 
     scored_entries.sort_by(|(left_entry, left_score), (right_entry, right_score)| {
@@ -521,19 +523,20 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_low_weight_notes_do_not_force_personalization() {
+    fn unrelated_notes_are_still_available_for_personalization() {
         let entries = parse_profile_notes("I once visited a museum");
         let selected = select_relevant_entries(&entries, "Explain TCP sockets");
 
-        assert!(selected.is_empty());
+        assert_eq!(selected.len(), 1);
     }
 
     #[test]
-    fn unrelated_instructions_do_not_force_personalization() {
+    fn standing_instructions_are_considered_on_every_turn() {
         let entries = parse_profile_notes("always use friendly tone");
         let selected = select_relevant_entries(&entries, "Explain TCP sockets");
 
-        assert!(selected.is_empty());
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].0.category, ProfileCategory::Instruction);
     }
 
     #[test]

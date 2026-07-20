@@ -6,7 +6,7 @@
 //! Next TODOs: add richer prompt/session flags once the engine contract and config format are finalized.
 use std::path::PathBuf;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 
 #[derive(Debug, Clone, Args)]
 pub struct LogsArgs {
@@ -78,6 +78,10 @@ pub struct ChatArgs {
         help = "Attach and index a PDF/TXT/code file into the chat session before sending"
     )]
     pub attachments: Vec<PathBuf>,
+
+    /// Copy the completed assistant response to the system clipboard
+    #[arg(long)]
+    pub copy: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -94,6 +98,10 @@ pub struct AskArgs {
         help = "Future session identifier managed by the engine"
     )]
     pub session_id: Option<String>,
+
+    /// Copy the completed assistant response to the system clipboard
+    #[arg(long)]
+    pub copy: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -168,4 +176,126 @@ pub struct UpgradeArgs {
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
     pub yes: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum PermissionMode {
+    /// Inspect and propose changes without modifying files
+    ReadOnly,
+    /// Ask before applying every generated patch
+    AskBeforeEdit,
+    /// Apply validated workspace-local patches without an extra prompt
+    WorkspaceWrite,
+    /// Apply only conservative patches in a clean workspace, then run approved safe checks
+    UnattendedSafe,
+}
+
+impl PermissionMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::AskBeforeEdit => "ask-before-edit",
+            Self::WorkspaceWrite => "workspace-write",
+            Self::UnattendedSafe => "unattended-safe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CodeWorkspaceArgs {
+    /// Repository or project directory; defaults to the current directory
+    #[arg(long, short = 'p', value_name = "path", default_value = ".")]
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CodeCheckpointArgs {
+    /// Checkpoint identifier shown by `aegis code checkpoints`
+    #[arg(value_name = "checkpoint-id")]
+    pub id: String,
+
+    /// Repository or project directory; defaults to the current directory
+    #[arg(long, short = 'p', value_name = "path", default_value = ".")]
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CodeTaskArgs {
+    /// Coding task for AEGIS to investigate and implement
+    #[arg(value_name = "task")]
+    pub task: String,
+
+    /// Repository or project directory; defaults to the current directory
+    #[arg(long, short = 'p', value_name = "path", default_value = ".")]
+    pub path: PathBuf,
+
+    /// File access policy for generated changes
+    #[arg(long, value_enum, default_value = "ask-before-edit")]
+    pub permission: PermissionMode,
+
+    /// Use deeper reasoning while investigating the task
+    #[arg(long)]
+    pub reason: bool,
+
+    /// Print only the proposed unified diff
+    #[arg(long, conflicts_with_all = ["json", "explain"])]
+    pub diff_only: bool,
+
+    /// Emit a machine-readable JSON result
+    #[arg(long, conflicts_with_all = ["diff_only", "explain"])]
+    pub json: bool,
+
+    /// Suppress progress details and print only the final summary
+    #[arg(long)]
+    pub quiet: bool,
+
+    /// Explain the proposed changes without applying them
+    #[arg(long, conflicts_with_all = ["json", "diff_only"])]
+    pub explain: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CodeQueryArgs {
+    /// File, symbol, subsystem, or question to investigate
+    #[arg(value_name = "query")]
+    pub query: Option<String>,
+
+    #[arg(long, short = 'p', value_name = "path", default_value = ".")]
+    pub path: PathBuf,
+
+    /// Emit machine-readable JSON where supported
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CodeFindArgs {
+    /// Text or symbol to find across project files
+    #[arg(value_name = "query")]
+    pub query: String,
+
+    #[arg(long, short = 'p', value_name = "path", default_value = ".")]
+    pub path: PathBuf,
+
+    /// Maximum number of matching lines
+    #[arg(long, default_value_t = 50)]
+    pub limit: usize,
+
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CodeTestArgs {
+    /// Repository or project directory
+    #[arg(long, short = 'p', value_name = "path", default_value = ".")]
+    pub path: PathBuf,
+
+    /// Run without an interactive confirmation
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Emit a JSON test-selection report without running commands
+    #[arg(long)]
+    pub json: bool,
 }

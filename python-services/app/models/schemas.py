@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 
 # API Requests
 
@@ -10,7 +10,8 @@ class IndexRequest(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The query string")
     top_k: int = Field(3, description="Number of top results to return")
-    session_id: str = Field(..., description="AEGIS session to retrieve documents from")
+    session_id: Optional[str] = Field(None, description="AEGIS session to retrieve documents from")
+    scope: Literal["session", "workspace"] = Field("session", description="Search one session or every locally indexed source")
 
 class DeleteDocumentRequest(BaseModel):
     session_id: str = Field(..., description="AEGIS session that owns this indexed document")

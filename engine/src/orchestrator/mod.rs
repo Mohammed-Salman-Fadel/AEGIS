@@ -1,4 +1,5 @@
 use anyhow::Context;
+use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
@@ -61,6 +62,48 @@ use crate::workflow::registry::WorkflowRegistry;
 
 const MAX_CODE_PROJECT_CONTEXT_CHARS: usize = 500_000;
 
+fn provider_default_model(provider: &InferenceProvider, available_models: &[String]) -> String {
+    let provider_env_model = match provider {
+        InferenceProvider::Ollama => env::var("AEGIS_OLLAMA_MODEL").ok(),
+        InferenceProvider::LmStudio => env::var("AEGIS_LM_STUDIO_MODEL")
+            .or_else(|_| env::var("AEGIS_LMSTUDIO_MODEL"))
+            .ok(),
+        InferenceProvider::OpenAiCompatible => env::var("AEGIS_OPENAI_COMPAT_MODEL").ok(),
+    }
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty());
+
+    if let Some(model) = provider_env_model {
+        return model;
+    }
+
+    let generic_model = env::var("AEGIS_MODEL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(model) = generic_model {
+        let exists_in_provider = available_models
+            .iter()
+            .any(|available| available.eq_ignore_ascii_case(&model));
+        if exists_in_provider {
+            return model;
+        }
+    }
+
+    match provider {
+        InferenceProvider::Ollama => available_models
+            .iter()
+            .find(|model| model.eq_ignore_ascii_case("llama3.2:latest"))
+            .cloned()
+            .or_else(|| available_models.first().cloned())
+            .unwrap_or_else(|| "llama3.2:latest".to_string()),
+        InferenceProvider::LmStudio | InferenceProvider::OpenAiCompatible => available_models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "local-model".to_string()),
+    }
+}
+
 /// The central orchestrator — coordinates every subsystem.
 /// This is the primary entry point for all incoming chat requests.
 pub struct Orchestrator {
@@ -89,6 +132,10 @@ pub struct ProviderSwitchOutcome {
     pub previous_provider: String,
     pub current_provider: String,
     pub changed: bool,
+    pub previous_model: String,
+    pub current_model: String,
+    pub unload_warning: Option<String>,
+    pub warm_warning: Option<String>,
 }
 
 pub struct ContextUsageSnapshot {
@@ -432,13 +479,7 @@ impl Orchestrator {
 
     pub async fn list_available_models(&self) -> anyhow::Result<(String, Vec<String>)> {
         let provider = self.current_provider_name();
-        let models = self
-            .inference
-            .read()
-            .await
-            .list_models()
-            .await
-            .unwrap_or_default();
+        let models = self.inference.read().await.list_models().await?;
         Ok((provider, models))
     }
 
@@ -565,37 +606,67 @@ impl Orchestrator {
         let provider = match name.trim().to_lowercase().as_str() {
             "ollama" => InferenceProvider::Ollama,
             "lmstudio" | "lm-studio" | "lm_studio" => InferenceProvider::LmStudio,
-            "openai-compatible" | "openai_compatible" | "openai-compatible-api" => {
-                InferenceProvider::OpenAiCompatible
-            }
+            "openai-compatible"
+            | "openai_compatible"
+            | "openai-compatible-api"
+            | "openai-compat" => InferenceProvider::OpenAiCompatible,
             _ => anyhow::bail!(
                 "unsupported inference provider `{name}`; expected ollama, lmstudio, or openai-compatible"
             ),
         };
 
         let current = self.provider_registry.current_provider();
+        let previous_model = self.model_registry.current_model_name();
         if current == provider {
             return Ok(ProviderSwitchOutcome {
                 previous_provider: current.as_str().to_string(),
                 current_provider: current.as_str().to_string(),
                 changed: false,
+                previous_model: previous_model.clone(),
+                current_model: previous_model,
+                unload_warning: None,
+                warm_warning: None,
             });
         }
 
-        let _ = self.provider_registry.set_active_provider(provider.clone());
+        let unload_warning = if matches!(
+            current,
+            InferenceProvider::Ollama | InferenceProvider::LmStudio
+        ) {
+            self.inference
+                .read()
+                .await
+                .unload_model(&previous_model)
+                .await
+                .err()
+                .map(|error| {
+                    format!(
+                        "Could not unload `{previous_model}` from {} before switching providers: {error}",
+                        current.as_str()
+                    )
+                })
+        } else {
+            None
+        };
 
         let new_backend: Box<dyn InferenceBackend + Send + Sync> = match &provider {
             InferenceProvider::Ollama => {
-                let url = std::env::var("AEGIS_OLLAMA_URL")
+                let url = env::var("AEGIS_OLLAMA_URL")
                     .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
                 Box::new(crate::inference::backends::ollama::OllamaBackend::new(url))
             }
-            InferenceProvider::LmStudio | InferenceProvider::OpenAiCompatible => {
-                let url = std::env::var("AEGIS_LM_STUDIO_URL")
-                    .or_else(|_| std::env::var("AEGIS_LMSTUDIO_URL"))
-                    .or_else(|_| std::env::var("AEGIS_OPENAI_COMPAT_URL"))
+            InferenceProvider::LmStudio => {
+                let url = env::var("AEGIS_LM_STUDIO_URL")
+                    .or_else(|_| env::var("AEGIS_LMSTUDIO_URL"))
                     .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
-                let api_key = std::env::var("AEGIS_OPENAI_COMPAT_API_KEY").ok();
+                Box::new(
+                    crate::inference::backends::openai_compat::OpenAiCompatBackend::new(url, None),
+                )
+            }
+            InferenceProvider::OpenAiCompatible => {
+                let url = env::var("AEGIS_OPENAI_COMPAT_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:1234".to_string());
+                let api_key = env::var("AEGIS_OPENAI_COMPAT_API_KEY").ok();
                 Box::new(
                     crate::inference::backends::openai_compat::OpenAiCompatBackend::new(
                         url, api_key,
@@ -606,13 +677,34 @@ impl Orchestrator {
 
         let mut backend = self.inference.write().await;
         *backend = new_backend;
+        let available_models = backend.list_models().await.unwrap_or_default();
+        let next_model = provider_default_model(&provider, &available_models);
+        let warm_warning = if matches!(
+            provider,
+            InferenceProvider::Ollama | InferenceProvider::LmStudio
+        ) {
+            backend.warm_model(&next_model).await.err().map(|error| {
+                format!(
+                    "Provider switched to {}, but `{next_model}` could not be warmed yet: {error}",
+                    provider.as_str()
+                )
+            })
+        } else {
+            None
+        };
+        let previous_active_model = self.model_registry.set_active_model(&next_model);
+        if previous_active_model != previous_model {
+            tracing::debug!(
+                "Provider switch observed active model change race: expected previous `{previous_model}`, registry returned `{previous_active_model}`"
+            );
+        }
+        let _ = self.provider_registry.set_active_provider(provider.clone());
 
         // Refresh the context window for the new provider's active model
-        let active_model = self.model_registry.current_model_name();
-        if let Ok(window) = backend.context_window(&active_model).await {
+        if let Ok(window) = backend.context_window(&next_model).await {
             if let Some(real_window) = window {
                 self.model_registry
-                    .set_context_window(&active_model, real_window);
+                    .set_context_window(&next_model, real_window);
             }
         }
         drop(backend);
@@ -621,6 +713,10 @@ impl Orchestrator {
             previous_provider: current.as_str().to_string(),
             current_provider: provider.as_str().to_string(),
             changed: true,
+            previous_model,
+            current_model: next_model,
+            unload_warning,
+            warm_warning,
         })
     }
 
@@ -669,8 +765,23 @@ impl Orchestrator {
             anyhow::bail!("The requested model name cannot be empty.");
         }
 
+        let provider = self.provider_registry.current_provider();
+        let manages_model_lifecycle = matches!(
+            provider,
+            InferenceProvider::Ollama | InferenceProvider::LmStudio
+        );
         let current_model = self.model_registry.current_model_name();
         if current_model.eq_ignore_ascii_case(next_model) {
+            if manages_model_lifecycle {
+                self.inference
+                    .read()
+                    .await
+                    .warm_model(next_model)
+                    .await
+                    .with_context(|| {
+                        format!("Could not warm the already-active model `{next_model}`.")
+                    })?;
+            }
             return Ok(ModelSwitchOutcome {
                 previous_model: current_model.clone(),
                 current_model,
@@ -679,12 +790,65 @@ impl Orchestrator {
             });
         }
 
-        self.inference
-            .read()
-            .await
-            .warm_model(next_model)
-            .await
-            .with_context(|| format!("Could not warm the requested model `{next_model}`."))?;
+        if manages_model_lifecycle {
+            let provider_models = self
+                .inference
+                .read()
+                .await
+                .list_models()
+                .await
+                .unwrap_or_default();
+            let current_model_belongs_to_provider = provider_models
+                .iter()
+                .any(|model| model.eq_ignore_ascii_case(&current_model));
+            let unload_warning = if current_model_belongs_to_provider {
+                self.inference
+                    .read()
+                    .await
+                    .unload_model(&current_model)
+                    .await
+                    .err()
+                    .map(|error| {
+                        format!(
+                            "Could not unload `{current_model}` before switching; the new model was still selected. Details: {error}"
+                        )
+                    })
+            } else {
+                Some(format!(
+                    "`{current_model}` was not listed by the active provider, so AEGIS skipped unloading it and recovered the active model pointer."
+                ))
+            };
+
+            if let Err(error) = self.inference.read().await.warm_model(next_model).await {
+                let rollback = self.inference.read().await.warm_model(&current_model).await;
+                let rollback_note = match rollback {
+                    Ok(()) => format!(" `{current_model}` was warmed again and remains active."),
+                    Err(rollback_error) => format!(
+                        " `{current_model}` remains active in AEGIS, but could not be warmed again after the failed switch: {rollback_error}"
+                    ),
+                };
+                anyhow::bail!(
+                    "Could not warm the requested model `{next_model}` after unloading `{current_model}`: {error}.{rollback_note}"
+                );
+            }
+
+            let previous_model = self.model_registry.set_active_model(next_model);
+            if self.model_registry.current_context_window(next_model) == DEFAULT_CONTEXT_WINDOW {
+                if let Ok(window) = self.inference.read().await.context_window(next_model).await {
+                    if let Some(real_window) = window {
+                        self.model_registry
+                            .set_context_window(next_model, real_window);
+                    }
+                }
+            }
+
+            return Ok(ModelSwitchOutcome {
+                previous_model,
+                current_model: next_model.to_string(),
+                changed: true,
+                unload_warning,
+            });
+        }
 
         let previous_model = self.model_registry.set_active_model(next_model);
         // Refresh the cached context window for the newly activated model.
@@ -698,24 +862,11 @@ impl Orchestrator {
             }
         }
 
-        let unload_warning = match self
-            .inference
-            .read()
-            .await
-            .unload_model(&previous_model)
-            .await
-        {
-            Ok(()) => None,
-            Err(error) => Some(format!(
-                "Switched successfully, but could not unload `{previous_model}`: {error}"
-            )),
-        };
-
         Ok(ModelSwitchOutcome {
             previous_model,
             current_model: next_model.to_string(),
             changed: true,
-            unload_warning,
+            unload_warning: None,
         })
     }
 
@@ -779,7 +930,21 @@ impl Orchestrator {
         // Compact conversation history to fit within the model's context window.
         // Drops oldest turns first so the prompt never overshoots the budget.
         let context_window = ctx.model.context_window;
-        self.compactor.compact(&mut ctx, context_window);
+        if let Some(report) = self.compactor.compact(&mut ctx, context_window) {
+            ctx.trace_summary(
+                "context_compaction",
+                format!(
+                    "removed {} older turn(s), kept {} turn(s), estimated prompt history {} -> {} tokens",
+                    report.removed_turns,
+                    report.kept_turns,
+                    report.estimated_tokens_before,
+                    report.estimated_tokens_after
+                ),
+            );
+            if let Ok(json) = serde_json::to_string(&report) {
+                let _ = tx.send(format!("[CONTEXT_COMPACTED] {json}")).await;
+            }
+        }
 
         // Classify the request into a workflow so the orchestrator can
         // select the right system persona and decide which context sources
@@ -790,6 +955,24 @@ impl Orchestrator {
             req.mode.as_deref().unwrap_or("general"),
         );
         ctx.trace_summary("classify", &format!("{:?}", classification));
+
+        // Assemble user context once so reasoning and non-reasoning requests
+        // receive the same compacted history and persistent memories. The
+        // latest message remains separate and is the only input used for tool
+        // routing, preventing old turns or profile notes from triggering tools.
+        let persistent_memory = user_profile::build_memory_injection(&ctx.original_query);
+        if persistent_memory.is_empty() {
+            ctx.trace_summary("persistent_memory", "no long-term memory available");
+        } else {
+            ctx.trace_summary(
+                "persistent_memory",
+                format!(
+                    "selected {} long-term memory entries",
+                    persistent_memory.selected_count
+                ),
+            );
+        }
+        let reasoning_context = build_reasoning_context(&ctx.history, &persistent_memory);
 
         if req.attachments.is_empty() && crate::classifier::message_refers_to_document(&req.message)
         {
@@ -830,29 +1013,85 @@ impl Orchestrator {
         // Normal chat continues through the RAG/context path below.
         if req.reasoning_enabled
             || matches!(
-            classification,
-            crate::workflow::WorkflowId::CodeExplain
-                | crate::workflow::WorkflowId::CodeGenerate
-                | crate::workflow::WorkflowId::CodeDebug
-        ) {
-            let _ = tx
-                .send(format!(
-                    "[REASONING_EVENT] {}",
-                    serde_json::json!({
-                        "phase": "route",
-                        "title": if req.reasoning_enabled { "Deep reasoning enabled" } else { "Code task routed to reasoning" },
-                        "detail": "AEGIS will decide which tools are needed before answering."
-                    })
-                ))
-                .await;
+                classification,
+                crate::workflow::WorkflowId::CodeExplain
+                    | crate::workflow::WorkflowId::CodeGenerate
+                    | crate::workflow::WorkflowId::CodeDebug
+            )
+        {
+            let react_query = if !req.attachments.is_empty() && req.rag_enabled.unwrap_or(true) {
+                let rag_top_k = req.rag_top_k.unwrap_or(5);
+                let rag_threshold = req.rag_similarity_threshold.unwrap_or(0.0);
+                match self
+                    .rag_client
+                    .retrieve(
+                        &ctx.original_query,
+                        rag_top_k,
+                        rag_threshold,
+                        &working_session_id,
+                    )
+                    .await
+                {
+                    Ok(outcome) => {
+                        if let Ok(json) = serde_json::to_string(&outcome.metrics) {
+                            let _ = tx.send(format!("[RAG_METRICS] {json}")).await;
+                        }
+                        if !outcome.chunks.is_empty() {
+                            if let Ok(json) = serde_json::to_string(&outcome.chunks) {
+                                let _ = tx.send(format!("[RAG_SOURCES] {json}")).await;
+                            }
+                        }
+                        let context_from_docs = outcome
+                            .chunks
+                            .iter()
+                            .map(|chunk| {
+                                let filename = std::path::Path::new(&chunk.source)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or(&chunk.source);
+                                let meta = if let Some(page) = chunk.page {
+                                    format!("[Source: {filename}, Page: {page}]")
+                                } else {
+                                    format!("[Source: {filename}]")
+                                };
+                                format!("{meta}\n\"\"\"\n{}\n\"\"\"", chunk.text)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n\n---\n\n");
+                        if context_from_docs.is_empty() {
+                            format!(
+                                "{}\n\nActive imported documents are available, but retrieval found no matching chunks. Answer carefully and say when the documents do not contain enough context.",
+                                req.message
+                            )
+                        } else {
+                            format!(
+                                "Retrieved document context for this turn:\n\n{context_from_docs}\n\nUser request:\n{}",
+                                req.message
+                            )
+                        }
+                    }
+                    Err(error) => {
+                        anyhow::bail!(
+                            "Could not retrieve context from the current session's imported documents: {error}"
+                        );
+                    }
+                }
+            } else {
+                req.message.clone()
+            };
             let final_answer = ReactLoop::execute(
                 &self.inference,
                 &self.tool_registry,
                 &self.rag_client,
+                &react_query,
                 &req.message,
+                &reasoning_context,
                 &working_session_id,
                 &ctx.model.name,
                 req.code_project_path.as_deref(),
+                classification,
+                req.mode.as_deref().unwrap_or("general"),
+                !req.attachments.is_empty(),
                 tx.clone(),
             )
             .await?;
@@ -1190,18 +1429,9 @@ impl Orchestrator {
                 )
             }
         };
-        let persistent_memory = user_profile::build_memory_injection(&ctx.original_query);
         let synthesis_prompt = if persistent_memory.is_empty() {
-            ctx.trace_summary("persistent_memory", "no relevant long-term memory selected");
             synthesis_prompt
         } else {
-            ctx.trace_summary(
-                "persistent_memory",
-                &format!(
-                    "selected {} long-term memory entries",
-                    persistent_memory.selected_count
-                ),
-            );
             format!(
                 "{}\n\nUSER REQUEST CONTEXT:\n{synthesis_prompt}",
                 persistent_memory.render_prompt_section()
@@ -1292,5 +1522,86 @@ impl Orchestrator {
         }
 
         Ok(results)
+    }
+}
+
+fn build_reasoning_context(
+    history: &crate::context::ConversationHistory,
+    persistent_memory: &user_profile::MemoryInjection,
+) -> String {
+    let mut sections = Vec::new();
+    let history = format_history(history);
+    if history != "<empty>" {
+        sections.push(format!(
+            "PRIOR CONVERSATION (chronological; use it to resolve follow-up references):\n{history}"
+        ));
+    }
+    if !persistent_memory.is_empty() {
+        sections.push(persistent_memory.render_prompt_section());
+    }
+    sections.join("\n\n")
+}
+
+#[cfg(test)]
+mod reasoning_context_tests {
+    use super::*;
+    use crate::context::{ConversationHistory, Turn};
+    use chrono::Utc;
+
+    fn one_turn_history() -> ConversationHistory {
+        ConversationHistory {
+            turns: vec![Turn {
+                query: "Call me Sam for this conversation".to_string(),
+                response: "Hello Sam.".to_string(),
+                created_at: Utc::now(),
+                edited: false,
+                prompt_tokens: None,
+                completion_tokens: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn reasoning_context_contains_compacted_session_history() {
+        let context = build_reasoning_context(
+            &one_turn_history(),
+            &user_profile::MemoryInjection {
+                selected_count: 0,
+                rendered_context: String::new(),
+            },
+        );
+
+        assert!(context.contains("PRIOR CONVERSATION"));
+        assert!(context.contains("user: Call me Sam for this conversation"));
+        assert!(context.contains("assistant: Hello Sam."));
+    }
+
+    #[test]
+    fn reasoning_context_contains_saved_memory_with_history() {
+        let context = build_reasoning_context(
+            &one_turn_history(),
+            &user_profile::MemoryInjection {
+                selected_count: 1,
+                rendered_context: "- category: identity; priority: high; note: My name is Sam"
+                    .to_string(),
+            },
+        );
+
+        assert!(context.contains("PRIOR CONVERSATION"));
+        assert!(context.contains("SELECTED PERSISTENT MEMORY"));
+        assert!(context.contains("note: My name is Sam"));
+    }
+
+    #[test]
+    fn reasoning_context_is_empty_without_history_or_memory() {
+        let context = build_reasoning_context(
+            &ConversationHistory::empty(),
+            &user_profile::MemoryInjection {
+                selected_count: 0,
+                rendered_context: String::new(),
+            },
+        );
+
+        assert!(context.is_empty());
     }
 }

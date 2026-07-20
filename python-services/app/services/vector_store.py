@@ -109,23 +109,26 @@ class VectorStore:
             ids=[memory_id]
         )
 
-    def query(self, query_text: str, n_results: int, session_id: str) -> List[Dict[str, Any]]:
+    def query(self, query_text: str, n_results: int, session_id: Optional[str], scope: str = "session") -> List[Dict[str, Any]]:
         """
         Query only documents owned by the active AEGIS session.
         Returns list of dicts with 'document', 'metadata', and 'score'.
         """
         embedding = self.embedding_service.embed_query(query_text)
-        session_id = session_id.strip()
-        if not session_id:
+        session_id = (session_id or "").strip()
+        workspace_scope = scope == "workspace"
+        if not workspace_scope and not session_id:
             return []
 
         if self._use_chroma:
-            results = self.collection.query(
+            query_args = dict(
                 query_embeddings=[embedding],
                 n_results=n_results,
-                where={"session_id": session_id},
                 include=["documents", "metadatas", "distances"]
             )
+            if not workspace_scope:
+                query_args["where"] = {"session_id": session_id}
+            results = self.collection.query(**query_args)
             
             formatted_results = []
             if not results["documents"] or not results["documents"][0]:
@@ -146,7 +149,7 @@ class VectorStore:
                 
             return formatted_results
 
-        return self._json_query(embedding, n_results, session_id)
+        return self._json_query(embedding, n_results, session_id, workspace_scope)
 
     def delete_session_documents(self, session_id: str) -> int:
         """
@@ -225,6 +228,7 @@ class VectorStore:
         query_embedding: List[float],
         n_results: int,
         session_id: str,
+        workspace_scope: bool = False,
     ) -> List[Dict[str, Any]]:
         with self._lock:
             records = self._read_json_records()
@@ -232,7 +236,7 @@ class VectorStore:
         scored = []
         for record in records:
             metadata = record.get("metadata", {})
-            if metadata.get("session_id") != session_id:
+            if not workspace_scope and metadata.get("session_id") != session_id:
                 continue
 
             score = _cosine_similarity(query_embedding, record.get("embedding", []))

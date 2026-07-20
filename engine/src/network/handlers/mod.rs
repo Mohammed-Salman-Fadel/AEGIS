@@ -1,5 +1,6 @@
 pub mod calendar;
 pub mod chat;
+pub mod command_line;
 pub mod context;
 pub mod health;
 pub mod mcp;

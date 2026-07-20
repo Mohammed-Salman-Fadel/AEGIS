@@ -114,6 +114,8 @@ Return the step result only. Be concise and concrete."#,
 
 Use the conversation history, original user request, and executed workflow step results to produce the final answer.
 
+When the answer contains mathematical notation, typeset it as valid LaTeX using `$...$` for inline expressions and `$$...$$` for standalone equations, derivations, or matrices. Keep prose outside the delimiters, do not escape delimiter dollar signs, and do not place math in code fences.
+
 Runtime context:
 {}
 

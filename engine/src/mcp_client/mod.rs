@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -31,12 +32,25 @@ pub struct McpClient {
     stdin: Option<ChildStdin>,
     stdout_reader: Option<BufReader<ChildStdout>>,
     restart_count: u64,
+    working_directory: Option<PathBuf>,
 }
 
 // ── initialisation & health ──────────────────────────────────────────
 
 impl McpClient {
     pub fn new(command: &str, args: Vec<&str>) -> Self {
+        Self::new_with_working_directory(command, args, None)
+    }
+
+    pub fn new_in_directory(command: &str, args: Vec<&str>, directory: &str) -> Self {
+        Self::new_with_working_directory(command, args, Some(PathBuf::from(directory)))
+    }
+
+    fn new_with_working_directory(
+        command: &str,
+        args: Vec<&str>,
+        working_directory: Option<PathBuf>,
+    ) -> Self {
         Self {
             command: command.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
@@ -44,6 +58,7 @@ impl McpClient {
             stdin: None,
             stdout_reader: None,
             restart_count: 0,
+            working_directory,
         }
     }
 
@@ -92,8 +107,12 @@ impl McpClient {
         }
 
         info!("Starting MCP server: {} {:?}", self.command, self.args);
-        let mut child = Command::new(&self.command)
-            .args(&self.args)
+        let mut command = Command::new(&self.command);
+        command.args(&self.args).kill_on_drop(true);
+        if let Some(directory) = &self.working_directory {
+            command.current_dir(directory);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

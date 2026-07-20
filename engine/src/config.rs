@@ -1,4 +1,5 @@
 use std::env;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InferenceProvider {
@@ -22,9 +23,10 @@ impl InferenceProvider {
         match value.trim().to_lowercase().as_str() {
             "ollama" => Ok(Self::Ollama),
             "lmstudio" | "lm-studio" | "lm_studio" => Ok(Self::LmStudio),
-            "openai-compatible" | "openai_compatible" | "openai-compatible-api" => {
-                Ok(Self::OpenAiCompatible)
-            }
+            "openai-compatible"
+            | "openai_compatible"
+            | "openai-compatible-api"
+            | "openai-compat" => Ok(Self::OpenAiCompatible),
             unknown => anyhow::bail!(
                 "unsupported inference provider `{unknown}`; expected ollama, lmstudio, or openai-compatible"
             ),
@@ -64,9 +66,12 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> anyhow::Result<Self> {
-        let provider = InferenceProvider::from_env_value(
-            &env::var("AEGIS_INFERENCE_PROVIDER").unwrap_or_else(|_| "ollama".to_string()),
-        )?;
+        let provider = env::var("AEGIS_INFERENCE_PROVIDER")
+            .ok()
+            .map(|value| InferenceProvider::from_env_value(&value))
+            .transpose()?
+            .or_else(read_persisted_provider)
+            .unwrap_or(InferenceProvider::Ollama);
 
         Ok(Self {
             server: ServerConfig {
@@ -126,4 +131,32 @@ fn non_empty_env(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn aegis_data_dir() -> PathBuf {
+    env::var("AEGIS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                env::var("APPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("AEGIS")
+            } else {
+                env::var("XDG_DATA_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        env::var("HOME")
+                            .map(|home| PathBuf::from(home).join(".local/share"))
+                            .unwrap_or_else(|_| PathBuf::from("."))
+                    })
+                    .join("AEGIS")
+            }
+        })
+}
+
+fn read_persisted_provider() -> Option<InferenceProvider> {
+    std::fs::read_to_string(aegis_data_dir().join("active_provider.txt"))
+        .ok()
+        .and_then(|value| InferenceProvider::from_env_value(value.trim()).ok())
 }

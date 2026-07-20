@@ -1,5 +1,6 @@
 // Popup modal displaying all stored memory entries
 import { X, Brain } from 'lucide-react';
+import { useDialogA11y } from '../hooks/useDialogA11y';
 
 interface MemoriesPopupProps {
   isDark: boolean;
@@ -9,21 +10,28 @@ interface MemoriesPopupProps {
 }
 
 export function MemoriesPopup({ isDark, isOpen, memories, onClose }: MemoriesPopupProps) {
+  const dialogRef = useDialogA11y(isOpen, onClose);
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
+        aria-labelledby="memories-dialog-title"
+        aria-modal="true"
         className={`w-full max-w-2xl max-h-[70vh] flex flex-col rounded-2xl border shadow-2xl ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
         onClick={(e) => e.stopPropagation()}
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
       >
         <div className={`flex items-center justify-between px-6 py-4 border-b ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
-          <div className="flex items-center gap-2 text-base font-semibold">
+          <div className="flex items-center gap-2 text-base font-semibold" id="memories-dialog-title">
             <Brain size={18} />
             Stored Memories ({memories.length})
           </div>
           <button
             aria-label="Close memories"
+            data-dialog-initial-focus
             className={`rounded-md p-1 transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`}
             onClick={onClose}
             type="button"

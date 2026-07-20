@@ -1,9 +1,60 @@
 # AEGIS CLI
 
-The `src/cli` crate is the terminal control surface for AEGIS.
-This pass intentionally keeps the CLI as a **TODO-first scaffold**: it compiles, exposes the target
-command tree, prints friendly placeholder guidance, and documents how the CLI should connect to the
-Rust engine without pretending the backend is fully wired.
+## Coding Workflows
+
+The developer CLI treats a repository as a workspace, not as chat context. Inspection is offline and read-only:
+
+```powershell
+aegis code inspect --path D:\projects\my-app
+```
+
+Coding tasks use read-only model tools, then return a unified diff for local validation and review:
+
+```powershell
+# Default: validate the patch and ask before editing files.
+aegis code task "Fix the failing authentication tests" --path .
+
+# Explore and propose changes without touching the workspace.
+aegis code task "Explain and review the cache layer" --permission read-only
+
+# Apply a validated workspace-local patch without the final prompt.
+# This still rejects absolute paths, parent traversal, .git targets, and invalid patches.
+aegis code task "Add input validation" --permission workspace-write
+```
+
+After an approved patch, AEGIS displays detected verification commands and asks separately before running them. Model-authored shell commands are never executed as part of this flow.
+
+Each task follows and persists `Understand -> Explore -> Plan -> Request permission -> Edit -> Format -> Test -> Review`. Inspect the latest state or restore a guarded pre-edit snapshot without starting the model runtime:
+
+```powershell
+aegis code plan --path .
+aegis code checkpoints --path .
+aegis code restore <checkpoint-id> --path .
+```
+
+The repository index caches file metadata, symbols, documentation, configuration, tests, and recent Git history. Unchanged files are reused on later tasks, while only the most relevant excerpts enter the model context. Repository guidance is loaded from `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `CLAUDE.md`, `.aegis.md`, and local `.aegis` instruction files when present.
+
+### Developer commands
+
+```powershell
+aegis explain src/auth --path .
+aegis find "where sessions are persisted" --path .
+aegis fix "model switching fails" --path .
+aegis test --path .
+aegis review --path .
+```
+
+- `explain` uses repository-scoped read-only tools to trace files, symbols, callers, and imports.
+- `find` performs a fast offline text/symbol search and never starts the model runtime.
+- `fix` uses the same validated patch workflow as `code task`.
+- `test` selects checks from modified files and the nearest Cargo crate, Node package, or Python tests.
+- `review` evaluates current changes for bugs, regressions, security risks, and missing coverage.
+
+Coding tasks support `--quiet`, `--json`, `--diff-only`, `--explain`, `--reason`, and four permission modes: `read-only`, `ask-before-edit`, `workspace-write`, and `unattended-safe`. Unattended-safe requires a clean working tree, rejects deletion/rename/binary or oversized patches, requires affected checks, and rolls the patch back if verification fails.
+
+CLI capabilities can be enabled or disabled in the web UI under **Settings > Command Line**. The CLI reads that policy before every invocation. Disabling file editing or the agentic loop forces coding tasks into read-only mode; disabling command execution also disables automatic verification. Git boundary and dirty-worktree protections cannot be disabled.
+
+The `src/cli` crate is the terminal control surface for AEGIS. Coding workflows are connected to the local engine while repository discovery, indexing, patch validation, permission checks, checkpoints, and command execution remain enforced locally by the CLI.
 
 ## Current Direction
 

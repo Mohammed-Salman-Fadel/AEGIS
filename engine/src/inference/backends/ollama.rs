@@ -1,3 +1,4 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -131,7 +132,13 @@ impl InferenceBackend for OllamaBackend {
             .client
             .get(format!("{}/api/tags", self.base_url))
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "could not reach Ollama tags endpoint at {}/api/tags. Make sure Ollama is running, or switch AEGIS to LM Studio/OpenAI-compatible in Settings.",
+                    self.base_url
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -155,7 +162,13 @@ impl InferenceBackend for OllamaBackend {
         let response = self
             .generate_request(model, prompt, false, Some(KEEP_ALIVE_FOREVER))
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "could not reach Ollama generate endpoint at {}/api/generate for model `{model}`. Make sure Ollama is running, or switch AEGIS to LM Studio/OpenAI-compatible in Settings.",
+                    self.base_url
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -196,7 +209,13 @@ impl InferenceBackend for OllamaBackend {
         let response = self
             .generate_request(model, prompt, true, Some(KEEP_ALIVE_FOREVER))
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "could not reach Ollama streaming endpoint at {}/api/generate for model `{model}`. Make sure Ollama is running, or switch AEGIS to LM Studio/OpenAI-compatible in Settings.",
+                    self.base_url
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -258,7 +277,13 @@ impl InferenceBackend for OllamaBackend {
             .client
             .get(format!("{}/api/ps", self.base_url))
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "could not reach Ollama process endpoint at {}/api/ps while checking `{model}`",
+                    self.base_url
+                )
+            })?;
         if running_response.status().is_success() {
             let running = running_response.json::<OllamaPsResponse>().await?;
             if let Some(context_length) = running.models.into_iter().find_map(|running_model| {
@@ -278,7 +303,13 @@ impl InferenceBackend for OllamaBackend {
             .post(format!("{}/api/show", self.base_url))
             .json(&ShowRequest { model })
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "could not reach Ollama show endpoint at {}/api/show for model `{model}`",
+                    self.base_url
+                )
+            })?;
 
         let status = show_response.status();
         if !status.is_success() {
@@ -303,7 +334,13 @@ impl InferenceBackend for OllamaBackend {
         let response = self
             .generate_request(model, "", false, Some(KEEP_ALIVE_FOREVER))
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "could not reach Ollama warmup endpoint at {}/api/generate for model `{model}`. Make sure Ollama is running before warming this model.",
+                    self.base_url
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -323,7 +360,13 @@ impl InferenceBackend for OllamaBackend {
         let response = self
             .generate_request(model, "", false, Some(KEEP_ALIVE_UNLOAD))
             .send()
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "could not reach Ollama unload endpoint at {}/api/generate for model `{model}`",
+                    self.base_url
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {

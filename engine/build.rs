@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -19,6 +20,18 @@ fn main() {
         .join("frontend");
 
     let dist_dir = frontend_dir.join("dist");
+
+    // Make Rust recompile the embedded asset bundle when Vite writes a new
+    // index file (which carries the current hashed JS/CSS asset names).
+    println!("cargo:rerun-if-changed=../frontend/dist/");
+    let marker = fs::read_to_string(dist_dir.join("index.html")).unwrap_or_default();
+    let marker_path =
+        Path::new(&env::var("OUT_DIR").expect("OUT_DIR is set")).join("frontend_dist_marker.rs");
+    fs::write(
+        marker_path,
+        format!("const EMBEDDED_FRONTEND_MARKER: &str = {marker:?};\n"),
+    )
+    .expect("write embedded frontend marker");
 
     // If dist/ already exists, skip rebuild (saves time during iterative dev).
     // To force a rebuild, delete dist/ or set env FORCE_FRONTEND_BUILD=1.

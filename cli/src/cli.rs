@@ -8,7 +8,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::args::{
-    AskArgs, ChatArgs, InstallArgs, LogsArgs, OptionalNameArg, OptionalSessionIdArg, ReplArgs,
+    AskArgs, ChatArgs, CodeCheckpointArgs, CodeFindArgs, CodeQueryArgs, CodeTaskArgs, CodeTestArgs,
+    CodeWorkspaceArgs, InstallArgs, LogsArgs, OptionalNameArg, OptionalSessionIdArg, ReplArgs,
     RequiredSessionIdArg, SaveArgs, SearchArgs, SessionExportArgs, UpgradeArgs,
 };
 
@@ -28,6 +29,9 @@ Examples:
   aegis logs engine        (last 50 lines of engine)
   aegis logs rag -n 200    (last 200 lines of RAG)
   aegis chat \"What can you do?\"
+  aegis code inspect
+  aegis code task \"Fix the failing tests\" --path .
+  aegis code task \"Explain authentication\" --permission read-only
   aegis chat --attach notes.pdf \"Summarize this\"
   aegis load 1189578c-9c96-4b4c-8015-4d0673544a6a
   aegis repl
@@ -82,6 +86,21 @@ pub enum CommandKind {
     Upgrade(UpgradeArgs),
     Save(SaveArgs),
     Chat(ChatArgs),
+    /// Inspect repositories and perform permission-controlled coding tasks
+    Code {
+        #[command(subcommand)]
+        command: CodeCommand,
+    },
+    /// Explain a file, symbol, subsystem, or architecture question
+    Explain(CodeQueryArgs),
+    /// Find text or symbols across the current repository without starting the model
+    Find(CodeFindArgs),
+    /// Investigate and fix a coding problem with patch approval
+    Fix(CodeTaskArgs),
+    /// Run tests inferred from current working-tree changes
+    Test(CodeTestArgs),
+    /// Review current changes for bugs, regressions, and missing tests
+    Review(CodeQueryArgs),
     Load(RequiredSessionIdArg),
     Ask(AskArgs),
     Repl(ReplArgs),
@@ -102,6 +121,21 @@ pub enum CommandKind {
         #[arg(long, help = "Exit with a non-zero status when blocking issues remain")]
         strict: bool,
     },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum CodeCommand {
+    /// Show detected repository, language, Git, and build context
+    Inspect(CodeWorkspaceArgs),
+    /// Investigate a coding task and optionally apply a validated patch
+    #[command(alias = "run")]
+    Task(CodeTaskArgs),
+    /// Show the latest persisted task plan for this repository
+    Plan(CodeWorkspaceArgs),
+    /// List reversible checkpoints created before AEGIS edits
+    Checkpoints(CodeWorkspaceArgs),
+    /// Restore a checkpoint if no files changed after the AEGIS edit
+    Restore(CodeCheckpointArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]

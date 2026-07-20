@@ -18,7 +18,8 @@ struct IndexRequest {
 struct QueryRequest {
     query: String,
     top_k: usize,
-    session_id: String,
+    session_id: Option<String>,
+    scope: &'static str,
 }
 
 #[derive(Serialize)]
@@ -68,6 +69,7 @@ pub struct RetrievalChunk {
     pub score: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetrievalOutcome {
     pub chunks: Vec<RetrievalChunk>,
     pub metrics: RagMetrics,
@@ -147,7 +149,8 @@ impl RagClient {
             .json(&QueryRequest {
                 query: query.to_string(),
                 top_k: limit,
-                session_id: session_id.to_string(),
+                session_id: Some(session_id.to_string()),
+                scope: "session",
             })
             .send()
             .await?;
@@ -172,6 +175,44 @@ impl RagClient {
 
         Ok(RetrievalOutcome {
             chunks: filtered_chunks,
+            metrics: result.metrics,
+        })
+    }
+
+    pub async fn search_workspace(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<RetrievalOutcome> {
+        self.init().await?;
+        let response = self
+            .client
+            .post(format!("{}/query", self.base_url))
+            .json(&QueryRequest {
+                query: query.to_string(),
+                top_k: limit.clamp(1, 50),
+                session_id: None,
+                scope: "workspace",
+            })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Workspace search failed with HTTP {status}: {body}");
+        }
+        let result: QueryResponse = response.json().await?;
+        Ok(RetrievalOutcome {
+            chunks: result
+                .results
+                .into_iter()
+                .map(|item| RetrievalChunk {
+                    text: item.text,
+                    source: item.source,
+                    page: item.page,
+                    score: item.score,
+                })
+                .collect(),
             metrics: result.metrics,
         })
     }

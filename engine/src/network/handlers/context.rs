@@ -28,6 +28,37 @@ pub struct ContextUsageResponse {
     usage_source: String,
 }
 
+#[derive(Deserialize)]
+pub struct WorkspaceSearchRequest {
+    query: String,
+    #[serde(default = "default_search_limit")]
+    limit: usize,
+}
+
+fn default_search_limit() -> usize {
+    8
+}
+
+pub async fn search_workspace(
+    State(state): State<AppState>,
+    Json(request): Json<WorkspaceSearchRequest>,
+) -> Result<Json<crate::rag_client::RetrievalOutcome>, (StatusCode, String)> {
+    let query = request.query.trim();
+    if query.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Search query cannot be empty.".to_string(),
+        ));
+    }
+    state
+        .orchestrator
+        .rag_client
+        .search_workspace(query, request.limit)
+        .await
+        .map(Json)
+        .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))
+}
+
 pub async fn usage(
     State(state): State<AppState>,
     Query(query): Query<ContextUsageQuery>,

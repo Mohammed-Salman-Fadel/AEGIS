@@ -8,7 +8,10 @@
 mod args;
 mod banner;
 mod cli;
+mod coding;
+mod command_line;
 mod commands;
+mod developer_agent;
 mod doctor;
 mod engine_client;
 mod install;
@@ -71,7 +74,21 @@ fn main() {
     // - Rust engine on 127.0.0.1:8080
     // - Vite Web UI on the configured localhost UI port
     // This is intentionally best-effort so commands can still explain what is missing.
-    runner::ensure_local_runtime(&ctx.ui, &ctx.workspace);
+    if should_start_local_runtime(cli.command.as_ref()) {
+        let startup_message = if ctx.workspace.root.join(".git").exists()
+            && ctx.workspace.engine_manifest().exists()
+        {
+            "Starting AEGIS services (source engine may compile on first launch)"
+        } else {
+            "Starting AEGIS services"
+        };
+        let startup = ctx.ui.start_loading_animation(startup_message);
+        let report = runner::ensure_local_runtime_quiet(&ctx.ui, &ctx.workspace);
+        startup.finish();
+        if !command_requests_json(cli.command.as_ref()) {
+            runner::render_runtime_start_report(&ctx.ui, &report);
+        }
+    }
 
     if should_warm_active_model(cli.command.as_ref()) {
         let loading = ctx.ui.start_loading_animation("Warming active model");
@@ -111,6 +128,12 @@ fn should_warm_active_model(command: Option<&CommandKind>) -> bool {
         command,
         None | Some(CommandKind::Chat(_))
             | Some(CommandKind::Ask(_))
+            | Some(CommandKind::Code {
+                command: crate::cli::CodeCommand::Task(_)
+            })
+            | Some(CommandKind::Explain(_))
+            | Some(CommandKind::Fix(_))
+            | Some(CommandKind::Review(_))
             | Some(CommandKind::Repl(_))
             | Some(CommandKind::Load(_))
             | Some(CommandKind::Session {
@@ -120,6 +143,31 @@ fn should_warm_active_model(command: Option<&CommandKind>) -> bool {
                 command: SessionCommand::Use(_)
             })
     )
+}
+
+fn should_start_local_runtime(command: Option<&CommandKind>) -> bool {
+    !matches!(
+        command,
+        Some(CommandKind::Code {
+            command: crate::cli::CodeCommand::Inspect(_)
+        }) | Some(CommandKind::Code {
+            command: crate::cli::CodeCommand::Plan(_)
+        }) | Some(CommandKind::Code {
+            command: crate::cli::CodeCommand::Checkpoints(_)
+        }) | Some(CommandKind::Code {
+            command: crate::cli::CodeCommand::Restore(_)
+        }) | Some(CommandKind::Find(_))
+            | Some(CommandKind::Test(_))
+            | Some(CommandKind::Version)
+    )
+}
+
+fn command_requests_json(command: Option<&CommandKind>) -> bool {
+    matches!(command, Some(CommandKind::Fix(args)) if args.json)
+        || matches!(command, Some(CommandKind::Explain(args) | CommandKind::Review(args)) if args.json)
+        || matches!(command, Some(CommandKind::Find(args)) if args.json)
+        || matches!(command, Some(CommandKind::Test(args)) if args.json)
+        || matches!(command, Some(CommandKind::Code { command: crate::cli::CodeCommand::Task(args) }) if args.json)
 }
 
 #[cfg(test)]
@@ -135,6 +183,7 @@ mod tests {
                 prompt: "hello".to_string(),
                 session_id: None,
                 attachments: Vec::new(),
+                copy: false,
             }
         ))));
     }
@@ -142,6 +191,14 @@ mod tests {
     #[test]
     fn open_handles_model_readiness_without_prefailing() {
         assert!(!should_warm_active_model(Some(&CommandKind::Open)));
+    }
+
+    #[test]
+    fn repository_inspection_is_offline() {
+        use crate::args::CodeWorkspaceArgs;
+        assert!(!should_start_local_runtime(Some(&CommandKind::Code {
+            command: crate::cli::CodeCommand::Inspect(CodeWorkspaceArgs { path: ".".into() }),
+        })));
     }
 
     #[test]

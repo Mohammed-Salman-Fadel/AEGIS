@@ -7,10 +7,10 @@ import { ThinkingIndicator } from './ThinkingIndicator';
 function MarkdownHeading({ level, text }: { level: MarkdownHeadingLevel; text: string }) {
   const className =
     level === 1
-      ? 'mt-1 text-[1.08rem] font-normal leading-7 tracking-[-0.01em] first:mt-0'
+      ? 'aegis-display mt-1 text-[1.08rem] font-semibold leading-7 tracking-[-0.02em] first:mt-0'
       : level === 2
-        ? 'mt-3 text-[1.02rem] font-normal leading-7 tracking-[-0.01em] first:mt-0'
-        : 'mt-3 text-[0.96rem] font-normal leading-6 tracking-[-0.005em] first:mt-0';
+        ? 'aegis-display mt-4 text-[1.02rem] font-semibold leading-7 tracking-[-0.018em] first:mt-0'
+        : 'aegis-display mt-3 text-[0.96rem] font-semibold leading-6 tracking-[-0.015em] first:mt-0';
 
   if (level === 1) return <h3 className={className}>{renderInlineMarkdown(text)}</h3>;
   if (level === 2) return <h4 className={className}>{renderInlineMarkdown(text)}</h4>;
@@ -26,14 +26,14 @@ export function AssistantMarkdown({ content, isDark, vaultPath, noteDir }: { con
   }
 
   return (
-    <div className="space-y-3">
+    <div className="aegis-prose space-y-3.5">
       {blocks.map((block, blockIndex) => {
         if (block.type === 'heading') {
           return <MarkdownHeading key={`heading-${blockIndex}`} level={block.level} text={block.text} />;
         }
         if (block.type === 'ordered') {
           return (
-            <ol className="list-decimal space-y-1 pl-5" key={`ol-${blockIndex}`}>
+            <ol className="list-decimal space-y-1.5 pl-5" key={`ol-${blockIndex}`}>
               {block.items.map((item, itemIndex) => (
                 <li key={`${blockIndex}-${itemIndex}`}>{inline(item)}</li>
               ))}
@@ -42,7 +42,7 @@ export function AssistantMarkdown({ content, isDark, vaultPath, noteDir }: { con
         }
         if (block.type === 'unordered') {
           return (
-            <ul className="list-disc space-y-1 pl-5" key={`ul-${blockIndex}`}>
+            <ul className="list-disc space-y-1.5 pl-5" key={`ul-${blockIndex}`}>
               {block.items.map((item, itemIndex) => (
                 <li key={`${blockIndex}-${itemIndex}`}>{inline(item)}</li>
               ))}

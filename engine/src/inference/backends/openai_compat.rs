@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::inference::InferenceBackend;
@@ -41,8 +42,12 @@ impl OpenAiCompatBackend {
         }
     }
 
-    fn models_url(&self) -> String {
-        format!("{}/v1/models", self.base_url)
+    fn models_urls(&self) -> [String; 3] {
+        [
+            format!("{}/v1/models", self.base_url),
+            format!("{}/api/v0/models", self.base_url),
+            format!("{}/api/v1/models", self.base_url),
+        ]
     }
 
     fn model_management_url(&self, path: &str) -> String {
@@ -183,33 +188,46 @@ struct ModelData {
     id: String,
 }
 
-#[derive(Serialize)]
-struct LmStudioModelActionRequest<'a> {
-    model: &'a str,
-}
-
 #[async_trait]
 impl InferenceBackend for OpenAiCompatBackend {
     async fn list_models(&self) -> anyhow::Result<Vec<String>> {
-        let mut builder = self
-            .client
-            .get(self.models_url())
-            .header(CONTENT_TYPE, "application/json");
+        let mut last_error: Option<anyhow::Error> = None;
 
-        if let Some(api_key) = &self.api_key {
-            builder = builder.header(AUTHORIZATION, format!("Bearer {api_key}"));
+        for url in self.models_urls() {
+            let mut builder = self
+                .client
+                .get(&url)
+                .header(CONTENT_TYPE, "application/json")
+                .timeout(Duration::from_secs(5));
+
+            if let Some(api_key) = &self.api_key {
+                builder = builder.header(AUTHORIZATION, format!("Bearer {api_key}"));
+            }
+
+            let response = match builder.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = Some(error.into());
+                    continue;
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                last_error = Some(anyhow::anyhow!(
+                    "openai-compatible models error {status}: {body}"
+                ));
+                continue;
+            }
+
+            match response.json::<ModelListResponse>().await {
+                Ok(response) => return Ok(response.data.into_iter().map(|m| m.id).collect()),
+                Err(error) => last_error = Some(error.into()),
+            }
         }
 
-        let response = builder.send().await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("openai-compatible models error {status}: {body}");
-        }
-
-        let response = response.json::<ModelListResponse>().await?;
-        Ok(response.data.into_iter().map(|m| m.id).collect())
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("provider returned no model list")))
     }
 
     async fn call(&self, prompt: &str, model: &str) -> anyhow::Result<String> {
@@ -306,19 +324,41 @@ impl InferenceBackend for OpenAiCompatBackend {
     }
 
     async fn warm_model(&self, model: &str) -> anyhow::Result<()> {
-        self.post_model_management_variants(
-            &["/api/v1/models/load", "/api/v0/models/load"],
-            "LM Studio load",
-            model,
-        )
-        .await
+        if let Err(error) = self
+            .post_model_management_variants(
+                &[
+                    "/api/v1/models/load",
+                    "/api/v0/models/load",
+                    "/api/v1/model/load",
+                    "/api/v0/model/load",
+                ],
+                model,
+                "LM Studio load",
+            )
+            .await
+        {
+            tracing::warn!(
+                "LM Studio management load for `{model}` failed, falling back to chat warmup: {error}"
+            );
+        }
+
+        // LM Studio may expose a load endpoint but still delay GPU/CPU
+        // residency until the first completion. Pay that cost during model
+        // switch, not on the user's first prompt.
+        let _ = self.call("warm up", model).await?;
+        Ok(())
     }
 
     async fn unload_model(&self, model: &str) -> anyhow::Result<()> {
         self.post_model_management_variants(
-            &["/api/v1/models/unload", "/api/v0/models/unload"],
-            "LM Studio unload",
+            &[
+                "/api/v1/models/unload",
+                "/api/v0/models/unload",
+                "/api/v1/model/unload",
+                "/api/v0/model/unload",
+            ],
             model,
+            "LM Studio unload",
         )
         .await
     }

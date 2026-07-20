@@ -5,13 +5,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   PanelLeftClose, PanelLeftOpen, Sun, Moon, Settings, X,
-  Bot, Cpu as CpuIcon, GraduationCap, Activity,
+  Bot, Cpu as CpuIcon, GraduationCap, Activity, TerminalSquare, LoaderCircle, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 
 // Types
 import type {
-  ThemeMode, AppearanceTheme, SettingsTab, ResponseStyle,
-  Message, RetrievalChunk, ChatMode, EngineSessionSummary,
+  ThemeMode, AppearanceTheme, SettingsTab, ResponseStyle, CommandLineSettings,
+  Message, RetrievalChunk, ReasoningEvent, ContextCompactionEvent, ChatMode, EngineSessionSummary,
   EngineSession, EngineSessionsResponse, EngineTurn,
   ModelResponse, ProviderResponse, ModelListResponse,
   ProviderListResponse, ProfileResponse, ModelDownloadState,
@@ -28,7 +28,7 @@ import {
   INDEXED_DOCUMENTS_STORAGE_KEY, PINNED_SESSIONS_STORAGE_KEY,
   RESPONSE_STYLE_STORAGE_KEY, VOICE_LOW_RAM_MODE_STORAGE_KEY,
   VOICE_TTS_ENABLED_STORAGE_KEY, RAG_ENABLED_STORAGE_KEY,
-  RAG_TOP_K_STORAGE_KEY, RAG_THRESHOLD_STORAGE_KEY, LANGUAGE_STORAGE_KEY,
+  RAG_TOP_K_STORAGE_KEY, RAG_THRESHOLD_STORAGE_KEY, REASONING_ENABLED_STORAGE_KEY, LANGUAGE_STORAGE_KEY,
   OBSIDIAN_VAULT_PATH_KEY, OBSIDIAN_ENABLED_KEY,
   OLLAMA_MODEL_CATALOG, EMPTY_CONTEXT_USAGE,
 } from './constants';
@@ -54,10 +54,12 @@ import {
 // Components
 import { Sidebar } from './components/Sidebar';
 import { MessageBubble } from './components/MessageBubble';
+import { PromptCheckpoints } from './components/PromptCheckpoints';
 import { Composer } from './components/Composer';
 import { SettingsPanel } from './components/SettingsPanel';
 import { CalendarModal } from './components/CalendarModal';
 import { MetricsSidebar } from './components/MetricsSidebar';
+import { TerminalSidebar } from './components/TerminalSidebar';
 import { VoiceModeOverlay } from './components/VoiceModeOverlay';
 import { ProjectPermissionModal } from './components/ProjectPermissionModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
@@ -73,6 +75,151 @@ declare global {
     showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
   }
 }
+
+const DEFAULT_COMMAND_LINE_SETTINGS: CommandLineSettings = {
+  agentic_loop: true,
+  repository_detection: true,
+  repository_instructions: true,
+  semantic_index: true,
+  persistent_task_plan: true,
+  task_checkpoints: true,
+  context_budgeting: true,
+  patch_application: true,
+  command_execution: true,
+  automatic_verification: true,
+  deep_reasoning: false,
+  git_safety: true,
+};
+
+type ErrorToastCopy = {
+  title: string;
+  description: string;
+  action: string;
+};
+
+type WarningToastCopy = {
+  title: string;
+  description: string;
+  action: string;
+};
+
+type SettingsToastCopy = {
+  title: string;
+  description: string;
+  action: string;
+  tone: 'success' | 'warning' | 'error' | 'info';
+};
+
+type ContextCompactionToastCopy = {
+  title: string;
+  description: string;
+  action: string;
+};
+
+type ModelSwitchNotice = {
+  from: string;
+  to: string;
+  state: 'loading' | 'success' | 'error';
+  error?: string;
+};
+
+const compactErrorText = (message: string): string => {
+  const cleaned = message.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return 'Something went wrong while AEGIS was working.';
+  const firstSentence = cleaned.match(/.*?(?:[.!?](?:\s|$)|$)/)?.[0]?.trim() || cleaned;
+  return firstSentence.length > 132 ? `${firstSentence.slice(0, 129).trim()}...` : firstSentence;
+};
+
+const errorToastCopy = (message: string, status: string): ErrorToastCopy => {
+  const lower = message.toLowerCase();
+  const statusLooksLikeError = /failed|unavailable|incomplete|error|could not/i.test(status);
+  let title = statusLooksLikeError ? status : 'AEGIS needs attention';
+  let action = 'Try again. If it repeats, check the engine logs or restart AEGIS services.';
+
+  if (lower.includes('engine') || lower.includes('127.0.0.1') || lower.includes('localhost')) {
+    title = statusLooksLikeError ? status : 'Engine connection issue';
+    action = 'Make sure the local engine is running, then retry the action.';
+  } else if (lower.includes('permission') || lower.includes('denied') || lower.includes('read-only') || lower.includes('readonly')) {
+    title = statusLooksLikeError ? status : 'Permission needed';
+    action = 'Grant the requested access or reopen the project with edit permission.';
+  } else if (lower.includes('model')) {
+    title = statusLooksLikeError ? status : 'Model action failed';
+    action = 'Check that the provider is running and the selected model is installed.';
+  } else if (lower.includes('unsupported file')) {
+    title = 'Unsupported file';
+    action = 'Use a supported PDF or TXT file, then upload again.';
+  } else if (lower.includes('calendar') || lower.includes('outlook')) {
+    title = statusLooksLikeError ? status : 'Calendar action failed';
+    action = 'Reconnect or reselect your calendar, then retry.';
+  } else if (lower.includes('session')) {
+    title = statusLooksLikeError ? status : 'Session action failed';
+    action = 'Refresh sessions or start a new chat if this session cannot be loaded.';
+  }
+
+  return {
+    title,
+    description: compactErrorText(message),
+    action,
+  };
+};
+
+const settingsToastCopy = (message: string): SettingsToastCopy => {
+  const lower = message.toLowerCase();
+  const isError = /could not|failed|error|unavailable|denied|cancelled|only|invalid/i.test(message);
+  const isLoading = /loading|downloading|starting|pausing|switching/i.test(message);
+  const isWarning = /cancelled|paused|warning|careful/i.test(message);
+  let title = isError ? 'Settings action failed' : isLoading ? 'Settings update in progress' : 'Settings updated';
+  let action = isError ? 'Check the selected provider or model, then try again.' : isLoading ? 'You can keep working while AEGIS finishes this action.' : 'No action needed.';
+
+  if (lower.includes('provider')) {
+    title = isError ? 'Provider switch failed' : 'Provider switched';
+    action = isError ? 'Make sure the provider is running, then switch again.' : 'AEGIS will use this provider for new model actions.';
+  } else if (lower.includes('model') || lower.includes('memory')) {
+    title = isError ? 'Model action failed' : isLoading ? 'Loading model' : 'Model ready';
+    action = isError ? 'Confirm the model is installed and the provider is reachable.' : 'The selected model is ready for use.';
+  } else if (lower.includes('download')) {
+    title = isError ? 'Download failed' : isLoading ? 'Model download started' : 'Download updated';
+    action = isError ? 'Check provider connectivity and available disk space.' : 'You can monitor progress in Settings.';
+  } else if (lower.includes('memories') || lower.includes('memory added') || lower.includes('profile')) {
+    title = isError ? 'Memory save failed' : 'Memory updated';
+    action = isError ? 'Try saving again after the engine is reachable.' : 'AEGIS will include this preference in future context.';
+  }
+
+  return {
+    title,
+    description: compactErrorText(message),
+    action,
+    tone: isError ? 'error' : isWarning ? 'warning' : isLoading ? 'info' : 'success',
+  };
+};
+
+const contextCompactionToastCopy = (event: ContextCompactionEvent): ContextCompactionToastCopy => {
+  const before = Math.max(0, Math.round(event.estimated_tokens_before));
+  const after = Math.max(0, Math.round(event.estimated_tokens_after));
+  return {
+    title: 'Context automatically compacted',
+    description: `AEGIS trimmed ${event.removed_turns} older turn${event.removed_turns === 1 ? '' : 's'} from the model prompt (${before.toLocaleString()} -> ${after.toLocaleString()} estimated tokens).`,
+    action: 'No action needed. Your full visible chat history is still saved.',
+  };
+};
+
+const resourceWarningToastCopy = (cpu: number, ram: number): WarningToastCopy | null => {
+  const cpuHigh = cpu > 80;
+  const ramHigh = ram > 80;
+  if (!cpuHigh && !ramHigh) return null;
+
+  const resourceLabel = cpuHigh && ramHigh ? 'CPU and RAM' : cpuHigh ? 'CPU' : 'RAM';
+  const readings = [
+    cpuHigh ? `CPU ${Math.round(cpu)}%` : null,
+    ramHigh ? `RAM ${Math.round(ram)}%` : null,
+  ].filter(Boolean).join(', ');
+
+  return {
+    title: `${resourceLabel} usage is high`,
+    description: readings ? `${readings}. AEGIS may respond more slowly while your machine is under load.` : 'Your machine is under heavy load.',
+    action: 'Close unused apps, switch to a smaller model, or wait for the current task to finish.',
+  };
+};
 
 export default function App() {
   const [sessions, setSessions] = useState<EngineSessionSummary[]>([]);
@@ -111,6 +258,10 @@ export default function App() {
   const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(loadStoredTtsEnabled);
   const [isVoiceLowRamMode, setIsVoiceLowRamMode] = useState<boolean>(loadStoredVoiceLowRamMode);
   const [isRagEnabled, setIsRagEnabled] = useState<boolean>(loadStoredRagEnabled);
+  const [reasoningEnabled, setReasoningEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(REASONING_ENABLED_STORAGE_KEY) === 'true';
+  });
   const [ragTopK, setRagTopK] = useState<number>(loadStoredRagTopK);
   const [ragSimilarityThreshold, setRagSimilarityThreshold] = useState<number>(loadStoredRagThreshold);
   const [selectedMessageSources, setSelectedMessageSources] = useState<RetrievalChunk[] | null>(null);
@@ -148,6 +299,7 @@ export default function App() {
   const [settingsClosing, setSettingsClosing] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [contextCompactionEvent, setContextCompactionEvent] = useState<ContextCompactionEvent | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelResponse[]>([]);
   const [availableProviders, setAvailableProviders] = useState<ProviderResponse[]>([]);
@@ -155,6 +307,10 @@ export default function App() {
   const [selectedModelProviderTag, setSelectedModelProviderTag] = useState('All');
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [modelSwitching, setModelSwitching] = useState(false);
+  const [modelSwitchNotice, setModelSwitchNotice] = useState<ModelSwitchNotice | null>(null);
+  const [providerSwitching, setProviderSwitching] = useState(false);
+  const [commandLineSettings, setCommandLineSettings] = useState<CommandLineSettings>(DEFAULT_COMMAND_LINE_SETTINGS);
+  const [commandLineSaving, setCommandLineSaving] = useState(false);
   const [pausedModelDownload, setPausedModelDownload] = useState<string | null>(null);
   const [modelDownloadState, setModelDownloadState] = useState<ModelDownloadState>('idle');
   const [modelDownloadProgress, setModelDownloadProgress] = useState(0);
@@ -196,6 +352,7 @@ export default function App() {
   const [editingTitle, setEditingTitle] = useState('');
   const [deletingSessionIds, setDeletingSessionIds] = useState<string[]>([]);
   const [isMetricsOpen, setIsMetricsOpen] = useState(false);
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [newSessionPulseId, setNewSessionPulseId] = useState<string | null>(null);
   const [inferenceStats, setInferenceStats] = useState<InferenceStats>({
     latency: 0, tps: 0, ttft: 0, ragTime: 0, similarity: 0, chunks: 0, backend: '---',
@@ -204,10 +361,15 @@ export default function App() {
   const [sessionMenuOpenId, setSessionMenuOpenId] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>('general');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const isNearLatestRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageFileInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const modelDownloadAbortRef = useRef<AbortController | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const sessionLoadAbortRef = useRef<AbortController | null>(null);
+  const sessionLoadRequestRef = useRef(0);
   const modelDownloadAbortReasonRef = useRef<'pause' | 'cancel' | null>(null);
   const settingsCloseTimeoutRef = useRef<number | null>(null);
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
@@ -224,7 +386,11 @@ export default function App() {
     ? `${[systemStats.cpu > 80 ? 'CPU' : null, systemStats.ram > 80 ? 'RAM' : null].filter(Boolean).join(' and ')} ${systemStats.cpu > 80 && systemStats.ram > 80 ? 'are' : 'is'} almost at full capacity.`
     : null;
   const visibleResourceWarning = resourceWarning && resourceWarning !== dismissedResourceWarning ? resourceWarning : null;
+  const activeResourceToast = visibleResourceWarning ? resourceWarningToastCopy(systemStats.cpu, systemStats.ram) : null;
   const errorDismissible = error ? !isFatalUiError(error) : false;
+  const activeErrorToast = error ? errorToastCopy(error, status) : null;
+  const activeSettingsToast = settingsMessage ? settingsToastCopy(settingsMessage) : null;
+  const activeContextCompactionToast = contextCompactionEvent ? contextCompactionToastCopy(contextCompactionEvent) : null;
   const tokenMeterLabel = formatTokenMeter(contextUsage);
   const showCenteredComposer = !activeSessionId && messages.length === 0;
   const activeProvider = availableProviders.find((p) => p.active);
@@ -271,11 +437,19 @@ export default function App() {
   }, []);
 
   const loadSession = useCallback(async (sessionId: string) => {
+    sessionLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    sessionLoadAbortRef.current = controller;
+    const requestId = ++sessionLoadRequestRef.current;
     setError(null);
     setStatus(t('status.loading_session'));
-    const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}`);
+    activeSessionIdRef.current = sessionId;
+    setActiveSessionId(sessionId);
+    setMessages([]);
+    const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}`, { signal: controller.signal });
     if (!res.ok) throw new Error(engineErr('engine.session_load', res.status));
     const session = (await res.json()) as EngineSession;
+    if (requestId !== sessionLoadRequestRef.current || controller.signal.aborted) return;
     activeSessionIdRef.current = session.session_id;
     setActiveSessionId(session.session_id);
     setMessages(turnsToMessages(session.history.turns, session.session_id));
@@ -286,15 +460,40 @@ export default function App() {
     setSettingsLoading(true);
     setSettingsMessage(null);
     try {
-      const [modelsRes, providersRes, profileRes] = await Promise.allSettled([
+      const [modelsRes, providersRes, profileRes, commandLineRes] = await Promise.allSettled([
         fetch(`${API_BASE}/models`), fetch(`${API_BASE}/providers`), fetch(`${API_BASE}/profile`),
+        fetch(`${API_BASE}/settings/command-line`),
       ]);
-      if (modelsRes.status === 'fulfilled' && modelsRes.value.ok) setAvailableModels(((await modelsRes.value.json()) as ModelListResponse).models);
+      if (modelsRes.status === 'fulfilled') {
+        if (modelsRes.value.ok) {
+          const modelPayload = (await modelsRes.value.json()) as ModelListResponse;
+          const models = modelPayload.models.length > 0 || modelPayload.provider.toLowerCase() !== 'ollama'
+            ? modelPayload.models
+            : [{
+              name: 'llama3.2:latest',
+              description: 'Default Ollama model. Start Ollama or pull this model to verify availability.',
+              active: true,
+              status: 'degraded' as const,
+              provider: 'ollama',
+              supports_managed_download: true,
+            }];
+          setAvailableModels(models);
+          if (modelPayload.warning) setSettingsMessage(modelPayload.warning);
+        } else {
+          const detail = await modelsRes.value.text();
+          setSettingsMessage(detail || engineErr('engine.models_load', modelsRes.value.status));
+        }
+      } else {
+        setSettingsMessage(t('error.could_not_load_settings'));
+      }
       if (providersRes.status === 'fulfilled' && providersRes.value.ok) setAvailableProviders(((await providersRes.value.json()) as ProviderListResponse).providers);
       if (profileRes.status === 'fulfilled' && profileRes.value.ok) {
         const data = (await profileRes.value.json()) as ProfileResponse;
         setProfileText(data.contents);
         setProfilePath(data.path);
+      }
+      if (commandLineRes.status === 'fulfilled' && commandLineRes.value.ok) {
+        setCommandLineSettings((await commandLineRes.value.json()) as CommandLineSettings);
       }
     } catch (e) {
       setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_load_settings'));
@@ -320,6 +519,39 @@ export default function App() {
 
   useEffect(() => { if (settingsOpen) void loadSettingsData(); }, [loadSettingsData, settingsOpen]);
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
+
+  useEffect(() => {
+    const closeTransientMenus = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSessionMenuOpenId(null);
+    };
+    document.addEventListener('keydown', closeTransientMenus);
+    return () => document.removeEventListener('keydown', closeTransientMenus);
+  }, []);
+
+  useEffect(() => {
+    if (!settingsMessage) return;
+    const id = window.setTimeout(() => setSettingsMessage(null), 3000);
+    return () => window.clearTimeout(id);
+  }, [settingsMessage]);
+
+  useEffect(() => {
+    if (!modelSwitchNotice || modelSwitchNotice.state === 'loading') return;
+    const id = window.setTimeout(() => setModelSwitchNotice(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [modelSwitchNotice]);
+
+  useEffect(() => {
+    if (!contextCompactionEvent) return;
+    const id = window.setTimeout(() => setContextCompactionEvent(null), 3000);
+    return () => window.clearTimeout(id);
+  }, [contextCompactionEvent]);
+
+  useEffect(() => {
+    if (!visibleResourceWarning) return;
+    const warning = visibleResourceWarning;
+    const id = window.setTimeout(() => setDismissedResourceWarning(warning), 3000);
+    return () => window.clearTimeout(id);
+  }, [visibleResourceWarning]);
 
   useEffect(() => {
     let cancelled = false;
@@ -423,7 +655,29 @@ export default function App() {
     window.localStorage.setItem(INDEXED_DOCUMENTS_STORAGE_KEY, JSON.stringify(indexedDocumentsBySession));
   }, [indexedDocumentsBySession]);
 
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, isStreaming]);
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    if (!isNearLatestRef.current) { setShowJumpToLatest(true); return; }
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    container.scrollTo({ top: container.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+  }, [messages, isStreaming]);
+
+  const handleMessageScroll = () => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const nearLatest = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    isNearLatestRef.current = nearLatest;
+    if (nearLatest) setShowJumpToLatest(false);
+  };
+
+  const jumpToLatest = () => {
+    const container = scrollRef.current;
+    if (!container) return;
+    isNearLatestRef.current = true;
+    setShowJumpToLatest(false);
+    container.scrollTo({ top: container.scrollHeight, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  };
   useEffect(() => { if (composerTextareaRef.current) fitTextareaToContent(composerTextareaRef.current); }, [input]);
 
   useEffect(() => {
@@ -482,6 +736,7 @@ export default function App() {
 
   const handleSessionSelect = async (sessionId: string) => {
     if (deletingSessionIds.includes(sessionId)) return;
+    if (window.matchMedia?.('(max-width: 767px)').matches) setSidebarOpen(false);
     if (activeProjectId && projectSessionIds.get(activeProjectId) !== sessionId) {
       setActiveProjectId(null);
     }
@@ -493,7 +748,13 @@ export default function App() {
       const msgs = streamingMessagesBySession[sessionId];
       if (msgs) { activeSessionIdRef.current = sessionId; setActiveSessionId(sessionId); setMessages(msgs); setStatus(t('status.inference')); return; }
     }
-    try { await loadSession(sessionId); } catch (e) { setError(e instanceof Error ? e.message : t('error.could_not_load_session')); setStatus(t('error.session_load_failed')); }
+    try {
+      await loadSession(sessionId);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      setError(e instanceof Error ? e.message : t('error.could_not_load_session'));
+      setStatus(t('error.session_load_failed'));
+    }
   };
 
   const handleNewSession = () => {
@@ -529,6 +790,37 @@ export default function App() {
   const changeRagThreshold = useCallback((val: number) => {
     setRagSimilarityThreshold(val);
     if (typeof window !== 'undefined') window.localStorage.setItem(RAG_THRESHOLD_STORAGE_KEY, JSON.stringify(val));
+  }, []);
+
+  const updateCommandLineSettings = async (next: CommandLineSettings) => {
+    const previous = commandLineSettings;
+    setCommandLineSettings(next);
+    setCommandLineSaving(true);
+    try {
+      const response = await fetch(`${API_BASE}/settings/command-line`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next),
+      });
+      if (!response.ok) {
+        throw new Error((await response.text()) || `Command Line settings returned HTTP ${response.status}.`);
+      }
+      setCommandLineSettings((await response.json()) as CommandLineSettings);
+      setSettingsMessage('Command Line capabilities saved. New CLI tasks use this policy immediately.');
+    } catch (error) {
+      setCommandLineSettings(previous);
+      setSettingsMessage(error instanceof Error ? error.message : 'Could not save Command Line settings.');
+    } finally {
+      setCommandLineSaving(false);
+    }
+  };
+
+  const toggleReasoningEnabled = useCallback(() => {
+    setReasoningEnabled((current) => {
+      const next = !current;
+      if (typeof window !== 'undefined') window.localStorage.setItem(REASONING_ENABLED_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
   }, []);
 
   const changeTtsEnabled = useCallback((enabled: boolean) => {
@@ -934,27 +1226,41 @@ export default function App() {
   };
 
   const selectProvider = async (providerName: string) => {
+    setProviderSwitching(true);
     setSettingsMessage(null);
     try {
       const res = await fetch(`${API_BASE}/providers/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: providerName }) });
       if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.provider_switch', res.status)); }
+      const payload = await res.json().catch(() => null) as { message?: string } | null;
       await loadSettingsData();
       try { setContextUsage(await fetchContextUsage(activeSessionId)); } catch {}
-      setSettingsMessage(`Inference provider switched to ${providerName}.`);
+      setSettingsMessage(payload?.message || `Inference provider switched to ${providerName}.`);
     } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_switch_provider')); }
+    finally { setProviderSwitching(false); }
   };
 
   const selectModel = async (modelName: string) => {
+    const previousModel = availableModels.find((model) => model.active)?.name ?? 'current model';
     setModelSwitching(true);
     setSettingsMessage(null);
+    setModelSwitchNotice({ from: previousModel, to: modelName, state: 'loading' });
     try {
       const res = await fetch(`${API_BASE}/models/select`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelName }) });
       if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.model_switch', res.status)); }
-      await loadSettingsData();
+      await res.json().catch(() => null);
       try { setContextUsage(await fetchContextUsage(activeSessionId)); } catch {}
-      setSettingsMessage(`Active model switched to ${modelName}.`);
-    } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_switch_model')); }
-    setModelSwitching(false);
+      await loadSettingsData();
+      setModelSwitchNotice({ from: previousModel, to: modelName, state: 'success' });
+    } catch (e) {
+      setModelSwitchNotice({
+        from: previousModel,
+        to: modelName,
+        state: 'error',
+        error: e instanceof Error ? e.message : t('error.could_not_switch_model'),
+      });
+    } finally {
+      setModelSwitching(false);
+    }
   };
 
   const downloadModel = async (modelNameOverride?: string) => {
@@ -1028,27 +1334,37 @@ export default function App() {
 
   const resumeModelDownload = () => { if (pausedModelDownload) void downloadModel(pausedModelDownload); };
 
-  const handleAddMemory = () => {
+  const persistProfile = async (contents: string) => {
+    const res = await fetch(`${API_BASE}/profile`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents }) });
+    if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.profile_save', res.status)); }
+    const data = (await res.json()) as ProfileResponse;
+    setProfileText(data.contents);
+    setProfilePath(data.path);
+    return data;
+  };
+
+  const handleAddMemory = async () => {
     const memory = memoryInput.trim();
     if (!memory) return;
     const timestamp = new Date().toLocaleString();
     const entry = `- ${memory} (remembered on ${timestamp})`;
-    setProfileText((prev) => {
-      const text = prev.trim();
-      return text ? `${text}\n${entry}` : entry;
-    });
+    const text = profileText.trim();
+    const nextProfile = text ? `${text}\n${entry}` : entry;
+    setProfileText(nextProfile);
     setMemoryInput('');
-    setSettingsMessage(t('error.memory_added'));
+    setSettingsMessage(null);
+    try {
+      await persistProfile(nextProfile);
+      setSettingsMessage(t('error.memories_saved'));
+    } catch (e) {
+      setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_save_profile'));
+    }
   };
 
   const saveProfileSettings = async () => {
     setSettingsMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/profile`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: profileText }) });
-      if (!res.ok) { const body = await res.text(); throw new Error(body || engineErr('engine.profile_save', res.status)); }
-      const data = (await res.json()) as ProfileResponse;
-      setProfileText(data.contents);
-      setProfilePath(data.path);
+      await persistProfile(profileText);
       setSettingsMessage(t('error.memories_saved'));
     } catch (e) { setSettingsMessage(e instanceof Error ? e.message : t('error.could_not_save_profile')); }
   };
@@ -1056,6 +1372,8 @@ export default function App() {
   // --- Core Streaming ---
 
   async function streamPrompt(prompt: string, nextMessages: Message[], editFromTurnIndex?: number) {
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
     setError(null);
     setStatus(t('status.inference'));
     setIsStreaming(true);
@@ -1107,6 +1425,7 @@ export default function App() {
 
       const res = await fetch(`${API_BASE}/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           session_id: sessionId, message: prompt,
           attachments: indexedDocuments.map((d) => `${d.file_name} (${d.chunks_added} chunks)`),
@@ -1114,6 +1433,7 @@ export default function App() {
           response_style: responseStyle, code_project_name: activeProject?.name,
           code_project_context: activeProject?.snapshot, code_project_id: activeProject?.id, rag_enabled: isRagEnabled,
           rag_top_k: ragTopK, rag_similarity_threshold: ragSimilarityThreshold,
+          reasoning_enabled: reasoningEnabled,
         }),
       });
       if (!res.ok || !res.body) throw new Error(engineErr('engine.chat_send', res.status));
@@ -1122,6 +1442,59 @@ export default function App() {
       const decoder = new TextDecoder();
       let pending = '';
       let accumulated = '';
+      const dispatchControlEvent = (data: string) => {
+        if (data.startsWith('[RAG_METRICS] ')) {
+          try {
+            const m = JSON.parse(data.replace('[RAG_METRICS] ', ''));
+            setInferenceStats((p) => ({ ...p, ragTime: m.retrieval_time_ms, similarity: m.avg_similarity, chunks: m.chunk_count, backend: m.backend }));
+          } catch {}
+          return true;
+        }
+        if (data.startsWith('[RAG_SOURCES] ')) {
+          try {
+            const parsedSources = JSON.parse(data.replace('[RAG_SOURCES] ', '')) as RetrievalChunk[];
+            updateTarget((cur) => {
+              const n = [...cur];
+              const l = n[n.length - 1];
+              if (l?.role === 'assistant') n[n.length - 1] = { ...l, sources: parsedSources };
+              return n;
+            });
+          } catch {}
+          return true;
+        }
+        if (data.startsWith('[REASONING_EVENT] ')) {
+          try {
+            const event = JSON.parse(data.replace('[REASONING_EVENT] ', '')) as ReasoningEvent;
+            updateTarget((cur) => {
+              const n = [...cur];
+              const l = n[n.length - 1];
+              if (l?.role === 'assistant') {
+                n[n.length - 1] = {
+                  ...l,
+                  reasoningEvents: [...(l.reasoningEvents ?? []), event],
+                  timestamp: l.timestamp ?? new Date().toISOString(),
+                };
+              }
+              return n;
+            });
+            setStatus(event.tool ? `${event.title}: ${event.tool}` : event.title);
+          } catch {}
+          return true;
+        }
+        if (data.startsWith('[CONTEXT_COMPACTED] ')) {
+          try {
+            const event = JSON.parse(data.replace('[CONTEXT_COMPACTED] ', '')) as ContextCompactionEvent;
+            setContextCompactionEvent(event);
+            setStatus('Context automatically compacted');
+          } catch {}
+          return true;
+        }
+        if (data === '[DONE]') {
+          setStatus(t('status.complete'));
+          return true;
+        }
+        return false;
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1132,15 +1505,7 @@ export default function App() {
         for (const evt of parsed.events) {
           const data = sseEventData(evt);
           if (!data) continue;
-          if (data.startsWith('[RAG_METRICS] ')) {
-            try { const m = JSON.parse(data.replace('[RAG_METRICS] ', '')); setInferenceStats((p) => ({ ...p, ragTime: m.retrieval_time_ms, similarity: m.avg_similarity, chunks: m.chunk_count, backend: m.backend })); } catch {}
-            continue;
-          }
-          if (data.startsWith('[RAG_SOURCES] ')) {
-            try { const parsedSources = JSON.parse(data.replace('[RAG_SOURCES] ', '')) as RetrievalChunk[]; updateTarget((cur) => { const n = [...cur]; const l = n[n.length - 1]; if (l?.role === 'assistant') n[n.length - 1] = { ...l, sources: parsedSources }; return n; }); } catch {}
-            continue;
-          }
-          if (data === '[DONE]') { setStatus(t('status.complete')); continue; }
+          if (dispatchControlEvent(data)) continue;
           if (data.startsWith('[ERROR]')) throw new Error(data);
           if (accumulated === '' && inferenceStartTime.current) setInferenceStats((p) => ({ ...p, ttft: Date.now() - (inferenceStartTime.current ?? 0) }));
           accumulated += data;
@@ -1149,7 +1514,7 @@ export default function App() {
       }
 
       const finalData = sseEventData(pending);
-      if (finalData && finalData !== '[DONE]') {
+      if (finalData && !dispatchControlEvent(finalData)) {
         if (finalData.startsWith('[ERROR]')) throw new Error(finalData);
         if (accumulated === '' && inferenceStartTime.current) setInferenceStats((p) => ({ ...p, ttft: Date.now() - (inferenceStartTime.current ?? 0) }));
         accumulated += finalData;
@@ -1170,15 +1535,20 @@ export default function App() {
     } catch (e) {
       if (pendingSegments.length > 0) flushSegments(true);
       if (streamFlushTimer !== null) { window.clearTimeout(streamFlushTimer); streamFlushTimer = null; }
-      setError(e instanceof Error ? e.message : t('error.could_not_send_chat'));
-      setStatus(t('error.chat_failed'));
+      const cancelled = controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError');
+      if (cancelled) {
+        setStatus('Generation stopped');
+      } else {
+        setError(e instanceof Error ? e.message : t('error.could_not_send_chat'));
+        setStatus(t('error.chat_failed'));
+      }
       updateTarget((cur) => cur.filter((m) => m.content.length > 0));
-      // Clear the queue on error to avoid stuck items.
-      setMessageQueue([]);
+      if (!cancelled) setMessageQueue([]);
     } finally {
       if (streamFlushTimer !== null) window.clearTimeout(streamFlushTimer);
       setIsStreaming(false);
       setStreamingSessionId(null);
+      if (chatAbortRef.current === controller) chatAbortRef.current = null;
       if (targetSessionId) {
         const n = { ...streamingMessagesBySessionRef.current };
         delete n[targetSessionId]; streamingMessagesBySessionRef.current = n;
@@ -1188,6 +1558,11 @@ export default function App() {
       processNextInQueue();
     }
   }
+
+  const stopGeneration = () => {
+    if (!isStreaming) return;
+    chatAbortRef.current?.abort();
+  };
 
   const processNextInQueue = () => {
     const queue = messageQueueRef.current;
@@ -1204,6 +1579,13 @@ export default function App() {
     event.preventDefault();
     const prompt = input.trim();
     if (!prompt) return;
+    if (queueEditIndex !== null) {
+      setMessageQueue((queue) => queue.map((item, index) => index === queueEditIndex ? prompt : item));
+      setQueueEditIndex(null);
+      setInput('');
+      setStatus('Queued message updated');
+      return;
+    }
     setInput('');
     // If streaming, queue the message instead of blocking.
     if (isStreaming) {
@@ -1242,12 +1624,12 @@ export default function App() {
 
   return (
     <I18nProvider lang={lang}>
-    <div className={`aegis-shell aegis-mode-${theme} aegis-theme-${appearanceTheme} aegis-bg-base aegis-text-base flex h-screen overflow-hidden`} onClick={() => setSessionMenuOpenId(null)}>
+    <div className={`aegis-shell aegis-mode-${theme} aegis-theme-${appearanceTheme} aegis-bg-base aegis-text-base flex h-[100dvh] overflow-hidden`} onClick={() => setSessionMenuOpenId(null)}>
       {/* Left Icon Bar */}
-      <nav aria-label="Sidebar controls" className={`flex w-14 shrink-0 flex-col items-center border-r aegis-bg-surface aegis-border-subtle`}>
+      <nav aria-label="Sidebar controls" className={`flex w-14 shrink-0 flex-col items-center border-r aegis-bg-surface aegis-border-subtle ${isDark ? '' : 'shadow-[8px_0_30px_rgba(80,62,39,0.08)]'}`}>
         <button
           aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
-          className={`mt-4 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'}`}
+          className={`mt-4 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-stone-600 hover:bg-[rgba(94,76,55,0.1)] hover:text-stone-950'}`}
           onClick={(e) => { e.stopPropagation(); setSidebarOpen((c) => !c); }}
           type="button"
         >
@@ -1255,7 +1637,7 @@ export default function App() {
         </button>
         <button
           aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'}`}
+          className={`mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg transition ${isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-stone-600 hover:bg-[rgba(94,76,55,0.1)] hover:text-stone-950'}`}
           onClick={(e) => { e.stopPropagation(); setTheme((c) => (c === 'dark' ? 'light' : 'dark')); }}
           type="button"
         >
@@ -1263,7 +1645,7 @@ export default function App() {
         </button>
         <button
           aria-label="Open settings"
-          className={`aegis-accent-ghost mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent transition ${settingsOpen ? 'aegis-accent-subtle' : isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'}`}
+          className={`aegis-accent-ghost mt-2 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent transition ${settingsOpen ? 'aegis-accent-subtle' : isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-stone-600 hover:bg-[rgba(94,76,55,0.1)] hover:text-stone-950'}`}
           onClick={(e) => { e.stopPropagation(); openSettings(); }}
           type="button"
         >
@@ -1272,6 +1654,7 @@ export default function App() {
       </nav>
 
       {/* Sidebar */}
+      {sidebarOpen && <button aria-label="Close sidebar backdrop" className="fixed inset-0 z-30 bg-black/45 md:hidden" onClick={() => setSidebarOpen(false)} type="button" />}
       <Sidebar
         isDark={isDark}
         isStreaming={isStreaming}
@@ -1338,90 +1721,78 @@ export default function App() {
         staleProjectIds={staleProjectIds}
       />
 
+      {(isMetricsOpen || isTerminalOpen) && <button aria-label="Close open panel backdrop" className="fixed inset-0 z-30 bg-black/45 md:hidden" onClick={() => { setIsMetricsOpen(false); setIsTerminalOpen(false); }} type="button" />}
+
       {/* Main Content */}
       <main className="relative flex min-w-0 flex-1 flex-col">
         {/* Session bar — replaces the old header */}
-        <div className={`flex shrink-0 items-center gap-4 px-6 py-2 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
-          <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div className={`aegis-session-bar pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center gap-5 px-5 pt-4 sm:px-7 ${isDark ? 'text-zinc-400' : 'text-stone-600'}`}>
+          <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-3">
             <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{activeSession?.title ?? t('header.new_chat')}</div>
-              <div className={`truncate text-xs ${isDark ? 'text-zinc-600' : 'text-slate-400'}`}>
+              <div className="aegis-display truncate text-[14px] font-semibold tracking-[-0.015em]">{activeSession?.title ?? t('header.new_chat')}</div>
+              <div className={`aegis-session-meta truncate text-[12px] font-normal ${isDark ? 'text-zinc-600' : 'text-stone-500'}`}>
                 Session: {activeSessionId ?? t('header.not_started')}
               </div>
             </div>
           </div>
-          <div className={`flex items-center gap-1 rounded-lg border p-0.5 shadow-inner backdrop-blur-sm justify-self-center ${isDark ? 'border-zinc-800 bg-zinc-900/30' : 'border-stone-200 bg-white/50'}`}>
+          <div className="aegis-mode-select pointer-events-auto flex items-center gap-1 justify-self-center">
             {(['general', 'coder', 'academic'] as ChatMode[]).map((mode) => {
               const Icon = mode === 'general' ? Bot : mode === 'coder' ? CpuIcon : GraduationCap;
               return (
                 <button
                   key={mode}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all ${chatMode === mode ? 'aegis-accent-chip-active text-white' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'}`}
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all ${chatMode === mode ? 'aegis-accent-chip-active text-white shadow-lg shadow-emerald-950/20' : isDark ? 'text-zinc-500 hover:bg-zinc-900/35 hover:text-zinc-200' : 'text-stone-600 hover:bg-white/55 hover:text-stone-950'}`}
                   onClick={() => setChatMode(mode)}
                   type="button"
                 >
                   <Icon size={13} />
-                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  <span className="aegis-mode-label">{mode.charAt(0).toUpperCase() + mode.slice(1)}</span>
                 </button>
               );
             })}
           </div>
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="pointer-events-auto flex items-center gap-3 shrink-0">
             <button
-              className={`aegis-accent-ghost inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition ${isMetricsOpen ? 'aegis-accent-subtle' : isDark ? 'border-transparent text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200' : 'border-transparent text-slate-500 hover:bg-stone-100 hover:text-slate-700'}`}
-              onClick={() => setIsMetricsOpen((c) => !c)}
+              className={`aegis-accent-ghost inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium transition ${isMetricsOpen ? 'aegis-accent-subtle' : isDark ? 'border-transparent text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200' : 'border-transparent text-stone-600 hover:bg-white/55 hover:text-stone-900'}`}
+              onClick={() => {
+                setIsMetricsOpen((current) => !current);
+                setIsTerminalOpen(false);
+              }}
               type="button"
             >
               <Activity size={13} />
               {t('metrics.live_stats')}
             </button>
-            <span className={`rounded-md px-2 py-1 text-[11px] ${isDark ? 'bg-zinc-900 text-zinc-500' : 'bg-stone-100 text-slate-400'}`}>
+            <span className={`aegis-session-status rounded-md px-2 py-1 text-[12px] ${isDark ? 'text-zinc-500' : 'text-stone-500'}`}>
               {status}
             </span>
           </div>
         </div>
 
-        {/* Resource Warning */}
-        {visibleResourceWarning && (
-          <div className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm font-medium ${isDark ? 'border-amber-900/60 bg-amber-950/30 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-            <span className="min-w-0 flex-1">Warning: {visibleResourceWarning}</span>
-            <button aria-label={t('error.dismiss_warning')} className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark ? 'text-amber-200/80 hover:bg-amber-900/40 hover:text-amber-100' : 'text-amber-700/80 hover:bg-amber-100 hover:text-amber-900'}`} onClick={() => setDismissedResourceWarning(visibleResourceWarning)} type="button">
-              <X size={15} />
-            </button>
-          </div>
-        )}
-
-        {/* Error Banner */}
-        {error && (
-          <div className={`flex items-center justify-between gap-4 border-b px-6 py-3 text-sm ${isDark ? 'border-red-900/60 bg-red-950/30 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`} role="alert">
-            <span className="min-w-0 flex-1">{error}</span>
-            {errorDismissible && (
-              <button aria-label={t('error.dismiss')} className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition ${isDark ? 'text-red-200/80 hover:bg-red-900/40 hover:text-red-100' : 'text-red-700/80 hover:bg-red-100 hover:text-red-900'}`} onClick={() => setError(null)} type="button">
-                <X size={15} />
-              </button>
-            )}
-          </div>
-        )}
+        <div
+          aria-hidden="true"
+          className="aegis-top-fade pointer-events-none absolute inset-x-0 top-0 z-10 h-28"
+        />
 
         {showCenteredComposer && (
           <div
-            className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center text-center text-[clamp(3.5rem,8vw,8.25rem)] font-black leading-none tracking-[0.12em] ${isDark ? 'text-white' : 'text-black'}`}
-            style={{ top: 'clamp(3.45rem, 17.5vh, 10rem)', textShadow: '0 0 1px currentColor' }}
+            className={`aegis-display pointer-events-none absolute inset-x-0 z-10 flex justify-center text-center text-[clamp(3rem,7vw,7rem)] font-semibold leading-none tracking-[0.035em] ${isDark ? 'text-white' : 'text-black'}`}
+            style={{ top: 'clamp(3.75rem, 17vh, 9rem)', textShadow: '0 0 1px currentColor' }}
           >
             AEGIS
           </div>
         )}
 
         {/* Messages Area */}
-        <div ref={scrollRef} className={`min-h-0 flex-1 overflow-y-auto px-6 pb-12 pt-6 aegis-bg-base scrollbar-hide`}>
-          <div className="mx-auto flex max-w-4xl flex-col gap-4">
+        <div onScroll={handleMessageScroll} ref={scrollRef} className={`min-h-0 flex-1 overflow-y-auto px-5 pb-14 pt-32 sm:px-8 aegis-bg-base scrollbar-hide`}>
+          <div className="mx-auto flex max-w-[54rem] flex-col gap-5">
             {messages.map((message, index) => (
+              <div data-message-index={index} key={`${message.role}-${index}`} className="scroll-mt-32">
                 <MessageBubble
-                  key={`${message.role}-${index}`}
                   message={message}
                   index={index}
                   isDark={isDark}
-                  isStreaming={isStreaming}
+                  isStreaming={isStreaming && index === messages.length - 1}
                   editingMessageIndex={editingMessageIndex}
                   editingMessageText={editingMessageText}
                   copiedMessageIndex={copiedMessageIndex}
@@ -1448,9 +1819,27 @@ export default function App() {
                   onSpeak={speakAssistantResponse}
                   onApplyPatch={() => applyAssistantPatch(message.content)}
                 />
+              </div>
               ))}
           </div>
         </div>
+
+        {showJumpToLatest && (
+          <button
+            className="aegis-accent-solid absolute bottom-28 left-1/2 z-20 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-semibold text-white shadow-lg"
+            onClick={jumpToLatest}
+            type="button"
+          >
+            Jump to latest
+          </button>
+        )}
+
+        <PromptCheckpoints
+          hidden={isMetricsOpen || isTerminalOpen || settingsOpen || isVoiceMode}
+          isDark={isDark}
+          messages={messages}
+          scrollContainerRef={scrollRef}
+        />
 
         {/* Composer Footer */}
         <Composer
@@ -1474,6 +1863,7 @@ export default function App() {
           projectEditMessage={projectEditMessage}
           tokenMeterLabel={tokenMeterLabel}
           contextUsage={contextUsage}
+          reasoningEnabled={reasoningEnabled}
           messageQueue={messageQueue}
           activeWelcomeMessage={activeWelcomeMessage}
           profileText={profileText}
@@ -1492,15 +1882,39 @@ export default function App() {
           onImageUpload={handleImageUpload}
           onClearDocuments={clearIndexedDocuments}
           onVoiceModeOpen={() => setIsVoiceMode(true)}
+          onToggleReasoning={toggleReasoningEnabled}
           onDetachProject={() => setActiveProjectId(null)}
+          onStopGeneration={stopGeneration}
           onRemoveFromQueue={(index) => setMessageQueue((q) => q.filter((_, i) => i !== index))}
           onEditFromQueue={(index) => { setInput(messageQueueRef.current[index]); setQueueEditIndex(index); }}
-          onSaveQueueEdit={() => { if (queueEditIndex !== null) { setMessageQueue((q) => q.map((msg, i) => i === queueEditIndex ? input : msg)); setQueueEditIndex(null); } }}
+          onSaveQueueEdit={() => {
+            const updated = input.trim();
+            if (queueEditIndex === null || !updated) { setError('Queue messages cannot be empty.'); return; }
+            setMessageQueue((q) => q.map((msg, i) => i === queueEditIndex ? updated : msg));
+            setQueueEditIndex(null); setInput(''); setStatus('Queued message updated');
+          }}
+          onCancelQueueEdit={() => { setQueueEditIndex(null); setInput(''); }}
           queueEditIndex={queueEditIndex}
           availableModels={availableModels}
           onSelectModel={selectModel}
           modelSwitching={modelSwitching}
         />
+
+        <footer className={`aegis-status-bar flex h-10 shrink-0 items-center justify-end border-t px-5 sm:px-8 aegis-border-subtle ${isDark ? 'text-zinc-500' : 'text-stone-500'}`}>
+          <button
+            aria-expanded={isTerminalOpen}
+            className={`inline-flex items-center gap-1.5 text-[11px] transition ${isTerminalOpen ? 'text-emerald-500' : 'hover:text-emerald-500'}`}
+            onClick={() => {
+              setIsTerminalOpen((current) => !current);
+              setIsMetricsOpen(false);
+            }}
+            type="button"
+          >
+            <TerminalSquare size={12} />
+            <span>Terminal</span>
+            <span className="opacity-60">v0.1.0</span>
+          </button>
+        </footer>
 
         {/* Voice Mode Overlay */}
         {isVoiceMode && (
@@ -1547,7 +1961,6 @@ export default function App() {
         settingsOpen={settingsOpen}
         settingsClosing={settingsClosing}
         settingsTab={settingsTab}
-        settingsMessage={settingsMessage}
         settingsLoading={settingsLoading}
         theme={theme}
         appearanceTheme={appearanceTheme}
@@ -1563,6 +1976,10 @@ export default function App() {
         modelDownloadState={modelDownloadState}
         modelDownloadProgress={modelDownloadProgress}
         modelDownloadStatus={modelDownloadStatus}
+        modelSwitching={modelSwitching}
+        providerSwitching={providerSwitching}
+        commandLineSettings={commandLineSettings}
+        commandLineSaving={commandLineSaving}
         isVoiceLowRamMode={isVoiceLowRamMode}
         isTtsEnabled={isTtsEnabled}
         isRagEnabled={isRagEnabled}
@@ -1578,6 +1995,7 @@ export default function App() {
         onSetResponseStyle={(s) => setResponseStyle(s as ResponseStyle)}
         onSelectModel={selectModel}
         onSelectProvider={selectProvider}
+        onChangeCommandLineSettings={updateCommandLineSettings}
         onModelSearchChange={setModelSearch}
         onSetModelProviderTag={setSelectedModelProviderTag}
         onDownloadModel={downloadModel}
@@ -1648,6 +2066,238 @@ export default function App() {
         onSetMetricsTab={setMetricsTab}
         onClearSelection={() => { setSelectedMessageSources(null); setSelectedMessageSourcesIndex(null); }}
       />
+
+      <TerminalSidebar
+        isDark={isDark}
+        isOpen={isTerminalOpen}
+        provider={activeProvider?.name}
+        model={availableModels.find((model) => model.active)?.name}
+        sessionId={activeSessionId}
+        status={status}
+        onClose={() => setIsTerminalOpen(false)}
+      />
+
+      {modelSwitchNotice && (
+        <div className="pointer-events-none fixed right-5 top-16 z-50 w-[min(21rem,calc(100vw-2.5rem))]" role="status" aria-live="polite">
+          <div className={`pointer-events-auto flex items-start gap-2.5 rounded-xl border px-3 py-2.5 shadow-xl backdrop-blur-xl animate-[toastIn_180ms_ease-out] ${
+            modelSwitchNotice.state === 'error'
+              ? isDark ? 'border-red-500/25 bg-zinc-950/94 text-zinc-100 shadow-red-950/20' : 'border-red-200 bg-white/95 text-slate-950 shadow-red-200/50'
+              : isDark ? 'border-white/10 bg-zinc-950/94 text-zinc-100 shadow-black/30' : 'border-stone-300 bg-white/95 text-stone-900 shadow-[0_12px_28px_rgba(80,62,39,0.14)]'
+          }`}>
+            {modelSwitchNotice.state === 'loading' ? (
+              <LoaderCircle className="mt-0.5 shrink-0 animate-spin text-sky-400" size={15} />
+            ) : modelSwitchNotice.state === 'success' ? (
+              <CheckCircle2 className="aegis-success-text mt-0.5 shrink-0" size={15} />
+            ) : (
+              <AlertCircle className="mt-0.5 shrink-0 text-red-500" size={15} />
+            )}
+            <div className="min-w-0">
+              <p className="text-[13px] font-semibold leading-5">
+                {modelSwitchNotice.state === 'loading'
+                  ? `Switching to ${modelSwitchNotice.to}`
+                  : modelSwitchNotice.state === 'success'
+                    ? `${modelSwitchNotice.to} active!`
+                    : 'Model switch failed'}
+              </p>
+              <p className={`truncate text-[11px] leading-4 ${isDark ? 'text-zinc-400' : 'text-stone-600'}`} title={modelSwitchNotice.error ?? `${modelSwitchNotice.from} → ${modelSwitchNotice.to}`}>
+                {modelSwitchNotice.state === 'error'
+                  ? modelSwitchNotice.error
+                  : `${modelSwitchNotice.from} → ${modelSwitchNotice.to}`}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(activeSettingsToast || activeContextCompactionToast || activeResourceToast || activeErrorToast) && (
+        <div
+          className="pointer-events-none fixed bottom-12 right-5 z-50 flex w-[min(22rem,calc(100vw-2.5rem))] flex-col items-end gap-3"
+          role="status"
+          aria-live="polite"
+        >
+          {activeSettingsToast && (
+            <div
+              className={`pointer-events-auto w-full overflow-hidden rounded-2xl border p-4 shadow-2xl backdrop-blur-xl animate-[toastIn_180ms_ease-out] ${
+                activeSettingsToast.tone === 'error'
+                  ? isDark
+                    ? 'border-red-500/20 bg-zinc-950/92 text-zinc-100 shadow-red-950/20'
+                    : 'border-red-200 bg-white/95 text-slate-950 shadow-red-200/50'
+                  : activeSettingsToast.tone === 'warning'
+                    ? isDark
+                      ? 'border-amber-400/20 bg-zinc-950/92 text-zinc-100 shadow-amber-950/20'
+                      : 'border-amber-200 bg-white/95 text-slate-950 shadow-amber-200/50'
+                    : activeSettingsToast.tone === 'info'
+                      ? isDark
+                        ? 'border-sky-400/20 bg-zinc-950/92 text-zinc-100 shadow-sky-950/20'
+                        : 'border-sky-200 bg-white/95 text-slate-950 shadow-sky-200/50'
+                      : isDark
+                        ? 'border-emerald-400/20 bg-zinc-950/92 text-zinc-100 shadow-emerald-950/20'
+                        : 'border-emerald-200 bg-white/95 text-slate-950 shadow-emerald-200/50'
+              }`}
+              title={settingsMessage ?? undefined}
+            >
+              <div className="flex items-start gap-3">
+                <div
+                  className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${
+                    activeSettingsToast.tone === 'error'
+                      ? isDark ? 'bg-red-400 shadow-[0_0_18px_rgba(248,113,113,0.65)]' : 'bg-red-500'
+                      : activeSettingsToast.tone === 'warning'
+                        ? isDark ? 'bg-amber-300 shadow-[0_0_18px_rgba(252,211,77,0.65)]' : 'bg-amber-500'
+                        : activeSettingsToast.tone === 'info'
+                          ? isDark ? 'bg-sky-300 shadow-[0_0_18px_rgba(125,211,252,0.65)]' : 'bg-sky-500'
+                          : isDark ? 'bg-emerald-300 shadow-[0_0_18px_rgba(110,231,183,0.65)]' : 'bg-emerald-500'
+                  }`}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <h2 className="truncate text-sm font-semibold">{activeSettingsToast.title}</h2>
+                    <button
+                      aria-label="Dismiss settings message"
+                      className={`-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition ${
+                        isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                      }`}
+                      onClick={() => setSettingsMessage(null)}
+                      type="button"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <p className={`mt-1 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                    {activeSettingsToast.description}
+                  </p>
+                  <p className={`mt-2 text-[11px] font-medium leading-5 ${
+                    activeSettingsToast.tone === 'error'
+                      ? isDark ? 'text-red-200/85' : 'text-red-700'
+                      : activeSettingsToast.tone === 'warning'
+                        ? isDark ? 'text-amber-200/85' : 'text-amber-700'
+                        : activeSettingsToast.tone === 'info'
+                          ? isDark ? 'text-sky-200/85' : 'text-sky-700'
+                          : isDark ? 'text-emerald-200/85' : 'text-emerald-700'
+                  }`}>
+                    Recommended: {activeSettingsToast.action}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeContextCompactionToast && (
+            <div
+              className={`pointer-events-auto w-full overflow-hidden rounded-2xl border p-4 shadow-2xl backdrop-blur-xl animate-[toastIn_180ms_ease-out] ${
+                isDark
+                  ? 'border-sky-400/20 bg-zinc-950/92 text-zinc-100 shadow-sky-950/20'
+                  : 'border-sky-200 bg-white/95 text-slate-950 shadow-sky-200/50'
+              }`}
+              title={activeContextCompactionToast.description}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${isDark ? 'bg-sky-300 shadow-[0_0_18px_rgba(125,211,252,0.65)]' : 'bg-sky-500'}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <h2 className="truncate text-sm font-semibold">{activeContextCompactionToast.title}</h2>
+                    <button
+                      aria-label="Dismiss context compaction message"
+                      className={`-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition ${
+                        isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                      }`}
+                      onClick={() => setContextCompactionEvent(null)}
+                      type="button"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <p className={`mt-1 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                    {activeContextCompactionToast.description}
+                  </p>
+                  <p className={`mt-2 text-[11px] font-medium leading-5 ${isDark ? 'text-sky-200/85' : 'text-sky-700'}`}>
+                    Recommended: {activeContextCompactionToast.action}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeResourceToast && (
+            <div
+              className={`pointer-events-auto w-full overflow-hidden rounded-2xl border p-4 shadow-2xl backdrop-blur-xl animate-[toastIn_180ms_ease-out] ${
+                isDark
+                  ? 'border-amber-400/20 bg-zinc-950/92 text-zinc-100 shadow-amber-950/20'
+                  : 'border-amber-200 bg-white/95 text-slate-950 shadow-amber-200/50'
+              }`}
+              title={visibleResourceWarning ?? undefined}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${isDark ? 'bg-amber-300 shadow-[0_0_18px_rgba(252,211,77,0.65)]' : 'bg-amber-500'}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <h2 className="truncate text-sm font-semibold">{activeResourceToast.title}</h2>
+                    <button
+                      aria-label={t('error.dismiss_warning')}
+                      className={`-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition ${
+                        isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                      }`}
+                      onClick={() => visibleResourceWarning && setDismissedResourceWarning(visibleResourceWarning)}
+                      type="button"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <p className={`mt-1 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                    {activeResourceToast.description}
+                  </p>
+                  <p className={`mt-2 text-[11px] font-medium leading-5 ${isDark ? 'text-amber-200/85' : 'text-amber-700'}`}>
+                    Recommended: {activeResourceToast.action}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeErrorToast && (
+            <div
+              aria-live="assertive"
+              className={`pointer-events-auto w-full overflow-hidden rounded-2xl border p-4 shadow-2xl backdrop-blur-xl animate-[toastIn_180ms_ease-out] ${
+                isDark
+                  ? 'border-red-500/20 bg-zinc-950/92 text-zinc-100 shadow-red-950/20'
+                  : 'border-red-200 bg-white/95 text-slate-950 shadow-red-200/50'
+              }`}
+              role="alert"
+              title={error ?? undefined}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${isDark ? 'bg-red-400 shadow-[0_0_18px_rgba(248,113,113,0.65)]' : 'bg-red-500'}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <h2 className="truncate text-sm font-semibold">{activeErrorToast.title}</h2>
+                    {errorDismissible && (
+                      <button
+                        aria-label={t('error.dismiss')}
+                        className={`-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition ${
+                          isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                        }`}
+                        onClick={() => setError(null)}
+                        type="button"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                  <p className={`mt-1 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                    {activeErrorToast.description}
+                  </p>
+                  <p className={`mt-2 text-[11px] font-medium leading-5 ${isDark ? 'text-red-200/85' : 'text-red-700'}`}>
+                    Recommended: {activeErrorToast.action}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${isDark ? 'border-zinc-700 hover:bg-zinc-900' : 'border-slate-200 hover:bg-slate-50'}`} onClick={() => { void copyTextToClipboard(error ?? ''); }} type="button">Copy details</button>
+                    <button className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${isDark ? 'border-zinc-700 hover:bg-zinc-900' : 'border-slate-200 hover:bg-slate-50'}`} onClick={() => { setError(null); openSettings(); }} type="button">Open settings</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
     </I18nProvider>
   );

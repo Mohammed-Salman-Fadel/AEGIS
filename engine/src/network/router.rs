@@ -28,6 +28,8 @@ use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
 use tracing::warn;
 
+include!(concat!(env!("OUT_DIR"), "/frontend_dist_marker.rs"));
+
 /// Embedded frontend dist/ using rust-embed.
 /// The build.rs ensures dist/ is populated before engine compiles.
 #[derive(Embed)]
@@ -198,6 +200,7 @@ async fn handle_chat_ws(
             let rag_enabled = msg_data["rag_enabled"].as_bool();
             let rag_top_k = msg_data["rag_top_k"].as_u64().map(|v| v as usize);
             let rag_similarity_threshold = msg_data["rag_similarity_threshold"].as_f64();
+            let reasoning_enabled = msg_data["reasoning_enabled"].as_bool().unwrap_or(false);
 
             let req = ChatRequest {
                 session_id: None,
@@ -213,6 +216,7 @@ async fn handle_chat_ws(
                 rag_enabled,
                 rag_top_k,
                 rag_similarity_threshold,
+                reasoning_enabled,
             };
 
             let orchestrator = state.orchestrator.clone();
@@ -227,6 +231,11 @@ async fn handle_chat_ws(
                 if token.starts_with("[ERROR]") {
                     full_ai_response = token;
                     break;
+                }
+                if let Some(event_json) = token.strip_prefix("[REASONING_EVENT] ") {
+                    let trace = json!({ "type": "reasoning_event", "content": event_json });
+                    let _ = sender.send(Message::Text(trace.to_string().into())).await;
+                    continue;
                 }
                 full_ai_response.push_str(&token);
             }
@@ -730,7 +739,15 @@ pub fn create_router(state: AppState) -> Router {
             "/api/profile",
             get(handlers::profile::get_profile).put(handlers::profile::save_profile),
         )
+        .route(
+            "/api/settings/command-line",
+            get(handlers::command_line::get_settings).put(handlers::command_line::save_settings),
+        )
         .route("/api/context/usage", get(handlers::context::usage))
+        .route(
+            "/api/search/workspace",
+            post(handlers::context::search_workspace),
+        )
         .route(
             "/api/calendar/event",
             post(handlers::calendar::create_event),

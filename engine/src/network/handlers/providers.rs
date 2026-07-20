@@ -42,6 +42,8 @@ pub struct SelectProviderRequest {
 pub struct ProviderSelectResponse {
     previous: String,
     current: String,
+    previous_model: String,
+    current_model: String,
     persisted: bool,
     message: String,
 }
@@ -88,20 +90,31 @@ pub async fn select_provider(
         .map_err(provider_error)?;
 
     let message = if outcome.changed {
-        format!(
-            "Switched from {} to {}.",
-            outcome.previous_provider, outcome.current_provider
-        )
+        let mut message = format!(
+            "Switched from {} to {} and selected `{}` as the active model.",
+            outcome.previous_provider, outcome.current_provider, outcome.current_model
+        );
+        if let Some(warning) = &outcome.unload_warning {
+            message.push(' ');
+            message.push_str(warning);
+        }
+        if let Some(warning) = &outcome.warm_warning {
+            message.push(' ');
+            message.push_str(warning);
+        }
+        message
     } else {
         format!(
-            "`{}` is already the active provider.",
-            outcome.current_provider
+            "`{}` is already the active provider using `{}`.",
+            outcome.current_provider, outcome.current_model
         )
     };
 
     Ok(Json(ProviderSelectResponse {
         previous: outcome.previous_provider,
         current: outcome.current_provider,
+        previous_model: outcome.previous_model,
+        current_model: outcome.current_model,
         persisted: true,
         message,
     }))

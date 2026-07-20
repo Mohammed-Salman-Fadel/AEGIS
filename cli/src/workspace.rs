@@ -188,9 +188,10 @@ impl Workspace {
             }
         }
 
-        // Check if frontend dev server is running on port 5173
+        // A packaged install serves the UI from the engine binary. Do not let
+        // an unrelated or stale Vite process on port 5173 hijack `aegis open`.
         let dev_port = self.frontend_dev_port().unwrap_or(5173);
-        if dev_port == 5173 {
+        if !self.is_packaged_binary() && dev_port == 5173 {
             // Quick check if Vite dev server is listening
             if let Ok(response) = reqwest::blocking::Client::new()
                 .get(&format!("http://127.0.0.1:{dev_port}"))
@@ -205,6 +206,19 @@ impl Workspace {
 
         // Default to engine URL — frontend is embedded, served on same port
         crate::runner::engine_base_url_from_env()
+    }
+
+    fn is_packaged_binary(&self) -> bool {
+        let Some(executable_dir) = env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+        else {
+            return false;
+        };
+
+        executable_dir
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&self.install_root.join("bin").to_string_lossy())
     }
 
     fn looks_like_engine_url(url: &str) -> bool {

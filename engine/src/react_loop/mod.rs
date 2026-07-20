@@ -13,15 +13,16 @@
 //! (e.g. `switch_provider()`) for the loop's entire duration.
 
 use anyhow::{Context, Result};
-use serde::Serialize;
 use serde::Deserialize;
-use std::path::Path;
-use std::sync::Arc;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tokio::sync::{RwLock, mpsc};
 
 use crate::inference::InferenceBackend;
 use crate::rag_client::RagClient;
 use crate::tool_registry::ToolRegistry;
+use crate::workflow::WorkflowId;
 
 // ── constants ─────────────────────────────────────────────────────────
 
@@ -30,7 +31,6 @@ const MAX_FILE_CHARS: usize = 10_000;
 const MAX_TOOL_OUTPUT_CHARS: usize = 20_000;
 const MAX_TERMINAL_OUTPUT_CHARS: usize = 10_000;
 const TERMINAL_TIMEOUT_SECS: u64 = 30;
-const MAX_FILE_WRITE_BYTES: usize = 100_000;
 const MAX_SEARCH_RESULTS: usize = 50;
 const LIST_DIR_MAX_ENTRIES: usize = 100;
 const GIT_TIMEOUT_SECS: u64 = 15;
@@ -87,6 +87,23 @@ impl ToolCall {
 }
 
 #[derive(Debug, Clone)]
+struct ToolPlan {
+    allowed: Vec<&'static str>,
+    max_calls: usize,
+    rationale: &'static str,
+}
+
+impl ToolPlan {
+    fn allows(&self, tool: &ToolCall) -> bool {
+        self.allowed.contains(&tool.tool_name())
+    }
+
+    fn is_direct(&self) -> bool {
+        self.allowed.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ToolResult {
     pub tool_name: String,
     pub input: String,
@@ -128,28 +145,73 @@ impl ReactLoop {
         tool_registry: &ToolRegistry,
         rag_client: &RagClient,
         query: &str,
+        routing_query: &str,
+        conversation_context: &str,
         session_id: &str,
         model_name: &str,
         project_path: Option<&str>,
+        workflow: WorkflowId,
+        mode: &str,
+        has_attachments: bool,
         tx: mpsc::Sender<String>,
     ) -> Result<String> {
-        let system_prompt = build_system_prompt();
-        let mut conversation = format!("[System]\n{system_prompt}\n\n[User]\n{query}");
+        let tool_plan = select_tool_plan(
+            routing_query,
+            workflow,
+            mode,
+            has_attachments,
+            project_path.is_some(),
+        );
+
+        if tool_plan.is_direct() {
+            send_reasoning_event(
+                &tx,
+                ReasoningEvent {
+                    phase: "route_direct",
+                    title: "Answering without tools",
+                    detail: Some(tool_plan.rationale),
+                    round: None,
+                    tool: None,
+                },
+            )
+            .await;
+            let answer =
+                direct_reasoned_answer(inference_lock, query, conversation_context, model_name)
+                    .await?;
+            send_reasoning_event(
+                &tx,
+                ReasoningEvent {
+                    phase: "final",
+                    title: "Final answer ready",
+                    detail: Some("No external tools were needed for this request."),
+                    round: Some(1),
+                    tool: None,
+                },
+            )
+            .await;
+            return Ok(answer);
+        }
+
+        let system_prompt = build_system_prompt(&tool_plan);
+        let mut conversation =
+            build_reasoning_conversation(&system_prompt, conversation_context, query);
         let mut last_call: Option<(String, String)> = None;
+        let mut tool_counts = HashMap::<&'static str, usize>::new();
 
         send_reasoning_event(
             &tx,
             ReasoningEvent {
-                phase: "start",
-                title: "Starting reasoning loop",
-                detail: Some("Planning whether tools are needed before answering."),
+                phase: "route_tools",
+                title: "Using selected tools",
+                detail: Some(tool_plan.rationale),
                 round: None,
                 tool: None,
             },
         )
         .await;
 
-        for round in 1..=MAX_ROUNDS {
+        let max_rounds = (tool_plan.max_calls + 1).min(MAX_ROUNDS);
+        for round in 1..=max_rounds {
             send_reasoning_event(
                 &tx,
                 ReasoningEvent {
@@ -199,8 +261,9 @@ impl ReactLoop {
                     drop(inference);
                     match parse_react_response(&raw2) {
                         Ok(d) => d,
-                        Err(e2) => {
-                            // Second failure — give the user what we have.
+                        Err(_e2) => {
+                            // Second failure: do not expose raw malformed JSON,
+                            // scratchpad fields, or hidden thinking to the user.
                             send_reasoning_event(
                                 &tx,
                                 ReasoningEvent {
@@ -212,10 +275,45 @@ impl ReactLoop {
                                 },
                             )
                             .await;
-                            return Ok(raw2);
+                            return safe_final_answer(
+                                inference_lock,
+                                &conversation,
+                                model_name,
+                                round,
+                            )
+                            .await;
                         }
                     }
                 }
+            };
+
+            let decision = if matches!(decision, ModelDecision::FinalAnswer(_))
+                && tool_counts.values().sum::<usize>() == 0
+            {
+                send_reasoning_event(
+                    &tx,
+                    ReasoningEvent {
+                        phase: "guard",
+                        title: "Verifying with the selected tool",
+                        detail: Some(
+                            "This route requires real tool evidence before AEGIS can answer.",
+                        ),
+                        round: Some(round),
+                        tool: None,
+                    },
+                )
+                .await;
+                match required_tool_fallback(&tool_plan, routing_query) {
+                    Some(tool) => ModelDecision::Tool(tool),
+                    None => {
+                        conversation.push_str(
+                            "\n[System guard]\nA tool result is required for this request. Call one allowed tool now; do not answer yet.",
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                decision
             };
 
             match decision {
@@ -225,7 +323,9 @@ impl ReactLoop {
                         ReasoningEvent {
                             phase: "final",
                             title: "Final answer ready",
-                            detail: Some("The model has enough context and is composing the response."),
+                            detail: Some(
+                                "The model has enough context and is composing the response.",
+                            ),
                             round: Some(round),
                             tool: None,
                         },
@@ -234,6 +334,44 @@ impl ReactLoop {
                     return Ok(answer);
                 }
                 ModelDecision::Tool(tool_call) => {
+                    if !tool_plan.allows(&tool_call) {
+                        send_reasoning_event(
+                            &tx,
+                            ReasoningEvent {
+                                phase: "guard",
+                                title: "Skipping an unnecessary tool",
+                                detail: Some("The requested tool was outside the route selected for this question."),
+                                round: Some(round),
+                                tool: Some(tool_call.tool_name()),
+                            },
+                        )
+                        .await;
+                        return safe_final_answer(inference_lock, &conversation, model_name, round)
+                            .await;
+                    }
+
+                    let count = tool_counts.entry(tool_call.tool_name()).or_default();
+                    let per_tool_limit = if tool_call.tool_name() == "read_file" {
+                        2
+                    } else {
+                        1
+                    };
+                    if *count >= per_tool_limit {
+                        send_reasoning_event(
+                            &tx,
+                            ReasoningEvent {
+                                phase: "guard",
+                                title: "Tool budget reached",
+                                detail: Some("AEGIS already gathered enough signal from this tool and will answer with the available context."),
+                                round: Some(round),
+                                tool: Some(tool_call.tool_name()),
+                            },
+                        )
+                        .await;
+                        return safe_final_answer(inference_lock, &conversation, model_name, round)
+                            .await;
+                    }
+                    *count += 1;
                     // Dedup guard: detect repeated identical tool calls.
                     let call_sig = (
                         tool_call.tool_name().to_string(),
@@ -276,12 +414,13 @@ impl ReactLoop {
                         }
                     }
                     last_call = Some(call_sig);
+                    let call_detail = tool_call_detail(&tool_call);
                     send_reasoning_event(
                         &tx,
                         ReasoningEvent {
                             phase: "tool_call",
                             title: "Calling tool",
-                            detail: Some("Gathering external context before answering."),
+                            detail: Some(&call_detail),
                             round: Some(round),
                             tool: Some(tool_call.tool_name()),
                         },
@@ -302,12 +441,13 @@ impl ReactLoop {
                     let result_str = match result {
                         Ok(r) => {
                             let truncated = truncate(&r.output, MAX_TOOL_OUTPUT_CHARS);
+                            let result_detail = tool_result_detail(&r);
                             send_reasoning_event(
                                 &tx,
                                 ReasoningEvent {
                                     phase: "tool_result",
                                     title: "Tool result received",
-                                    detail: Some("The result was added to the reasoning context."),
+                                    detail: Some(&result_detail),
                                     round: Some(round),
                                     tool: Some(&r.tool_name),
                                 },
@@ -327,7 +467,18 @@ impl ReactLoop {
                                 },
                             )
                             .await;
-                            format!("\n[Tool Error: {}]\n{e}", tool_call.tool_name())
+                            tracing::warn!(tool = tool_call.tool_name(), error = %e, "optional reasoning tool failed");
+                            conversation.push_str(&format!(
+                                "\n[Tool unavailable: {}]\nThis optional tool could not be used. Do not infer an engine, model, or pipeline failure from this. Answer with reliable existing context and mention the unavailable tool only if it prevents answering.",
+                                tool_call.tool_name()
+                            ));
+                            return safe_final_answer(
+                                inference_lock,
+                                &conversation,
+                                model_name,
+                                round,
+                            )
+                            .await;
                         }
                     };
 
@@ -343,33 +494,26 @@ impl ReactLoop {
                 phase: "limit",
                 title: "Reasoning limit reached",
                 detail: Some("AEGIS is forcing a final answer from the gathered context."),
-                round: Some(MAX_ROUNDS),
+                round: Some(max_rounds),
                 tool: None,
             },
         )
         .await;
 
         let force_prompt = format!(
-            "{}\n\nYou have used all {MAX_ROUNDS} rounds. \
+            "{}\n\nYou have used the available reasoning rounds. \
              Provide your final answer now. Do not call any more tools.\n\n\
              [Assistant — final answer only, no JSON]",
             conversation
         );
 
-        // Best-effort: if the force-finalize call itself fails, return
-        // whatever conversation we built up so the user isn't left empty-handed.
+        // Best-effort: never return the internal loop transcript directly.
         let inference = inference_lock.read().await;
         match inference.call(&force_prompt, model_name).await {
-            Ok(answer) => Ok(answer),
-            Err(e) => {
-                let fallback = format!(
-                    "{}\n\n[Note: The engine reached its reasoning limit and \
-                     encountered an error generating the final answer: {e}. \
-                     The information above was gathered during the process.]",
-                    conversation
-                );
-                Ok(fallback)
-            }
+            Ok(answer) => Ok(sanitize_final_answer(&answer)),
+            Err(e) => Ok(format!(
+                "I reached the reasoning limit and could not safely generate a final answer: {e}"
+            )),
         }
     }
 }
@@ -378,6 +522,243 @@ async fn send_reasoning_event(tx: &mpsc::Sender<String>, event: ReasoningEvent<'
     if let Ok(json) = serde_json::to_string(&event) {
         let _ = tx.send(format!("[REASONING_EVENT] {json}")).await;
     }
+}
+
+fn tool_call_detail(tool: &ToolCall) -> String {
+    match tool {
+        ToolCall::Calculate(expression) => {
+            format!("Evaluating `{}` exactly.", truncate_inline(expression, 80))
+        }
+        ToolCall::Search(query) => format!(
+            "Searching the active project for `{}`.",
+            truncate_inline(query, 100)
+        ),
+        ToolCall::ReadFile(path) => format!(
+            "Reading `{}` from the active project.",
+            truncate_inline(path, 100)
+        ),
+        ToolCall::SearchFiles(pattern, _) => format!(
+            "Finding project files matching `{}`.",
+            truncate_inline(pattern, 100)
+        ),
+        ToolCall::RunTerminal(command) => format!(
+            "Running the read-only check `{}`.",
+            truncate_inline(command, 100)
+        ),
+        ToolCall::GitStatus(_) => {
+            "Inspecting the active repository state and changed files.".to_string()
+        }
+        ToolCall::ListDirectory(path) => format!(
+            "Inspecting the project directory `{}`.",
+            truncate_inline(path, 100)
+        ),
+        ToolCall::KnowledgeSearch(query) => format!(
+            "Searching indexed local knowledge for `{}`.",
+            truncate_inline(query, 100)
+        ),
+        ToolCall::OcrImage(path) => {
+            format!("Extracting text from `{}`.", truncate_inline(path, 100))
+        }
+        ToolCall::DescribeImage(path) => format!(
+            "Inspecting visual content in `{}`.",
+            truncate_inline(path, 100)
+        ),
+        ToolCall::Rag(query) => format!(
+            "Retrieving document passages relevant to `{}`.",
+            truncate_inline(query, 100)
+        ),
+        ToolCall::Zotero(query) => format!(
+            "Searching the research library for `{}`.",
+            truncate_inline(query, 100)
+        ),
+        ToolCall::WriteFile(path, _) => format!(
+            "Preparing a safe patch proposal for `{}`.",
+            truncate_inline(path, 100)
+        ),
+    }
+}
+
+fn tool_result_detail(result: &ToolResult) -> String {
+    if result.tool_name == "calculate" {
+        return format!(
+            "Calculator result: `{}`.",
+            truncate_inline(&result.output, 80)
+        );
+    }
+    format!(
+        "{} returned usable context for the next decision.",
+        result.tool_name.replace('_', " ")
+    )
+}
+
+fn truncate_inline(value: &str, max_chars: usize) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
+        return compact;
+    }
+    let mut truncated = compact
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    truncated.push_str("...");
+    truncated
+}
+
+async fn safe_final_answer(
+    inference_lock: &RwLock<Box<dyn InferenceBackend + Send + Sync>>,
+    conversation: &str,
+    model_name: &str,
+    round: usize,
+) -> Result<String> {
+    let prompt = format!(
+        "{conversation}\n\n\
+         The previous response could not be parsed as a safe tool-routing JSON object.\n\
+         Provide a concise final answer for the user now. Do not include hidden reasoning, \
+         chain-of-thought, JSON, XML tags, or tool calls. Use normal Markdown prose. Only place \
+         executable code in a fenced block, and never wrap headings or ordinary prose in one. \
+         Typeset mathematical notation as LaTeX using `$...$` inline or `$$...$$` for a standalone \
+         equation. Never put mathematical notation in a code fence.\n\n\
+         [Assistant - final answer only]"
+    );
+    let inference = inference_lock.read().await;
+    let answer = call_with_retry(&**inference, &prompt, model_name, round).await?;
+    Ok(sanitize_final_answer(&answer))
+}
+
+async fn direct_reasoned_answer(
+    inference_lock: &RwLock<Box<dyn InferenceBackend + Send + Sync>>,
+    query: &str,
+    conversation_context: &str,
+    model_name: &str,
+) -> Result<String> {
+    let prompt = build_direct_reasoned_prompt(query, conversation_context);
+    let inference = inference_lock.read().await;
+    let answer = call_with_retry(&**inference, &prompt, model_name, 1).await?;
+    Ok(sanitize_final_answer(&answer))
+}
+
+fn build_direct_reasoned_prompt(query: &str, conversation_context: &str) -> String {
+    let formatting = response_format_instruction(query);
+    let context = render_reasoning_context(conversation_context);
+    format!(
+        "You are AEGIS, a careful local assistant. Answer the user directly using reliable knowledge. \
+         Think internally, but return only the concise final answer. Do not claim to have searched files, \
+         called tools, or verified external facts. Use the supplied conversation context to resolve references \
+         and maintain continuity. Treat persistent memories as user-provided facts or preferences, while the \
+         latest request always takes priority. {formatting} If necessary information is missing, say what is missing.\n\n\
+         {context}\
+         User request:\n{query}\n\n[Assistant - final answer only]"
+    )
+}
+
+fn render_reasoning_context(conversation_context: &str) -> String {
+    let context = conversation_context.trim();
+    if context.is_empty() {
+        String::new()
+    } else {
+        format!("Conversation context:\n{context}\n\n")
+    }
+}
+
+fn build_reasoning_conversation(
+    system_prompt: &str,
+    conversation_context: &str,
+    query: &str,
+) -> String {
+    format!(
+        "[System]\n{system_prompt}\n\n{}[User]\n{query}",
+        render_reasoning_context(conversation_context)
+    )
+}
+
+fn response_format_instruction(query: &str) -> &'static str {
+    let lower = query.to_ascii_lowercase();
+    let requests_code = contains_any(
+        &lower,
+        &[
+            "write code",
+            "show me code",
+            "code example",
+            "create a function",
+            "create me a function",
+            "write a function",
+            "implement a function",
+            "python function",
+            "javascript function",
+            "typescript function",
+            "rust function",
+            "python script",
+            "shell script",
+        ],
+    );
+    let requests_math = contains_any(
+        &lower,
+        &[
+            "calculate",
+            "compute",
+            "derivative",
+            "differentiate",
+            "integral",
+            "integrate",
+            "equation",
+            "formula",
+            "fraction",
+            "square root",
+            "matrix",
+            "determinant",
+            "probability",
+            "simplify",
+            "solve for",
+        ],
+    );
+    if requests_code {
+        "The user requested executable code, so put that code in a fenced Markdown block with the correct language tag. Keep any explanation outside the fence."
+    } else if requests_math {
+        "Typeset mathematical notation as valid LaTeX. Use `$...$` for inline expressions and `$$...$$` for standalone equations or derivations. Keep explanatory prose outside the delimiters, do not escape the delimiter dollar signs, and never put math in a code fence."
+    } else {
+        "Use normal Markdown prose. Do not use a code fence unless executable code is genuinely required; never wrap headings, greetings, quotations, or ordinary prose in a code block."
+    }
+}
+
+fn sanitize_final_answer(raw: &str) -> String {
+    let without_think = strip_tag_blocks(raw, "think");
+    let trimmed = without_think.trim();
+    if trimmed.is_empty() {
+        return "I could not safely produce a final answer from the reasoning loop.".to_string();
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&extract_json(trimmed)) {
+        if let Some(answer) = value.get("answer").and_then(|v| v.as_str()) {
+            let answer = strip_tag_blocks(answer, "think").trim().to_string();
+            if !answer.is_empty() {
+                return answer;
+            }
+        }
+    }
+
+    trimmed.to_string()
+}
+
+fn strip_tag_blocks(input: &str, tag: &str) -> String {
+    let mut remaining = input;
+    let mut output = String::new();
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    loop {
+        let lower = remaining.to_lowercase();
+        let Some(start) = lower.find(&open) else {
+            output.push_str(remaining);
+            break;
+        };
+        output.push_str(&remaining[..start]);
+        let after_open = start + open.len();
+        let lower_after = remaining[after_open..].to_lowercase();
+        let Some(end_rel) = lower_after.find(&close) else {
+            break;
+        };
+        remaining = &remaining[after_open + end_rel + close.len()..];
+    }
+    output
 }
 
 /// Call inference with one automatic retry on transient failure.
@@ -414,10 +795,14 @@ async fn execute_tool(
 ) -> Result<ToolResult> {
     match tool {
         ToolCall::Search(query) => {
-            let output = tool_registry
-                .execute_code_search(query, project_path)
-                .await
-                .unwrap_or_else(|e| format!("Search failed: {e}"));
+            let output = match tool_registry.execute_code_search(query, project_path).await {
+                Ok(output) if !output.trim().is_empty() => output,
+                Ok(_) => search_project_locally(query, project_path).await?,
+                Err(error) => {
+                    tracing::warn!(error = %error, "Semble search unavailable; using native project search");
+                    search_project_locally(query, project_path).await?
+                }
+            };
             Ok(ToolResult {
                 tool_name: "search".into(),
                 input: query.clone(),
@@ -425,7 +810,7 @@ async fn execute_tool(
             })
         }
         ToolCall::ReadFile(path) => {
-            let safe_path = validate_read_path(path)?;
+            let safe_path = validate_read_path(path, project_path)?;
             let output = match tokio::fs::read_to_string(&safe_path).await {
                 Ok(text) => truncate(&text, MAX_FILE_CHARS),
                 Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
@@ -440,46 +825,17 @@ async fn execute_tool(
             })
         }
         ToolCall::WriteFile(path, content) => {
-            let safe_path = validate_write_path(path)?;
             let size = content.len();
-            if size > MAX_FILE_WRITE_BYTES {
-                Ok(ToolResult {
-                    tool_name: "write_file".into(),
-                    input: format!("{path} ({size} bytes)"),
-                    output: format!(
-                        "Write rejected: content is {size} bytes which exceeds the \
-                         maximum of {MAX_FILE_WRITE_BYTES} bytes."
-                    ),
-                })
-            } else {
-                // Create parent directories before writing so new paths work.
-                if let Some(parent) = safe_path.parent() {
-                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return Ok(ToolResult {
-                            tool_name: "write_file".into(),
-                            input: format!("{path} ({size} bytes)"),
-                            output: format!(
-                                "Failed to create parent directories for `{path}`: {e}"
-                            ),
-                        });
-                    }
-                }
-                match tokio::fs::write(&safe_path, content).await {
-                    Ok(()) => Ok(ToolResult {
-                        tool_name: "write_file".into(),
-                        input: format!("{path} ({size} bytes)"),
-                        output: format!("Successfully wrote {size} bytes to `{path}`."),
-                    }),
-                    Err(e) => Ok(ToolResult {
-                        tool_name: "write_file".into(),
-                        input: format!("{path} ({size} bytes)"),
-                        output: format!("Failed to write `{path}`: {e}"),
-                    }),
-                }
-            }
+            Ok(ToolResult {
+                tool_name: "write_file".into(),
+                input: format!("{path} ({size} bytes)"),
+                output: "Write rejected: automatic reasoning runs are read-only. \
+                         Describe the intended patch in the final answer so the user can review and apply it."
+                    .to_string(),
+            })
         }
         ToolCall::SearchFiles(pattern, dir) => {
-            let output = search_files_locally(pattern, dir.as_deref()).await;
+            let output = search_files_locally(pattern, dir.as_deref(), project_path).await;
             Ok(ToolResult {
                 tool_name: "search_files".into(),
                 input: match dir {
@@ -524,7 +880,7 @@ async fn execute_tool(
             })
         }
         ToolCall::RunTerminal(command) => {
-            let output = run_terminal_command(command).await;
+            let output = run_terminal_command(command, project_path).await;
             Ok(ToolResult {
                 tool_name: "run_terminal".into(),
                 input: command.clone(),
@@ -532,7 +888,7 @@ async fn execute_tool(
             })
         }
         ToolCall::GitStatus(path) => {
-            let output = git_status_command(path).await;
+            let output = git_status_command(path, project_path).await;
             Ok(ToolResult {
                 tool_name: "git_status".into(),
                 input: path.clone(),
@@ -540,7 +896,7 @@ async fn execute_tool(
             })
         }
         ToolCall::ListDirectory(path) => {
-            let output = list_directory_command(path).await;
+            let output = list_directory_command(path, project_path).await;
             Ok(ToolResult {
                 tool_name: "list_directory".into(),
                 input: path.clone(),
@@ -577,14 +933,127 @@ async fn execute_tool(
     }
 }
 
+async fn search_project_locally(query: &str, project_path: Option<&str>) -> Result<String> {
+    let root = project_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Code search requires an active project."))?
+        .to_string();
+    let query = query.to_string();
+    tokio::task::spawn_blocking(move || {
+        let root = PathBuf::from(&root).canonicalize().with_context(|| {
+            format!("Could not access the active project `{root}` for local search")
+        })?;
+        let terms = query
+            .split(|character: char| !character.is_alphanumeric() && character != '_')
+            .map(str::to_ascii_lowercase)
+            .filter(|term| term.len() >= 3)
+            .filter(|term| {
+                !matches!(
+                    term.as_str(),
+                    "the" | "and" | "for" | "with" | "this" | "that" | "from" | "where"
+                )
+            })
+            .collect::<Vec<_>>();
+        if terms.is_empty() {
+            anyhow::bail!("Code search needs a more specific query.");
+        }
+
+        let mut stack = vec![root.clone()];
+        let mut matches = Vec::<(usize, String)>::new();
+        let mut scanned = 0usize;
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let name = path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("");
+                    if !matches!(
+                        name,
+                        ".git" | "node_modules" | "target" | "dist" | "build" | ".venv"
+                    ) && !name.starts_with('.')
+                    {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if scanned >= 20_000 || !is_local_search_file(&path) {
+                    continue;
+                }
+                scanned += 1;
+                let Ok(metadata) = path.metadata() else {
+                    continue;
+                };
+                if metadata.len() > 1_000_000 {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                for (index, line) in content.lines().enumerate() {
+                    let lower = line.to_ascii_lowercase();
+                    let score = terms
+                        .iter()
+                        .filter(|term| lower.contains(term.as_str()))
+                        .count();
+                    if score > 0 {
+                        let relative = path.strip_prefix(&root).unwrap_or(&path);
+                        matches.push((
+                            score,
+                            format!("{}:{}  {}", relative.display(), index + 1, line.trim()),
+                        ));
+                    }
+                }
+            }
+        }
+        matches.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+        matches.dedup_by(|left, right| left.1 == right.1);
+        if matches.is_empty() {
+            return Ok(format!(
+                "No local project matches were found for `{query}`."
+            ));
+        }
+        Ok(matches
+            .into_iter()
+            .take(30)
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>()
+            .join("\n"))
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("Local code search task failed: {error}"))?
+}
+
+fn is_local_search_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            [
+                "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "kt", "cs", "c", "h", "cpp",
+                "hpp", "rb", "php", "swift", "vue", "svelte", "html", "css", "scss", "json",
+                "toml", "yaml", "yml", "md", "txt", "sql", "sh", "ps1",
+            ]
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
 /// Path-sanitisation guard for `read_file`.
 ///
 /// Resolves the path to its canonical form and rejects it if it does
 /// not reside inside an allowed directory.  Currently allows reading
 /// files under the current working directory.  Extend `ALLOWED_ROOTS`
 /// if the tool should cover wider filesystem access.
-fn validate_read_path(requested: &str) -> Result<std::path::PathBuf> {
-    let cwd = std::env::current_dir().context("Could not determine current working directory")?;
+fn validate_read_path(requested: &str, project_path: Option<&str>) -> Result<std::path::PathBuf> {
+    let cwd = match project_path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => std::env::current_dir().context("Could not determine current working directory")?,
+    };
     let cwd = cwd
         .canonicalize()
         .context("Could not canonicalize current working directory")?;
@@ -621,91 +1090,6 @@ fn validate_read_path(requested: &str) -> Result<std::path::PathBuf> {
     Ok(canonical)
 }
 
-/// Path-sanitisation guard for `write_file`.
-///
-/// Unlike `validate_read_path`, the *file itself* does not need to exist
-/// (we're creating it).  We canonicalize the *parent directory* to verify
-/// it is within the allowed project root, then append the filename.
-///
-/// Also blocks writes to known sensitive system paths as a safety net.
-fn validate_write_path(requested: &str) -> Result<std::path::PathBuf> {
-    let cwd = std::env::current_dir().context("Could not determine current working directory")?;
-    let cwd = cwd
-        .canonicalize()
-        .context("Could not canonicalize current working directory")?;
-
-    let candidate = Path::new(requested);
-    let candidate = if candidate.is_relative() {
-        cwd.join(candidate)
-    } else {
-        candidate.to_path_buf()
-    };
-
-    // Block writes to sensitive system paths regardless of cwd.
-    let candidate_lower = candidate.to_string_lossy().to_lowercase();
-    let system_paths = [
-        "/etc/",
-        "/usr/",
-        "/bin/",
-        "/boot/",
-        "/dev/",
-        "/proc/",
-        "/sys/",
-        "/var/",
-        "/lib/",
-        "/lib64/",
-        "/opt/",
-        "/root/",
-        "/sbin/",
-        "c:\\windows",
-        "c:\\program files",
-        "c:\\programdata",
-        "c:\\system volume information",
-        "c:\\boot",
-    ];
-    if system_paths.iter().any(|p| candidate_lower.contains(p)) {
-        anyhow::bail!(
-            "Access denied: writing to system paths is not allowed through the \
-             write_file tool. Requested: `{requested}`"
-        );
-    }
-
-    // Canonicalize the parent — it must exist and be within bounds.
-    let parent = candidate
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Path `{requested}` has no parent directory"))?;
-
-    // If parent doesn't exist yet, try its parent recursively.
-    let canonical_parent = match parent.canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            // Walk up until we find an existing ancestor.
-            let mut ancestor = Some(parent);
-            while let Some(a) = ancestor {
-                if a.canonicalize().is_ok() {
-                    break;
-                }
-                ancestor = a.parent();
-            }
-            anyhow::bail!(
-                "Parent directory for `{requested}` does not exist. \
-                 Use run_terminal(\"mkdir -p ...\") to create it first, \
-                 or use a path under an existing directory."
-            );
-        }
-    };
-
-    if !canonical_parent.starts_with(&cwd) {
-        anyhow::bail!(
-            "Access denied: `{requested}` resolves outside the \
-             allowed directory (`{}`)",
-            cwd.display()
-        );
-    }
-
-    Ok(candidate)
-}
-
 /// Execute a shell command with a timeout.
 ///
 /// Uses `sh -c` on Unix and `cmd /c` on Windows so pipes, redirects,
@@ -713,7 +1097,7 @@ fn validate_write_path(requested: &str) -> Result<std::path::PathBuf> {
 ///
 /// Blocks for a maximum of `TERMINAL_TIMEOUT_SECS` — the ReAct loop
 /// would deadlock if a command hangs forever.
-async fn run_terminal_command(command: &str) -> String {
+async fn run_terminal_command(command: &str, project_path: Option<&str>) -> String {
     // Safety guard: block destructive operations with robust matching.
     // Normalise the command so simple obfuscations don't bypass the check.
     let normalised = command
@@ -793,6 +1177,12 @@ async fn run_terminal_command(command: &str) -> String {
             .to_string();
     }
 
+    if is_mutating_terminal_command(normalised, &lower) {
+        return "Command rejected: automatic reasoning terminal commands are read-only. \
+                Ask the user to approve file changes or provide a patch in the final answer."
+            .to_string();
+    }
+
     // Determine the shell command.
     let (shell, flag) = if cfg!(windows) {
         ("cmd.exe", "/C")
@@ -800,12 +1190,24 @@ async fn run_terminal_command(command: &str) -> String {
         ("sh", "-c")
     };
 
+    let working_directory = match project_path {
+        Some(path) if !path.trim().is_empty() => match Path::new(path).canonicalize() {
+            Ok(directory) if directory.is_dir() => Some(directory),
+            Ok(_) => return format!("Command rejected: project path `{path}` is not a directory."),
+            Err(error) => {
+                return format!("Command rejected: project path `{path}` is unavailable: {error}");
+            }
+        },
+        _ => None,
+    };
+    let mut process = tokio::process::Command::new(shell);
+    process.arg(flag).arg(command);
+    if let Some(directory) = working_directory {
+        process.current_dir(directory);
+    }
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(TERMINAL_TIMEOUT_SECS),
-        tokio::process::Command::new(shell)
-            .arg(flag)
-            .arg(command)
-            .output(),
+        process.output(),
     )
     .await;
 
@@ -845,25 +1247,68 @@ async fn run_terminal_command(command: &str) -> String {
     }
 }
 
+fn is_mutating_terminal_command(normalised: &str, lower: &str) -> bool {
+    let mutating_tokens = [
+        ">",
+        ">>",
+        "del ",
+        "erase ",
+        "move ",
+        "copy ",
+        "xcopy ",
+        "robocopy ",
+        "ren ",
+        "rename ",
+        "rmdir ",
+        "mkdir ",
+        "md ",
+        "touch ",
+        "tee ",
+        "mv ",
+        "cp ",
+        "install ",
+        "set-content",
+        "add-content",
+        "out-file",
+        "new-item",
+        "remove-item",
+        "move-item",
+        "copy-item",
+        "rename-item",
+    ];
+    let command_with_padding = format!(" {normalised} ");
+    if mutating_tokens
+        .iter()
+        .any(|token| command_with_padding.contains(token))
+    {
+        return true;
+    }
+
+    lower.contains(" -out ")
+        || lower.contains(" --out ")
+        || lower.contains(" --output ")
+        || lower.contains(" -output ")
+}
+
 /// Recursively search for files matching a glob-like pattern.
 ///
 /// Uses simple substring matching (not full glob) so no extra
 /// dependencies are needed.  Searches up to `MAX_SEARCH_RESULTS`
 /// files and returns a tree-style listing.
-async fn search_files_locally(pattern: &str, dir: Option<&str>) -> String {
+async fn search_files_locally(
+    pattern: &str,
+    dir: Option<&str>,
+    project_path: Option<&str>,
+) -> String {
     if pattern.trim().is_empty() {
         return "Error: search pattern cannot be empty.".to_string();
     }
 
-    let root = match dir {
-        Some(d) => match std::path::Path::new(d).canonicalize() {
-            Ok(p) => p,
-            Err(e) => return format!("Could not access directory `{d}`: {e}"),
-        },
-        None => match std::env::current_dir() {
-            Ok(p) => p,
-            Err(e) => return format!("Could not determine current directory: {e}"),
-        },
+    let requested = dir.unwrap_or(".");
+    let root = match validate_read_path(requested, project_path) {
+        Ok(path) if path.is_dir() => path,
+        Ok(_) => return format!("`{requested}` is not a directory."),
+        Err(error) => return format!("Could not access directory `{requested}`: {error}"),
     };
 
     let lower_pattern = pattern.to_lowercase();
@@ -921,8 +1366,8 @@ async fn search_files_locally(pattern: &str, dir: Option<&str>) -> String {
 }
 
 /// Run several git commands in a directory and aggregate the output.
-async fn git_status_command(path: &str) -> String {
-    let dir = match validate_read_path(path) {
+async fn git_status_command(path: &str, project_path: Option<&str>) -> String {
+    let dir = match validate_read_path(path, project_path) {
         Ok(p) => p,
         Err(e) => return format!("Could not access `{path}`: {e}"),
     };
@@ -988,8 +1433,8 @@ async fn git_status_command(path: &str) -> String {
 }
 
 /// List files and directories in a path, with size and type info.
-async fn list_directory_command(path: &str) -> String {
-    let dir = match validate_read_path(path) {
+async fn list_directory_command(path: &str, project_path: Option<&str>) -> String {
+    let dir = match validate_read_path(path, project_path) {
         Ok(p) => p,
         Err(e) => return format!("Could not access `{path}`: {e}"),
     };
@@ -1085,7 +1530,7 @@ fn format_file_size(bytes: u64) -> String {
 /// Sends the image as base64 in a JSON payload so no filesystem path is
 /// shared between the Rust engine and Python service.
 async fn ocr_image_command(path: &str, tx: &mpsc::Sender<String>) -> String {
-    let safe_path = match validate_read_path(path) {
+    let safe_path = match validate_read_path(path, None) {
         Ok(p) => p,
         Err(e) => return format!("Could not access `{path}`: {e}"),
     };
@@ -1156,7 +1601,7 @@ async fn ocr_image_command(path: &str, tx: &mpsc::Sender<String>) -> String {
 /// `VISION_MODEL` environment variable (default: `llava`).  The image is
 /// base64-encoded and sent inline so no file-system access is needed.
 async fn describe_image_command(path: &str, tx: &mpsc::Sender<String>) -> String {
-    let safe_path = match validate_read_path(path) {
+    let safe_path = match validate_read_path(path, None) {
         Ok(p) => p,
         Err(e) => return format!("Could not access `{path}`: {e}"),
     };
@@ -1275,9 +1720,6 @@ fn calculate_expression(expr: &str) -> Result<String> {
         fn parse_number(&mut self) -> Result<f64> {
             self.skip_ws();
             let mut buf = String::new();
-            if matches!(self.chars.peek(), Some('+') | Some('-')) {
-                buf.push(self.chars.next().unwrap());
-            }
             while let Some(ch) = self.chars.peek().copied() {
                 if ch.is_ascii_digit() || ch == '.' {
                     buf.push(ch);
@@ -1286,7 +1728,16 @@ fn calculate_expression(expr: &str) -> Result<String> {
                     break;
                 }
             }
-            if buf.is_empty() || buf == "+" || buf == "-" {
+            if matches!(self.chars.peek(), Some('e') | Some('E')) {
+                buf.push(self.chars.next().unwrap());
+                if matches!(self.chars.peek(), Some('+') | Some('-')) {
+                    buf.push(self.chars.next().unwrap());
+                }
+                while matches!(self.chars.peek(), Some(ch) if ch.is_ascii_digit()) {
+                    buf.push(self.chars.next().unwrap());
+                }
+            }
+            if buf.is_empty() {
                 anyhow::bail!("expected a number");
             }
             Ok(buf
@@ -1294,7 +1745,44 @@ fn calculate_expression(expr: &str) -> Result<String> {
                 .with_context(|| format!("could not parse number `{buf}`"))?)
         }
 
-        fn parse_factor(&mut self) -> Result<f64> {
+        fn parse_named_value(&mut self) -> Result<f64> {
+            let mut name = String::new();
+            while matches!(self.chars.peek(), Some(ch) if ch.is_ascii_alphanumeric()) {
+                name.push(self.chars.next().unwrap().to_ascii_lowercase());
+            }
+            match name.as_str() {
+                "pi" => Ok(std::f64::consts::PI),
+                "e" => Ok(std::f64::consts::E),
+                _ => {
+                    self.skip_ws();
+                    if self.chars.next() != Some('(') {
+                        anyhow::bail!("function `{name}` requires parentheses");
+                    }
+                    let value = self.parse_expr()?;
+                    self.skip_ws();
+                    if self.chars.next() != Some(')') {
+                        anyhow::bail!("missing closing `)` after `{name}`");
+                    }
+                    match name.as_str() {
+                        "sqrt" => {
+                            if value < 0.0 {
+                                anyhow::bail!("square root is undefined for negative values");
+                            }
+                            Ok(value.sqrt())
+                        }
+                        "abs" => Ok(value.abs()),
+                        "sin" => Ok(value.sin()),
+                        "cos" => Ok(value.cos()),
+                        "tan" => Ok(value.tan()),
+                        "ln" => Ok(value.ln()),
+                        "log" | "log10" => Ok(value.log10()),
+                        _ => anyhow::bail!("unsupported function `{name}`"),
+                    }
+                }
+            }
+        }
+
+        fn parse_primary(&mut self) -> Result<f64> {
             self.skip_ws();
             match self.chars.peek().copied() {
                 Some('(') => {
@@ -1306,22 +1794,57 @@ fn calculate_expression(expr: &str) -> Result<String> {
                         _ => anyhow::bail!("missing closing `)`"),
                     }
                 }
+                Some('√') => {
+                    self.chars.next();
+                    let value = self.parse_primary()?;
+                    if value < 0.0 {
+                        anyhow::bail!("square root is undefined for negative values");
+                    }
+                    Ok(value.sqrt())
+                }
+                Some(ch) if ch.is_ascii_alphabetic() => self.parse_named_value(),
                 Some(_) => self.parse_number(),
                 None => anyhow::bail!("expected an expression"),
             }
         }
 
+        fn parse_unary(&mut self) -> Result<f64> {
+            self.skip_ws();
+            match self.chars.peek().copied() {
+                Some('+') => {
+                    self.chars.next();
+                    self.parse_unary()
+                }
+                Some('-') => {
+                    self.chars.next();
+                    Ok(-self.parse_unary()?)
+                }
+                _ => self.parse_primary(),
+            }
+        }
+
+        fn parse_power(&mut self) -> Result<f64> {
+            let value = self.parse_unary()?;
+            self.skip_ws();
+            if self.chars.peek() == Some(&'^') {
+                self.chars.next();
+                return Ok(value.powf(self.parse_power()?));
+            }
+            Ok(value)
+        }
+
         fn parse_term(&mut self) -> Result<f64> {
-            let mut value = self.parse_factor()?;
+            let mut value = self.parse_power()?;
             loop {
                 self.skip_ws();
                 let op = match self.chars.peek().copied() {
                     Some('*') => '*',
                     Some('/') => '/',
+                    Some('%') => '%',
                     _ => break,
                 };
                 self.chars.next();
-                let rhs = self.parse_factor()?;
+                let rhs = self.parse_power()?;
                 value = match op {
                     '*' => value * rhs,
                     '/' => {
@@ -1329,6 +1852,12 @@ fn calculate_expression(expr: &str) -> Result<String> {
                             anyhow::bail!("division by zero");
                         }
                         value / rhs
+                    }
+                    '%' => {
+                        if rhs == 0.0 {
+                            anyhow::bail!("division by zero");
+                        }
+                        value % rhs
                     }
                     _ => unreachable!(),
                 };
@@ -1364,6 +1893,9 @@ fn calculate_expression(expr: &str) -> Result<String> {
     parser.skip_ws();
     if parser.chars.peek().is_some() {
         anyhow::bail!("unexpected trailing input in expression");
+    }
+    if !value.is_finite() {
+        anyhow::bail!("calculation produced a non-finite result");
     }
 
     Ok(if value.fract() == 0.0 {
@@ -1421,8 +1953,16 @@ struct ReActResponse {
 
 fn parse_react_response(raw: &str) -> Result<ModelDecision> {
     let json = extract_json(raw);
-    let parsed: ReActResponse = serde_json::from_str(&json)
-        .with_context(|| format!("Failed to parse model JSON response:\n{raw}"))?;
+    let parsed: ReActResponse = match serde_json::from_str(&json) {
+        Ok(parsed) => parsed,
+        Err(_) if looks_like_plain_answer(raw) => {
+            return Ok(ModelDecision::FinalAnswer(sanitize_final_answer(raw)));
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to parse model JSON response:\n{raw}"));
+        }
+    };
 
     if let Some(answer) = parsed.answer {
         let answer = answer.trim().to_string();
@@ -1537,7 +2077,7 @@ fn parse_react_response(raw: &str) -> Result<ModelDecision> {
             }
             other => {
                 anyhow::bail!(
-                    "Unknown tool `{other}`. Valid tools: search, read_file, write_file, search_files, run_terminal, git_status, list_directory, calculate, search_knowledge, ocr_image, describe_image, rag, zotero"
+                    "Unknown tool `{other}`. Valid tools: search, read_file, search_files, run_terminal, git_status, list_directory, calculate, search_knowledge, ocr_image, describe_image, rag, zotero"
                 )
             }
         };
@@ -1545,6 +2085,15 @@ fn parse_react_response(raw: &str) -> Result<ModelDecision> {
     }
 
     anyhow::bail!("Model response did not contain a tool call or final answer.\nResponse:\n{raw}")
+}
+
+fn looks_like_plain_answer(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    !trimmed.is_empty()
+        && !trimmed.starts_with('{')
+        && !trimmed.starts_with("```json")
+        && !trimmed.contains("\"tool\"")
+        && !trimmed.contains("\"arguments\"")
 }
 
 fn extract_json(raw: &str) -> String {
@@ -1567,96 +2116,267 @@ fn extract_json(raw: &str) -> String {
 
 // ── prompt building ───────────────────────────────────────────────────
 
-fn build_system_prompt() -> String {
-    r#"You are AEGIS, a local AI assistant that uses tools to gather information before answering.
+fn build_system_prompt(plan: &ToolPlan) -> String {
+    let mut tools = String::new();
+    for tool in &plan.allowed {
+        let description = match *tool {
+            "search" => "search(query): Search code content in the active project.",
+            "read_file" => "read_file(path): Read one project-relative text file.",
+            "search_files" => "search_files(pattern, dir): Find project files by name.",
+            "run_terminal" => {
+                "run_terminal(command): Run one read-only build, test, or inspection command."
+            }
+            "git_status" => "git_status(path): Inspect branch, status, and diff summaries.",
+            "list_directory" => "list_directory(path): List one project-relative directory.",
+            "calculate" => "calculate(expression): Evaluate an arithmetic expression.",
+            "search_knowledge" => {
+                "search_knowledge(query): Search indexed user knowledge and prior context."
+            }
+            "zotero" => "zotero(query): Search the user's Zotero research library.",
+            _ => continue,
+        };
+        tools.push_str("- ");
+        tools.push_str(description);
+        tools.push('\n');
+    }
 
-AVAILABLE TOOLS
-
-search(query) — Search the codebase for relevant code.
-  Example: search("sort function in Rust")
-
-read_file(path) — Read the full contents of a file.
-  Path is relative to the project root. Do NOT use absolute paths.
-  Example: read_file("src/main.rs")
-
-rag(query) — Search the user's imported documents.
-  Use when the user has attached documents or asks about document content.
-  Example: rag("machine learning concepts")
-
-zotero(query) — Search the Zotero research library.
-  Use for research-related questions.
-  Example: zotero("transformer architecture")
-
-run_terminal(command) — Run a shell command and capture its output.
-  Use this to compile code, run tests, check build output, or inspect
-  the environment. The command runs in the project root directory with
-  a 30-second timeout. Pipes, redirects, and chaining (&&, ||) work.
-  Example: run_terminal("cargo check")
-  Example: run_terminal("cd src && cargo test")
-
-write_file(path, content) — Write content to a file.
-  Use this to create new files or modify existing ones. Will create
-  parent directories if needed. Content is capped at 100,000 bytes.
-  Use relative paths from the project root.
-  Example: write_file("src/main.rs", "fn main() { }")
-
-search_files(pattern, dir) — Search for files by name.
-  Use this to find files in the project when you don't know the exact
-  path. Pattern is case-insensitive substring matching. dir is optional
-  and defaults to the project root. Skips hidden dirs, node_modules,
-  target, and .git.
-  Example: search_files("test", "src")
-  Example: search_files("Cargo.toml")
-
-search_knowledge(query) — Search the persistent knowledge base.
-  Use this to retrieve information from previously indexed documents
-  or past conversations. Returns relevant text excerpts with
-  relevance scores. Indexed documents persist across sessions.
-  Example: search_knowledge("authentication flow")
-
-ocr_image(path) — Extract text from an image using OCR.
-  Use this for screenshots, scanned documents, or photos containing
-  text. Routes through the Python RAG service with Tesseract OCR.
-  Best for code screenshots, document scans, and terminal output.
-  Examples: ocr_image("screenshot.png")
-
-describe_image(path) — Generate a detailed description of an image.
-  Use this for UI layouts, diagrams, charts, architecture drawings,
-  or any image where visual understanding matters more than exact
-  text. Uses Ollama vision model (llava). Falls back gracefully if
-  no vision model is loaded.
-  Tip: The tool name is "describe_image", "vision", or "describe".
-  Example: describe_image("diagram.png")
-
-HOW TO RESPOND
-
-You MUST respond with valid JSON in exactly one of these formats.
-
-To call a tool:
-{
-  "thought": "I need to find the relevant code first.",
-  "tool": "search",
-  "arguments": { "query": "sort function implementation" }
+    format!(
+        "You are AEGIS, a careful local assistant. A fast router selected only the tools relevant \
+         to this request. This route requires evidence from at least one selected tool before the \
+         final answer. Never claim a result that the tool did not return.\n\nALLOWED TOOLS\n{tools}\n\
+         RESPONSE FORMAT\nReturn exactly one JSON object. To answer: \
+         {{\"answer\":\"concise Markdown final answer\"}}. Only executable code requested by the user \
+         belongs in a language-tagged fence; headings and ordinary prose must stay outside fences. \
+         Typeset mathematical notation as LaTeX using `$...$` inline or `$$...$$` for standalone \
+         equations, never in code fences. To call one allowed tool: \
+         {{\"tool\":\"tool_name\",\"arguments\":{{...}}}}.\n\nRULES\n\
+         - Call at most one tool per round and only when its result is necessary for correctness.\n\
+         - You must call one allowed tool before returning the final answer.\n\
+         - Do not repeat or broaden searches without clear missing evidence.\n\
+         - Use project-relative paths only.\n\
+         - After a useful result, prefer answering over another tool call.\n\
+         - Never output chain-of-thought or text outside the JSON object."
+    )
 }
 
-To provide the final answer:
-{
-  "thought": "I have all the information needed.",
-  "answer": "Here is the explanation..."
+fn required_tool_fallback(plan: &ToolPlan, query: &str) -> Option<ToolCall> {
+    if plan.allowed.contains(&"calculate") {
+        return calculation_call_from_query(query);
+    }
+    if plan.allowed.contains(&"search_knowledge") {
+        return Some(ToolCall::KnowledgeSearch(query.to_string()));
+    }
+    if plan.allowed.contains(&"zotero") {
+        return Some(ToolCall::Zotero(query.to_string()));
+    }
+    if plan.allowed.contains(&"search") {
+        return Some(ToolCall::Search(query.to_string()));
+    }
+    if plan.allowed.contains(&"read_file") {
+        return extract_project_file_path(query).map(ToolCall::ReadFile);
+    }
+    None
 }
 
-RULES
+fn calculation_call_from_query(query: &str) -> Option<ToolCall> {
+    let lower = query.to_ascii_lowercase();
+    let numbers = query
+        .split(|character: char| !character.is_ascii_digit() && character != '.')
+        .filter(|part| !part.is_empty() && part.parse::<f64>().is_ok())
+        .collect::<Vec<_>>();
+    if lower.contains("square root") {
+        return numbers
+            .first()
+            .map(|number| ToolCall::Calculate(format!("sqrt({number})")));
+    }
+    if lower.contains("percentage of") && numbers.len() >= 2 {
+        return Some(ToolCall::Calculate(format!(
+            "{} / 100 * {}",
+            numbers[0], numbers[1]
+        )));
+    }
+    None
+}
 
-- Call at most ONE tool per round.
-- After each tool result, decide if you need more information or can answer.
-- Be specific with search queries.
-- When you have enough information, ALWAYS provide the final answer.
-- Do NOT repeat the same tool call with the same arguments.
-- Use relative paths only for read_file (e.g. "src/main.rs" not "/abs/path").
-- You have a maximum of 6 rounds. Finish before then.
-- If a tool returns an error, try a different approach or answer with what you have.
-- ALWAYS output valid JSON. Never wrap it in additional text or markdown."#
-        .to_string()
+fn extract_project_file_path(query: &str) -> Option<String> {
+    query
+        .split_whitespace()
+        .map(|part| {
+            part.trim_matches(|character: char| {
+                matches!(character, '`' | '\'' | '"' | ',' | ':' | ';' | '(' | ')')
+            })
+        })
+        .find(|part| {
+            contains_any(
+                &part.to_ascii_lowercase(),
+                &[".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java"],
+            )
+        })
+        .map(str::to_string)
+}
+
+fn select_tool_plan(
+    query: &str,
+    workflow: WorkflowId,
+    mode: &str,
+    has_attachments: bool,
+    has_project: bool,
+) -> ToolPlan {
+    let lower = query.to_ascii_lowercase();
+    let code_request = mode.eq_ignore_ascii_case("coder")
+        || matches!(
+            workflow,
+            WorkflowId::CodeExplain | WorkflowId::CodeGenerate | WorkflowId::CodeDebug
+        );
+    if code_request && has_project && needs_project_evidence(&lower) {
+        let explicit_path = contains_any(
+            &lower,
+            &["src/", "src\\", ".rs", ".ts", ".tsx", ".js", ".py"],
+        );
+        let mut allowed = vec!["read_file"];
+        if !explicit_path {
+            allowed.push("search");
+        }
+        if contains_any(&lower, &["find ", "where is", "locate ", "file named"]) {
+            allowed.push("search_files");
+        }
+        if contains_any(
+            &lower,
+            &[
+                "run test",
+                "failing test",
+                "build error",
+                "compile error",
+                "cargo test",
+                "npm test",
+            ],
+        ) {
+            allowed.push("run_terminal");
+        }
+        if contains_any(
+            &lower,
+            &["git status", "git diff", "working tree", "changed files"],
+        ) {
+            allowed.push("git_status");
+        }
+        if contains_any(
+            &lower,
+            &["project structure", "folder", "directory", "list files"],
+        ) {
+            allowed.push("list_directory");
+        }
+        return ToolPlan {
+            allowed,
+            max_calls: 3,
+            rationale: "This request targets the active code project, so AEGIS may use a small set of read-only project tools.",
+        };
+    }
+    if has_attachments {
+        return ToolPlan {
+            allowed: Vec::new(),
+            max_calls: 0,
+            rationale: "Relevant document passages were already retrieved before reasoning, so another search is unnecessary.",
+        };
+    }
+    if contains_any(
+        &lower,
+        &[
+            "zotero",
+            "my research library",
+            "my zotero",
+            "papers in my library",
+        ],
+    ) {
+        return ToolPlan {
+            allowed: vec!["zotero"],
+            max_calls: 1,
+            rationale: "The request explicitly refers to the user's research library, so only Zotero search is available.",
+        };
+    }
+    if contains_any(
+        &lower,
+        &[
+            "my notes",
+            "knowledge base",
+            "indexed knowledge",
+            "search my documents",
+        ],
+    ) {
+        return ToolPlan {
+            allowed: vec!["search_knowledge"],
+            max_calls: 1,
+            rationale: "The request explicitly asks for saved user context, so only local knowledge search is available.",
+        };
+    }
+    if looks_like_calculation(&lower) {
+        return ToolPlan {
+            allowed: vec!["calculate"],
+            max_calls: 1,
+            rationale: "The request contains a calculation where deterministic evaluation can improve accuracy.",
+        };
+    }
+    ToolPlan {
+        allowed: Vec::new(),
+        max_calls: 0,
+        rationale: if code_request && needs_project_evidence(&lower) {
+            "No active project is available to inspect, so AEGIS will answer directly without pretending to search files."
+        } else {
+            "The request can be answered from the conversation and model knowledge without external tools."
+        },
+    }
+}
+
+fn contains_any(text: &str, values: &[&str]) -> bool {
+    values.iter().any(|value| text.contains(value))
+}
+
+fn looks_like_calculation(text: &str) -> bool {
+    contains_any(
+        text,
+        &["calculate", "compute", "square root", "percentage of"],
+    ) || (text.chars().any(|character| character.is_ascii_digit())
+        && text
+            .chars()
+            .any(|character| matches!(character, '+' | '*' | '/' | '^' | '%')))
+}
+
+fn needs_project_evidence(text: &str) -> bool {
+    contains_any(
+        text,
+        &[
+            "this project",
+            "this repo",
+            "repository",
+            "codebase",
+            "our code",
+            "my code",
+            "this code",
+            "this file",
+            "find ",
+            "where is",
+            "locate ",
+            "fix ",
+            "debug",
+            "implement",
+            "refactor",
+            "review",
+            "update ",
+            "change ",
+            "add ",
+            "run test",
+            "failing test",
+            "build error",
+            "compile error",
+            "stack trace",
+            "src/",
+            "src\\",
+            ".rs",
+            ".ts",
+            ".tsx",
+            ".js",
+            ".py",
+        ],
+    )
 }
 
 // ── helpers ───────────────────────────────────────────────────────────
@@ -1955,6 +2675,228 @@ async fn search_knowledge_base_legacy(
 mod tests {
     use super::*;
 
+    #[test]
+    fn general_reasoning_routes_directly() {
+        let plan = select_tool_plan(
+            "Explain why the sky is blue",
+            WorkflowId::Default,
+            "general",
+            false,
+            true,
+        );
+        assert!(plan.is_direct());
+    }
+
+    #[test]
+    fn conceptual_code_question_does_not_search_project() {
+        let plan = select_tool_plan(
+            "Explain Rust ownership",
+            WorkflowId::CodeExplain,
+            "coder",
+            false,
+            true,
+        );
+        assert!(plan.is_direct());
+    }
+
+    #[test]
+    fn workspace_fix_gets_only_project_tools() {
+        let plan = select_tool_plan(
+            "Fix the failing tests in this project",
+            WorkflowId::CodeDebug,
+            "coder",
+            false,
+            true,
+        );
+        assert!(plan.allowed.contains(&"search"));
+        assert!(!plan.allowed.contains(&"zotero"));
+        assert!(!plan.allowed.contains(&"search_knowledge"));
+        assert_eq!(plan.max_calls, 3);
+    }
+
+    #[test]
+    fn attached_document_context_does_not_trigger_second_search() {
+        let plan = select_tool_plan(
+            "Summarize the attached report",
+            WorkflowId::Summarize,
+            "academic",
+            true,
+            false,
+        );
+        assert!(plan.is_direct());
+    }
+
+    #[test]
+    fn calculation_gets_only_calculator() {
+        let plan = select_tool_plan(
+            "What is the square root of 8977?",
+            WorkflowId::Default,
+            "general",
+            false,
+            false,
+        );
+        assert_eq!(plan.allowed, vec!["calculate"]);
+        assert_eq!(plan.max_calls, 1);
+    }
+
+    #[test]
+    fn calculator_supports_the_operations_selected_by_the_router() {
+        let square_root = calculate_expression("sqrt(8977)")
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+
+        assert!((square_root - 94.74703161577148).abs() < 1e-10);
+        assert_eq!(calculate_expression("2^3^2").unwrap(), "512");
+        assert_eq!(calculate_expression("17 % 5").unwrap(), "2");
+        assert_eq!(calculate_expression("sqrt(16) + abs(-2)").unwrap(), "6");
+    }
+
+    #[test]
+    fn calculator_rejects_invalid_domains() {
+        assert!(calculate_expression("sqrt(-1)").is_err());
+        assert!(calculate_expression("1 / 0").is_err());
+    }
+
+    #[test]
+    fn required_calculator_route_derives_square_root_expression() {
+        let plan = select_tool_plan(
+            "Calculate the square root of 8977 accurately",
+            WorkflowId::Default,
+            "general",
+            false,
+            false,
+        );
+
+        match required_tool_fallback(&plan, "Calculate the square root of 8977 accurately") {
+            Some(ToolCall::Calculate(expression)) => assert_eq!(expression, "sqrt(8977)"),
+            _ => panic!("expected a deterministic calculator fallback"),
+        }
+    }
+
+    #[test]
+    fn required_project_route_derives_explicit_file_path() {
+        assert_eq!(
+            extract_project_file_path("Review `src/react_loop/mod.rs` for bugs"),
+            Some("src/react_loop/mod.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn current_conversation_recall_does_not_launch_knowledge_search() {
+        let plan = select_tool_plan(
+            "What did I say earlier in this conversation?",
+            WorkflowId::Default,
+            "general",
+            false,
+            false,
+        );
+
+        assert!(plan.is_direct());
+    }
+
+    #[test]
+    fn coder_mode_greeting_does_not_claim_a_project_is_missing() {
+        let plan = select_tool_plan(
+            "Hello, how are you?",
+            WorkflowId::Default,
+            "coder",
+            false,
+            false,
+        );
+
+        assert!(plan.is_direct());
+        assert!(!plan.rationale.contains("No active project"));
+    }
+
+    #[test]
+    fn project_request_without_project_explains_the_direct_fallback() {
+        let plan = select_tool_plan(
+            "Fix the failing tests in this project",
+            WorkflowId::CodeDebug,
+            "coder",
+            false,
+            false,
+        );
+
+        assert!(plan.is_direct());
+        assert!(plan.rationale.contains("No active project"));
+    }
+
+    #[test]
+    fn code_requests_receive_code_formatting_guidance() {
+        assert!(
+            response_format_instruction("Create a Python function").contains("fenced Markdown")
+        );
+    }
+
+    #[test]
+    fn greetings_receive_prose_formatting_guidance() {
+        let instruction = response_format_instruction("Hello, who are you?");
+        assert!(instruction.contains("normal Markdown prose"));
+        assert!(instruction.contains("Do not use a code fence"));
+    }
+
+    #[test]
+    fn math_requests_receive_latex_formatting_guidance() {
+        let instruction = response_format_instruction("Compute the derivative of x^12");
+
+        assert!(instruction.contains("valid LaTeX"));
+        assert!(instruction.contains("`$...$`"));
+        assert!(instruction.contains("`$$...$$`"));
+        assert!(instruction.contains("never put math in a code fence"));
+    }
+
+    #[test]
+    fn direct_reasoning_prompt_keeps_history_and_latest_request_separate() {
+        let prompt = build_direct_reasoned_prompt(
+            "What should you call me?",
+            "PRIOR CONVERSATION:\nuser: Call me Sam\nassistant: Hello Sam.",
+        );
+
+        assert!(prompt.contains("Conversation context:\nPRIOR CONVERSATION:"));
+        assert!(prompt.contains("user: Call me Sam"));
+        assert!(prompt.contains("User request:\nWhat should you call me?"));
+        assert!(
+            prompt.find("user: Call me Sam").unwrap()
+                < prompt
+                    .find("User request:\nWhat should you call me?")
+                    .unwrap()
+        );
+    }
+
+    #[test]
+    fn direct_reasoning_prompt_includes_persistent_memory() {
+        let prompt = build_direct_reasoned_prompt(
+            "What is my name?",
+            "SELECTED PERSISTENT MEMORY:\n- category: identity; priority: high; note: My name is Sam",
+        );
+
+        assert!(prompt.contains("note: My name is Sam"));
+        assert!(prompt.contains("latest request always takes priority"));
+    }
+
+    #[test]
+    fn empty_reasoning_context_does_not_add_placeholder_noise() {
+        let prompt = build_direct_reasoned_prompt("Hello", "  ");
+
+        assert!(!prompt.contains("Conversation context:"));
+        assert!(prompt.contains("User request:\nHello"));
+    }
+
+    #[test]
+    fn tool_reasoning_prompt_receives_context_before_current_query() {
+        let prompt = build_reasoning_conversation(
+            "system rules",
+            "user: Remember token alpha\nassistant: I will remember it.",
+            "What token did I give you?",
+        );
+
+        assert!(prompt.starts_with("[System]\nsystem rules"));
+        assert!(prompt.contains("Conversation context:\nuser: Remember token alpha"));
+        assert!(prompt.ends_with("[User]\nWhat token did I give you?"));
+    }
+
     // ── extract_json ──────────────────────────────────────────────────
 
     #[test]
@@ -1993,6 +2935,23 @@ mod tests {
     }
 
     #[test]
+    fn accepts_plain_model_answer_without_json_repair() {
+        match parse_react_response("A direct answer without routing JSON.").unwrap() {
+            ModelDecision::FinalAnswer(answer) => {
+                assert_eq!(answer, "A direct answer without routing JSON.")
+            }
+            _ => panic!("Expected FinalAnswer"),
+        }
+    }
+
+    #[test]
+    fn sanitize_final_answer_strips_think_tags_and_extracts_answer_json() {
+        let input =
+            r#"<think>private scratchpad</think>{"thought":"hidden","answer":"Visible answer."}"#;
+        assert_eq!(sanitize_final_answer(input), "Visible answer.");
+    }
+
+    #[test]
     fn parses_search_tool() {
         let input = r#"{"thought":"need code","tool":"search","arguments":{"query":"sort fn"}}"#;
         match parse_react_response(input).unwrap() {
@@ -2024,8 +2983,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_gibberish() {
-        assert!(parse_react_response("not json at all").is_err());
+    fn rejects_malformed_tool_json() {
+        assert!(parse_react_response(r#"{"tool":"search","arguments":oops}"#).is_err());
     }
 
     // ── truncate ──────────────────────────────────────────────────────
@@ -2055,13 +3014,13 @@ mod tests {
 
     #[test]
     fn validate_read_path_rejects_absolute_escape() {
-        let err = validate_read_path("C:\\Windows\\system32\\config").unwrap_err();
+        let err = validate_read_path("C:\\Windows\\system32\\config", None).unwrap_err();
         assert!(err.to_string().contains("Access denied"));
     }
 
     #[test]
     fn validate_read_path_rejects_traversal_escape() {
-        let err = validate_read_path("../../../../etc/passwd").unwrap_err();
+        let err = validate_read_path("../../../../etc/passwd", None).unwrap_err();
         assert!(
             err.to_string().contains("Access denied") || err.to_string().contains("does not exist")
         );
@@ -2070,8 +3029,22 @@ mod tests {
     #[test]
     fn validate_read_path_accepts_relative_file() {
         // Cargo.toml should exist in the engine directory
-        let result = validate_read_path("Cargo.toml");
+        let result = validate_read_path("Cargo.toml", None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_read_path_uses_explicit_project_root() {
+        let project = env!("CARGO_MANIFEST_DIR");
+        let result = validate_read_path("src/react_loop/mod.rs", Some(project)).unwrap();
+        assert!(result.starts_with(Path::new(project).canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn validate_read_path_rejects_escape_from_explicit_project_root() {
+        let project = env!("CARGO_MANIFEST_DIR");
+        let error = validate_read_path("../cli/Cargo.toml", Some(project)).unwrap_err();
+        assert!(error.to_string().contains("Access denied"));
     }
 
     // ── run_terminal parsing ──────────────────────────────────────────
@@ -2166,13 +3139,19 @@ mod tests {
 
     #[tokio::test]
     async fn safety_guard_rejects_rm_rf() {
-        let result = run_terminal_command("rm -rf /").await;
+        let result = run_terminal_command("rm -rf /", None).await;
         assert!(result.contains("rejected"));
     }
 
     #[tokio::test]
     async fn safety_guard_rejects_mkfs() {
-        let result = run_terminal_command("mkfs.ext4 /dev/sda1").await;
+        let result = run_terminal_command("mkfs.ext4 /dev/sda1", None).await;
+        assert!(result.contains("rejected"));
+    }
+
+    #[tokio::test]
+    async fn safety_guard_rejects_mutating_shell_commands() {
+        let result = run_terminal_command("Set-Content note.txt hello", None).await;
         assert!(result.contains("rejected"));
     }
 
@@ -2181,7 +3160,7 @@ mod tests {
         // We can't actually run this in a test, but we can verify it
         // passes the safety guard by checking it doesn't contain the
         // rejection message.
-        let result = run_terminal_command("echo ok").await;
+        let result = run_terminal_command("echo ok", None).await;
         assert!(!result.contains("rejected"));
     }
 

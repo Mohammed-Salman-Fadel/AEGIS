@@ -3,6 +3,8 @@
 export type {
   Role,
   RetrievalChunk,
+  ReasoningEvent,
+  ContextCompactionEvent,
   Message,
   ChatMode,
   MarkdownHeadingLevel,
@@ -49,6 +51,7 @@ export type {
   AppearanceTheme,
   SettingsTab,
   ResponseStyle,
+  CommandLineSettings,
 } from './settings.js';
 
 export type {

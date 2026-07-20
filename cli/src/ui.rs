@@ -29,6 +29,14 @@ pub struct LoadingAnimation {
     handle: Option<JoinHandle<()>>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RuntimeState {
+    Starting,
+    Warming,
+    Ready,
+    Degraded,
+}
+
 pub struct StreamedMarkdownRenderer<'a> {
     ui: &'a Ui,
     pending: String,
@@ -221,6 +229,24 @@ impl Ui {
             ComponentState::Ready => self.success("[READY]"),
             ComponentState::Scaffolded => self.warning("[SCAFFOLD]"),
             ComponentState::Missing => self.error("[MISSING]"),
+        }
+    }
+
+    pub fn section(&self, text: &str) -> String {
+        let rule = "─".repeat(3);
+        if self.no_color {
+            format!("{rule} {text}")
+        } else {
+            format!("{} {}", rule.dimmed(), text.bold().cyan())
+        }
+    }
+
+    pub fn runtime_badge(&self, state: RuntimeState) -> String {
+        match state {
+            RuntimeState::Starting => self.info("[STARTING]"),
+            RuntimeState::Warming => self.warning("[WARMING]"),
+            RuntimeState::Ready => self.success("[READY]"),
+            RuntimeState::Degraded => self.error("[DEGRADED]"),
         }
     }
 

@@ -17,6 +17,15 @@ export interface ReasoningEvent {
   tool?: string;
 }
 
+export interface ContextCompactionEvent {
+  removed_turns: number;
+  kept_turns: number;
+  estimated_tokens_before: number;
+  estimated_tokens_after: number;
+  history_budget_tokens: number;
+  context_window_tokens: number;
+}
+
 export interface Message {
   role: Role;
   content: string;

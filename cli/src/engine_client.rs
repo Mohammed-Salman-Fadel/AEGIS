@@ -9,7 +9,7 @@ use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::AppResult;
 use serde::{Deserialize, Serialize};
@@ -167,22 +167,24 @@ impl EngineClient {
 
     fn warm_active_model_silently(&self) -> AppResult<()> {
         let client = warmup_client();
-        let mut last_error = None;
+        let deadline = Instant::now() + Duration::from_secs(90);
 
-        for attempt in 0..6 {
-            match self.try_warm_active_model_once(&client) {
+        let last_error = loop {
+            let error = match self.try_warm_active_model_once(&client) {
                 Ok(()) => return Ok(()),
-                Err(error) => last_error = Some(error),
-            }
+                Err(error) => error,
+            };
 
-            if attempt < 5 {
-                thread::sleep(Duration::from_millis(750));
+            if Instant::now() >= deadline {
+                break error;
             }
-        }
+            thread::sleep(Duration::from_secs(1));
+        };
 
-        Err(last_error.unwrap_or_else(|| {
-            "Could not warm the active model for an unknown reason.".to_string()
-        }))
+        Err(format!(
+            "The active model did not become ready within 90 seconds. {}",
+            last_error
+        ))
     }
 
     fn try_warm_active_model_once(&self, client: &reqwest::blocking::Client) -> AppResult<()> {
@@ -417,10 +419,7 @@ impl EngineClient {
         let request_path = self.api_url("chat");
         let response = reqwest::blocking::Client::new()
             .post(&request_path)
-            .json(&ChatRequestBody {
-                session_id: session_id.map(str::to_string),
-                message: prompt.to_string(),
-            })
+            .json(&ChatRequestBody::chat(prompt, session_id))
             .send()
             .map_err(|error| format!("Could not send chat request to engine: {error}"))?;
 
@@ -431,6 +430,40 @@ impl EngineClient {
             ));
         }
 
+        self.consume_chat_stream(response, request_path, on_token)
+    }
+
+    pub fn code_task<F>(
+        &self,
+        prompt: &str,
+        project_name: &str,
+        project_path: &Path,
+        reasoning_enabled: bool,
+        on_token: F,
+    ) -> AppResult<ChatReply>
+    where
+        F: FnMut(&str) -> AppResult<()>,
+    {
+        let request_path = self.api_url("chat");
+        let response = reqwest::blocking::Client::new()
+            .post(&request_path)
+            .json(&ChatRequestBody {
+                session_id: None,
+                message: prompt.to_string(),
+                mode: Some("coder".to_string()),
+                code_project_name: Some(project_name.to_string()),
+                code_project_path: Some(project_path.to_string_lossy().to_string()),
+                reasoning_enabled,
+            })
+            .send()
+            .map_err(|error| format!("Could not send coding task to engine: {error}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Engine coding request failed with HTTP {}.",
+                response.status()
+            ));
+        }
         self.consume_chat_stream(response, request_path, on_token)
     }
 
@@ -1115,6 +1148,26 @@ impl EngineClient {
 struct ChatRequestBody {
     session_id: Option<String>,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_project_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_project_path: Option<String>,
+    reasoning_enabled: bool,
+}
+
+impl ChatRequestBody {
+    fn chat(prompt: &str, session_id: Option<&str>) -> Self {
+        Self {
+            session_id: session_id.map(str::to_string),
+            message: prompt.to_string(),
+            mode: None,
+            code_project_name: None,
+            code_project_path: None,
+            reasoning_enabled: false,
+        }
+    }
 }
 
 #[derive(Serialize)]

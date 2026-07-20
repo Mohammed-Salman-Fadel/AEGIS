@@ -3,6 +3,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { X, Search, FileText, Plus, TreePine, BookOpen, Loader, Share2 } from 'lucide-react';
 import { API_BASE } from '../constants';
 import { AssistantMarkdown } from './AssistantMarkdown';
+import { useDialogA11y } from '../hooks/useDialogA11y';
 
 type ObsidianTab = 'search' | 'read' | 'create' | 'tree' | 'graph';
 
@@ -83,6 +84,7 @@ interface ObsidianModalProps {
 }
 
 export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianModalProps) {
+  const dialogRef = useDialogA11y(isOpen, onClose);
   const [tab, setTab] = useState<ObsidianTab>('search');
   const [query, setQuery] = useState('');
   const [notePath, setNotePath] = useState('');
@@ -307,10 +309,10 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className={`flex w-[85vw] h-[85vh] flex-col rounded-2xl border shadow-2xl ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`} onClick={(e) => e.stopPropagation()}>
+      <div aria-labelledby="obsidian-dialog-title" aria-modal="true" className={`flex w-[85vw] h-[85vh] flex-col rounded-2xl border shadow-2xl ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`} onClick={(e) => e.stopPropagation()} ref={dialogRef} role="dialog" tabIndex={-1}>
         <div className={`flex items-center justify-between px-6 py-4 border-b shrink-0 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
-          <div className="flex items-center gap-2 text-base font-semibold"><BookOpen size={18} />Obsidian Vault</div>
-          <button className={`rounded-md p-1 transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onClose} type="button"><X size={18} /></button>
+          <div className="flex items-center gap-2 text-base font-semibold" id="obsidian-dialog-title"><BookOpen size={18} />Obsidian Vault</div>
+          <button aria-label="Close Obsidian vault" className={`rounded-md p-1 transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} data-dialog-initial-focus onClick={onClose} type="button"><X size={18} /></button>
         </div>
 
         <div className={`flex border-b shrink-0 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
@@ -330,10 +332,10 @@ export function ObsidianModal({ isDark, isOpen, onClose, vaultPath }: ObsidianMo
               {searchResults && searchResults.length > 0 && !selectedNoteContent && (
                 <div className={`rounded-lg border shadow-lg max-h-48 overflow-y-auto ${isDark ? 'border-zinc-700 bg-zinc-900' : 'border-stone-200 bg-white'}`}>
                   {searchResults.map((r: any) => (
-                    <div key={r.path} className={`px-3 py-2 text-sm cursor-pointer border-b last:border-0 ${isDark ? 'border-zinc-800 hover:bg-zinc-800' : 'border-stone-100 hover:bg-stone-100'}`} onClick={() => loadSearchNote(r.path)}>
+                    <button key={r.path} className={`w-full px-3 py-2 text-left text-sm border-b last:border-0 ${isDark ? 'border-zinc-800 hover:bg-zinc-800' : 'border-stone-100 hover:bg-stone-100'}`} onClick={() => loadSearchNote(r.path)} type="button">
                       <div className={`font-medium ${isDark ? 'text-zinc-200' : 'text-slate-800'}`}>{r.name}</div>
                       <div className={`text-xs truncate ${isDark ? 'text-zinc-500' : 'text-slate-400'}`}>{r.path}{r.snippet ? ` — ${r.snippet}` : ''}</div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}

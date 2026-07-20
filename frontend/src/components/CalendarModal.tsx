@@ -2,6 +2,7 @@
 import { Calendar, X } from 'lucide-react';
 import type { OutlookCalendar, CalendarResult } from '../types';
 import { outlookCalendarLabel } from '../lib';
+import { useDialogA11y } from '../hooks/useDialogA11y';
 
 interface CalendarModalProps {
   isDark: boolean;
@@ -34,29 +35,36 @@ export function CalendarModal({
   onCalendarSelect,
   onCreateEvent,
 }: CalendarModalProps) {
+  const dialogRef = useDialogA11y(calendarOpen, onClose);
   if (!calendarOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
+        aria-labelledby="calendar-dialog-title"
+        aria-modal="true"
         className={`w-full max-w-lg rounded-xl border p-6 shadow-2xl ${isDark ? 'border-zinc-800 bg-zinc-950 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
         onClick={(e) => e.stopPropagation()}
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
       >
         <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-lg font-semibold">
+          <div className="flex items-center gap-2 text-lg font-semibold" id="calendar-dialog-title">
             <Calendar size={18} />
             Create Calendar Event
           </div>
-          <button className={`rounded-md p-1 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onClose} type="button">
+          <button aria-label="Close calendar" className={`rounded-md p-1 ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onClose} type="button">
             <X size={18} />
           </button>
         </div>
 
         <div className="mb-4 space-y-2">
-          <label className="text-xs font-semibold uppercase tracking-wide opacity-70">Local Outlook calendar</label>
+          <label className="text-xs font-semibold uppercase tracking-wide opacity-70" htmlFor="outlook-calendar">Local Outlook calendar</label>
           <select
             className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
             disabled={creatingCalendarEvent || loadingOutlookCalendars || outlookCalendars.length === 0}
+            id="outlook-calendar"
             onChange={(e) => onCalendarSelect(e.target.value)}
             value={selectedOutlookCalendarId}
           >
@@ -76,6 +84,8 @@ export function CalendarModal({
         </div>
 
         <textarea
+          aria-label="Calendar event details"
+          data-dialog-initial-focus
           className={`mb-4 w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500' : 'border-stone-300 bg-white text-slate-900 placeholder:text-slate-400'}`}
           disabled={creatingCalendarEvent}
           onChange={(e) => onCalendarPromptChange(e.target.value)}

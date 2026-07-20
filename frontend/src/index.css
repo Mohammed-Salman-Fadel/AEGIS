@@ -1,9 +1,20 @@
 @import "tailwindcss";
-@import url("https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400&display=swap");
+
+:root {
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+}
 
 * {
-  font-family: "Roboto Slab", "Rockwell", Georgia, serif;
+  font-family: inherit;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   font-weight: 400;
+  letter-spacing: -0.006em;
 }
 
 @keyframes fadeInSession {
@@ -15,6 +26,18 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translate(10px, 8px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
   }
 }
 
@@ -73,10 +96,23 @@
 }
 
 .aegis-wordmark {
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   font-size: 1.28rem;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.035em;
   line-height: 1;
   text-transform: uppercase;
+}
+
+@keyframes reasoningStageIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .sessions-scroll {
@@ -135,10 +171,60 @@
 .aegis-shell {
   position: relative;
   isolation: isolate;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 400;
   --aegis-accent-rgb: 16, 185, 129;
   --aegis-accent-500: #34d399;
   --aegis-accent-600: #10b981;
   --aegis-accent-700: #059669;
+  --aegis-bg-elevated-light: #fffaf0;
+  --aegis-border-strong-light: rgba(70, 55, 38, 0.34);
+  --aegis-shadow-light: 0 18px 42px rgba(80, 62, 39, 0.16);
+}
+
+.aegis-shell button,
+.aegis-shell input,
+.aegis-shell textarea,
+.aegis-shell select {
+  font-family: inherit;
+}
+
+.aegis-display {
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.035em;
+}
+
+.aegis-prose {
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 400;
+  letter-spacing: -0.004em;
+}
+
+.aegis-shell .font-mono,
+.aegis-code {
+  font-family: "Cascadia Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace !important;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  font-variant-ligatures: none;
+}
+
+.aegis-settings-panel label,
+.aegis-settings-panel .aegis-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.006em;
+}
+
+.aegis-settings-panel input,
+.aegis-settings-panel select,
+.aegis-settings-panel textarea {
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: -0.002em;
+}
+
+.aegis-settings-panel :is(.text-xs, .text-\[11px\], .text-\[12px\]) {
+  font-weight: 400;
 }
 
 .aegis-shell::before {
@@ -158,7 +244,11 @@
 }
 
 .aegis-shell.aegis-mode-light::before {
-  opacity: 0.72;
+  opacity: 0.42;
+  background:
+    radial-gradient(circle at 18% 8%, rgba(var(--aegis-accent-rgb), 0.11), transparent 26%),
+    radial-gradient(circle at 86% 16%, rgba(var(--aegis-accent-rgb), 0.08), transparent 24%),
+    linear-gradient(135deg, rgba(var(--aegis-accent-rgb), 0.05), transparent 58%);
 }
 
 .aegis-shell > nav,
@@ -180,11 +270,12 @@
   --aegis-text-muted-dark: #a1a1aa;
   --aegis-border-dark: rgba(255, 255, 255, 0.06);
   --aegis-accent-tint-light: rgba(16, 185, 129, 0.06);
-  --aegis-bg-base-light: #f5f5f0;
-  --aegis-bg-surface-light: #ffffff;
-  --aegis-text-base-light: #1c1917;
-  --aegis-text-muted-light: #78716c;
-  --aegis-border-light: rgba(0, 0, 0, 0.08);
+  --aegis-bg-base-light: #e8e1d3;
+  --aegis-bg-surface-light: #f4efe5;
+  --aegis-bg-elevated-light: #fffaf0;
+  --aegis-text-base-light: #211b16;
+  --aegis-text-muted-light: #675d50;
+  --aegis-border-light: rgba(94, 76, 55, 0.24);
 }
 
 .aegis-theme-terminal {
@@ -199,11 +290,11 @@
   --aegis-text-muted-dark: #94a3b8;
   --aegis-border-dark: rgba(74, 222, 128, 0.08);
   --aegis-accent-tint-light: rgba(74, 222, 128, 0.05);
-  --aegis-bg-base-light: #f7fee7;
-  --aegis-bg-surface-light: #ffffff;
+  --aegis-bg-base-light: #edf6d7;
+  --aegis-bg-surface-light: #fbfff1;
   --aegis-text-base-light: #1a2e05;
   --aegis-text-muted-light: #65a30d;
-  --aegis-border-light: rgba(74, 222, 128, 0.12);
+  --aegis-border-light: rgba(54, 119, 72, 0.2);
 }
 
 .aegis-theme-ocean {
@@ -218,11 +309,11 @@
   --aegis-text-muted-dark: #93c5fd;
   --aegis-border-dark: rgba(56, 189, 248, 0.06);
   --aegis-accent-tint-light: rgba(56, 189, 248, 0.05);
-  --aegis-bg-base-light: #f0f9ff;
-  --aegis-bg-surface-light: #ffffff;
+  --aegis-bg-base-light: #e5f2f8;
+  --aegis-bg-surface-light: #f6fbfd;
   --aegis-text-base-light: #0c4a6e;
   --aegis-text-muted-light: #0284c7;
-  --aegis-border-light: rgba(56, 189, 248, 0.10);
+  --aegis-border-light: rgba(14, 116, 144, 0.18);
 }
 
 .aegis-theme-ember {
@@ -237,11 +328,11 @@
   --aegis-text-muted-dark: #d6d3d1;
   --aegis-border-dark: rgba(251, 146, 60, 0.06);
   --aegis-accent-tint-light: rgba(251, 146, 60, 0.05);
-  --aegis-bg-base-light: #fff7ed;
-  --aegis-bg-surface-light: #ffffff;
+  --aegis-bg-base-light: #f5e7d6;
+  --aegis-bg-surface-light: #fff8ef;
   --aegis-text-base-light: #431407;
   --aegis-text-muted-light: #c2410c;
-  --aegis-border-light: rgba(251, 146, 60, 0.12);
+  --aegis-border-light: rgba(154, 74, 22, 0.2);
 }
 
 .aegis-theme-rose {
@@ -256,11 +347,11 @@
   --aegis-text-muted-dark: #fbcfe8;
   --aegis-border-dark: rgba(244, 114, 182, 0.06);
   --aegis-accent-tint-light: rgba(244, 114, 182, 0.04);
-  --aegis-bg-base-light: #fff1f2;
-  --aegis-bg-surface-light: #ffffff;
+  --aegis-bg-base-light: #f8e5e8;
+  --aegis-bg-surface-light: #fff6f7;
   --aegis-text-base-light: #4c0519;
   --aegis-text-muted-light: #be185d;
-  --aegis-border-light: rgba(244, 114, 182, 0.10);
+  --aegis-border-light: rgba(190, 24, 93, 0.16);
 }
 
 .aegis-theme-slate {
@@ -275,11 +366,11 @@
   --aegis-text-muted-dark: #cbd5e1;
   --aegis-border-dark: rgba(148, 163, 184, 0.06);
   --aegis-accent-tint-light: rgba(148, 163, 184, 0.06);
-  --aegis-bg-base-light: #f8fafc;
-  --aegis-bg-surface-light: #ffffff;
+  --aegis-bg-base-light: #e8edf2;
+  --aegis-bg-surface-light: #f8fafc;
   --aegis-text-base-light: #1e293b;
   --aegis-text-muted-light: #64748b;
-  --aegis-border-light: rgba(148, 163, 184, 0.10);
+  --aegis-border-light: rgba(71, 85, 105, 0.18);
 }
 
 /* ── Theme-aware backgrounds and text utilities ─────────────────────── */
@@ -288,14 +379,25 @@
   background: var(--aegis-bg-base-dark);
 }
 .aegis-shell.aegis-mode-light .aegis-bg-base {
-  background: var(--aegis-bg-base-light);
+  background:
+    linear-gradient(135deg, rgba(255, 250, 240, 0.38), transparent 34%),
+    var(--aegis-bg-base-light);
 }
 
 .aegis-bg-surface {
   background: var(--aegis-bg-surface-dark);
 }
 .aegis-shell.aegis-mode-light .aegis-bg-surface {
-  background: var(--aegis-bg-surface-light);
+  background:
+    linear-gradient(180deg, rgba(255, 250, 240, 0.76), rgba(255, 250, 240, 0.46)),
+    var(--aegis-bg-surface-light);
+}
+
+.aegis-bg-elevated {
+  background: var(--aegis-bg-surface-dark);
+}
+.aegis-shell.aegis-mode-light .aegis-bg-elevated {
+  background: var(--aegis-bg-elevated-light);
 }
 
 .aegis-bg-accent-tint {
@@ -303,6 +405,22 @@
 }
 .aegis-shell.aegis-mode-light .aegis-bg-accent-tint {
   background: var(--aegis-accent-tint-light);
+}
+
+.aegis-status-bar {
+  background: color-mix(
+    in srgb,
+    var(--aegis-bg-base-dark) 94%,
+    rgb(var(--aegis-accent-rgb)) 6%
+  );
+}
+
+.aegis-shell.aegis-mode-light .aegis-status-bar {
+  background: color-mix(
+    in srgb,
+    var(--aegis-bg-base-light) 92%,
+    rgb(var(--aegis-accent-rgb)) 8%
+  );
 }
 
 .aegis-text-base {
@@ -326,6 +444,79 @@
   border-color: var(--aegis-border-light);
 }
 
+.aegis-top-fade {
+  background: linear-gradient(
+    to bottom,
+    var(--aegis-bg-base-dark),
+    color-mix(in srgb, var(--aegis-bg-base-dark) 90%, transparent),
+    transparent
+  );
+}
+
+.aegis-shell.aegis-mode-light .aegis-top-fade {
+  background: linear-gradient(
+    to bottom,
+    var(--aegis-bg-base-light),
+    color-mix(in srgb, var(--aegis-bg-base-light) 92%, transparent),
+    transparent
+  );
+}
+
+.aegis-composer-footer {
+  background: color-mix(in srgb, var(--aegis-bg-base-dark) 88%, transparent);
+  box-shadow: 0 -18px 42px rgba(0, 0, 0, 0.28);
+  color: inherit;
+}
+
+.aegis-composer-fade {
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--aegis-bg-base-dark) 95%, transparent),
+    color-mix(in srgb, var(--aegis-bg-base-dark) 55%, transparent),
+    transparent
+  );
+}
+
+.aegis-shell.aegis-mode-light .aegis-composer-footer {
+  background:
+    linear-gradient(180deg, transparent, var(--aegis-bg-base-light) 48%, var(--aegis-bg-base-light)),
+    var(--aegis-bg-base-light);
+  box-shadow: none;
+}
+
+.aegis-shell.aegis-mode-light .aegis-composer-fade {
+  background: linear-gradient(
+    to top,
+    var(--aegis-bg-base-light),
+    color-mix(in srgb, var(--aegis-bg-base-light) 64%, transparent) 46%,
+    transparent
+  );
+}
+
+.aegis-shell.aegis-mode-light :is(.bg-white, .bg-white\/80, .bg-white\/88, .bg-white\/95) {
+  background-color: rgba(255, 250, 240, 0.94) !important;
+}
+
+.aegis-shell.aegis-mode-light :is(.bg-stone-50, .bg-stone-100, .bg-stone-50\/60, .bg-stone-100\/88, .bg-stone-100\/95) {
+  background-color: rgba(235, 226, 211, 0.9) !important;
+}
+
+.aegis-shell.aegis-mode-light :is(.border-stone-200, .border-stone-300, .border-stone-300\/80) {
+  border-color: rgba(94, 76, 55, 0.28) !important;
+}
+
+.aegis-shell.aegis-mode-light :is(input, textarea, select) {
+  caret-color: var(--aegis-accent-700);
+}
+
+.aegis-shell.aegis-mode-light .aegis-light-panel {
+  background: rgba(255, 250, 240, 0.9);
+  border-color: rgba(94, 76, 55, 0.26);
+  box-shadow:
+    0 18px 48px rgba(74, 63, 51, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
 /* Hide scrollbar while keeping scroll functionality */
 .scrollbar-hide {
   -ms-overflow-style: none;
@@ -336,10 +527,83 @@
 }
 
 .aegis-wordmark {
-  font-weight: 900;
-  letter-spacing: 0.04em;
-  color: #5a5a5a;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #4a3d2e;
   text-shadow: 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.prompt-checkpoint-scroll {
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent, black 7%, black 93%, transparent);
+}
+
+.prompt-checkpoint-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-checkpoint-scroll *,
+  .prompt-checkpoint-scroll *::before,
+  .prompt-checkpoint-scroll *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Compact layout: secondary surfaces become drawers instead of consuming chat width. */
+@media (max-width: 767px) {
+  .aegis-shell > nav {
+    position: fixed;
+    z-index: 35;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 3.5rem;
+    flex-direction: row;
+    justify-content: center;
+    gap: 0.5rem;
+    border-top: 1px solid var(--aegis-border-dark);
+    border-right: 0;
+  }
+
+  .aegis-shell.aegis-mode-light > nav { border-top-color: var(--aegis-border-light); }
+  .aegis-shell > nav > button { margin-top: 0 !important; }
+
+  .aegis-shell > aside[aria-hidden] {
+    position: fixed;
+    z-index: 40;
+    top: 0;
+    bottom: 3.5rem;
+    left: 0;
+    box-shadow: 16px 0 36px rgba(0, 0, 0, 0.28);
+  }
+
+  .aegis-shell > main { padding-bottom: 3.5rem; }
+  .aegis-session-bar { gap: 0.5rem !important; padding: 0.75rem 1rem 0 !important; }
+  .aegis-session-meta, .aegis-session-status, .aegis-mode-label { display: none; }
+  .aegis-mode-select button { padding-inline: 0.55rem !important; }
+  .aegis-settings-panel {
+    width: 100vw !important;
+    max-height: 100dvh !important;
+    height: 100dvh;
+    border-radius: 0 !important;
+    aspect-ratio: auto !important;
+    flex-direction: column;
+  }
+  .aegis-settings-panel > aside {
+    display: flex;
+    width: 100%;
+    min-height: auto;
+    overflow-x: auto;
+    gap: 0.35rem;
+    padding: 0.75rem 1rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--aegis-border-dark);
+  }
+  .aegis-settings-panel > aside > div { display: none; }
+  .aegis-settings-panel > aside > button { flex: 0 0 auto; margin: 0; white-space: nowrap; }
 }
 
 :is(.aegis-mode-dark, .aegis-shell.aegis-mode-dark) .aegis-wordmark {
@@ -364,6 +628,11 @@
 .aegis-accent-chip-active {
   background: var(--aegis-accent-600);
   box-shadow: 0 8px 22px rgba(var(--aegis-accent-rgb), 0.2);
+}
+
+.aegis-reasoning-switch-active {
+  background: var(--aegis-accent-500);
+  box-shadow: 0 0 12px rgba(var(--aegis-accent-rgb), 0.82);
 }
 
 .aegis-accent-subtle {
@@ -444,3 +713,232 @@
     opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
     transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+
+.aegis-math {
+  color: inherit;
+  font-size: 1.04em;
+  text-rendering: geometricPrecision;
+  animation: aegisMathReveal 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.aegis-math-inline {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  padding-inline: 0.08em;
+  vertical-align: -0.08em;
+}
+
+.aegis-math-display {
+  display: block;
+  width: 100%;
+  margin: 0.85rem 0;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.025);
+  scrollbar-width: thin;
+}
+
+.aegis-math-display .katex-display {
+  margin: 0;
+  min-width: max-content;
+  text-align: center;
+}
+
+.aegis-shell.aegis-mode-light .aegis-math-display {
+  border-color: rgba(94, 76, 55, 0.18);
+  background: rgba(255, 250, 240, 0.48);
+}
+
+.aegis-math-fallback {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0.08rem 0.3rem;
+  overflow-wrap: anywhere;
+  border-radius: 0.3rem;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fbbf24;
+  font-family: "Cascadia Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.aegis-shell.aegis-mode-light .aegis-math-fallback {
+  color: #92400e;
+}
+
+@keyframes aegisMathReveal {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aegis-math {
+    animation: none;
+  }
+}
+
+/* AEGIS semantic UI and accessibility layer */
+.aegis-shell {
+  --aegis-success: #22c55e;
+  --aegis-warning: #f59e0b;
+  --aegis-danger: #ef4444;
+  --aegis-text-subtle-dark: #a1a1aa;
+  --aegis-text-subtle-light: #675d50;
+  --aegis-scroll-thumb: rgba(148, 163, 184, 0.52);
+  --aegis-scroll-thumb-active: rgba(148, 163, 184, 0.78);
+}
+
+.aegis-theme-terminal { --aegis-text-subtle-dark: #94a3b8; --aegis-text-subtle-light: #3f6212; }
+.aegis-theme-ocean { --aegis-text-subtle-dark: #93c5fd; --aegis-text-subtle-light: #075985; }
+.aegis-theme-ember { --aegis-text-subtle-dark: #d6d3d1; --aegis-text-subtle-light: #9a3412; }
+.aegis-theme-rose { --aegis-text-subtle-dark: #fbcfe8; --aegis-text-subtle-light: #9d174d; }
+.aegis-theme-slate { --aegis-text-subtle-dark: #cbd5e1; --aegis-text-subtle-light: #475569; }
+
+.aegis-success-text { color: var(--aegis-success) !important; }
+.aegis-success-bg { background-color: var(--aegis-success) !important; }
+
+/* Theme-aware compatibility for legacy emerald interaction utilities. */
+.aegis-shell.aegis-mode-dark :is(
+  [class~="text-emerald-100"], [class~="text-emerald-100/80"],
+  [class~="text-emerald-200"], [class~="text-emerald-200/45"], [class~="text-emerald-200/85"],
+  [class~="text-emerald-300"], [class~="text-emerald-400"], [class~="text-emerald-400/80"],
+  [class~="text-emerald-500"], [class~="text-emerald-600"], [class~="text-emerald-700"],
+  [class~="text-emerald-700/45"], [class~="text-emerald-800"], [class~="text-emerald-800/70"],
+  [class~="text-emerald-900"]
+) { color: var(--aegis-accent-500) !important; }
+
+.aegis-shell.aegis-mode-light :is(
+  [class~="text-emerald-100"], [class~="text-emerald-100/80"],
+  [class~="text-emerald-200"], [class~="text-emerald-200/45"], [class~="text-emerald-200/85"],
+  [class~="text-emerald-300"], [class~="text-emerald-400"], [class~="text-emerald-400/80"],
+  [class~="text-emerald-500"], [class~="text-emerald-600"], [class~="text-emerald-700"],
+  [class~="text-emerald-700/45"], [class~="text-emerald-800"], [class~="text-emerald-800/70"],
+  [class~="text-emerald-900"]
+) { color: var(--aegis-accent-700) !important; }
+
+.aegis-shell :is(
+  [class~="bg-emerald-300"], [class~="bg-emerald-400"], [class~="bg-emerald-500"],
+  [class~="bg-emerald-600"], [class~="bg-emerald-700"]
+) { background-color: var(--aegis-accent-600) !important; }
+
+.aegis-shell.aegis-mode-dark :is(
+  [class~="bg-emerald-400/10"], [class~="bg-emerald-400/15"],
+  [class~="bg-emerald-500/10"], [class~="bg-emerald-500/15"],
+  [class~="bg-emerald-950/20"], [class~="bg-emerald-950/25"],
+  [class~="bg-emerald-950/30"], [class~="bg-emerald-950/40"]
+) { background-color: rgba(var(--aegis-accent-rgb), 0.14) !important; }
+
+.aegis-shell.aegis-mode-light :is(
+  [class~="bg-emerald-50"], [class~="bg-emerald-50/70"],
+  [class~="bg-emerald-100"], [class~="bg-emerald-100/70"], [class~="bg-emerald-100/80"],
+  [class~="bg-emerald-400/10"], [class~="bg-emerald-400/15"],
+  [class~="bg-emerald-500/10"], [class~="bg-emerald-500/15"]
+) { background-color: rgba(var(--aegis-accent-rgb), 0.12) !important; }
+
+.aegis-shell :is(
+  [class~="border-emerald-200"], [class~="border-emerald-300"], [class~="border-emerald-400/20"],
+  [class~="border-emerald-500"], [class~="border-emerald-500/50"], [class~="border-emerald-500/60"],
+  [class~="border-emerald-600"], [class~="border-emerald-700"], [class~="border-emerald-700/60"],
+  [class~="border-emerald-800"], [class~="border-emerald-900/60"]
+) { border-color: rgba(var(--aegis-accent-rgb), 0.52) !important; }
+.aegis-shell [class~="hover:border-emerald-500/50"]:hover,
+.aegis-shell [class~="hover:border-emerald-500/70"]:hover { border-color: rgba(var(--aegis-accent-rgb), 0.72) !important; }
+.aegis-shell [class~="accent-emerald-600"] { accent-color: var(--aegis-accent-600) !important; }
+.aegis-shell [class*="ring-emerald-"] { --tw-ring-color: rgba(var(--aegis-accent-rgb), 0.42) !important; }
+.aegis-shell [class*="shadow-emerald-"] { --tw-shadow-color: rgba(var(--aegis-accent-rgb), 0.22) !important; }
+
+.aegis-shell [class~="hover:text-emerald-200"]:hover,
+.aegis-shell [class~="hover:text-emerald-300"]:hover,
+.aegis-shell [class~="hover:text-emerald-500"]:hover,
+.aegis-shell [class~="hover:text-emerald-600"]:hover,
+.aegis-shell [class~="hover:text-emerald-700"]:hover,
+.aegis-shell [class~="hover:text-emerald-800"]:hover,
+.aegis-shell [class~="hover:text-emerald-950"]:hover { color: var(--aegis-accent-500) !important; }
+
+.aegis-shell [class~="hover:bg-emerald-500"]:hover,
+.aegis-shell [class~="hover:bg-emerald-600"]:hover { background-color: var(--aegis-accent-500) !important; }
+
+.aegis-shell [class~="hover:bg-emerald-50"]:hover,
+.aegis-shell [class~="hover:bg-emerald-100"]:hover,
+.aegis-shell [class~="hover:bg-emerald-500/10"]:hover,
+.aegis-shell [class~="hover:bg-emerald-900/40"]:hover,
+.aegis-shell [class~="hover:bg-emerald-950/40"]:hover { background-color: rgba(var(--aegis-accent-rgb), 0.18) !important; }
+
+.aegis-shell [class~="focus:border-emerald-600"]:focus,
+.aegis-shell [class~="focus-within:border-emerald-700/50"]:focus-within { border-color: var(--aegis-accent-600) !important; }
+
+/* Contrast-safe microcopy and placeholders. */
+.aegis-shell.aegis-mode-dark :is([class~="text-zinc-500"], [class~="text-zinc-600"]) {
+  color: var(--aegis-text-subtle-dark) !important;
+}
+.aegis-shell.aegis-mode-light :is([class~="text-stone-500"], [class~="text-stone-600"], [class~="text-slate-500"]) {
+  color: var(--aegis-text-subtle-light) !important;
+}
+.aegis-shell.aegis-mode-dark :is(input, textarea)::placeholder { color: var(--aegis-text-subtle-dark) !important; opacity: 1; }
+.aegis-shell.aegis-mode-light :is(input, textarea)::placeholder { color: var(--aegis-text-subtle-light) !important; opacity: 1; }
+
+/* Readable type and usable pointer targets. */
+.aegis-shell :is(.text-\[9px\], .text-\[10px\], .text-\[11px\], .text-\[12px\], .text-xs) { font-size: 13px !important; }
+.aegis-shell button { min-height: 2.5rem; }
+.aegis-shell :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select) { min-height: 2.5rem; }
+
+/* Persistent, theme-neutral scroll affordances. */
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display) {
+  -ms-overflow-style: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--aegis-scroll-thumb) transparent;
+  scrollbar-gutter: stable;
+}
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display)::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+  height: 6px;
+}
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display)::-webkit-scrollbar-track { background: transparent; }
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display)::-webkit-scrollbar-thumb {
+  background: var(--aegis-scroll-thumb);
+  border-radius: 999px;
+}
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display):is(:hover, :focus-within)::-webkit-scrollbar-thumb {
+  background: var(--aegis-scroll-thumb-active);
+}
+
+@media (forced-colors: active) {
+  .aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll) {
+    scrollbar-color: auto;
+  }
+}
+
+/* Honor reduced-motion preferences across the entire application. */
+@media (prefers-reduced-motion: reduce) {
+  .aegis-shell,
+  .aegis-shell *,
+  .aegis-shell *::before,
+  .aegis-shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+
+  .aegis-shell :is(.thinking-dot, [class*="animate-pulse"], [class*="animate-spin"]) {
+    animation: none !important;
+  }
+}
+/* Semantic focus and wordmark treatments follow the active appearance theme. */
+.aegis-shell :is(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--aegis-accent-500) !important;
+  outline-offset: 2px;
+}
+.aegis-shell.aegis-mode-dark .aegis-wordmark { color: var(--aegis-accent-500); }
+.aegis-shell.aegis-mode-light .aegis-wordmark { color: var(--aegis-accent-700); }

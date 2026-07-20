@@ -92,6 +92,8 @@ pub struct SelectModelResponse {
 pub struct ModelListResponse {
     provider: String,
     models: Vec<ModelResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -99,31 +101,63 @@ pub struct ModelResponse {
     name: String,
     description: String,
     active: bool,
+    status: &'static str,
+    provider: String,
+    supports_managed_download: bool,
 }
 
-pub async fn list_models(State(state): State<AppState>) -> Json<ModelListResponse> {
-    let (provider, model_names) = state
-        .orchestrator
-        .list_available_models()
-        .await
-        .unwrap_or_else(|_| (state.orchestrator.current_provider_name(), vec![]));
+pub async fn list_models(
+    State(state): State<AppState>,
+) -> Result<Json<ModelListResponse>, (StatusCode, String)> {
+    let provider = state.orchestrator.current_provider_name();
     let active_model = state.orchestrator.current_model_name();
+    let (model_names, warning) = match state.orchestrator.list_available_models().await {
+        Ok((_, model_names)) if !model_names.is_empty() => (model_names, None),
+        Ok((_, _)) => (
+            vec![active_model.clone()],
+            Some(format!(
+                "{provider} responded, but did not report any models. Showing the active model until its model catalog refreshes."
+            )),
+        ),
+        Err(error) => (
+            vec![active_model.clone()],
+            Some(format!(
+                "Could not reach {provider} to refresh installed models. Showing the active model instead: {error}"
+            )),
+        ),
+    };
+    let degraded = warning.is_some();
 
-    Json(ModelListResponse {
-        provider,
+    Ok(Json(ModelListResponse {
+        provider: provider.clone(),
+        warning,
         models: model_names
             .into_iter()
-            .map(|name| ModelResponse {
-                active: name.eq_ignore_ascii_case(&active_model),
-                description: if name.eq_ignore_ascii_case(&active_model) {
-                    "Currently active in the engine.".to_string()
-                } else {
-                    String::new()
-                },
-                name,
+            .map(|name| {
+                let active = name.eq_ignore_ascii_case(&active_model);
+                ModelResponse {
+                    active,
+                    description: if degraded {
+                        "Provider model discovery is unavailable; this is the last active model known to AEGIS.".to_string()
+                    } else if active {
+                        "Currently active in the engine.".to_string()
+                    } else {
+                        String::new()
+                    },
+                    name,
+                    status: if degraded {
+                        "degraded"
+                    } else if active {
+                        "ready"
+                    } else {
+                        "installed"
+                    },
+                    provider: provider.clone(),
+                    supports_managed_download: matches!(provider.as_str(), "ollama" | "lmstudio"),
+                }
             })
             .collect(),
-    })
+    }))
 }
 
 pub async fn current_model(State(state): State<AppState>) -> Json<CurrentModelResponse> {
@@ -151,7 +185,10 @@ pub async fn select_model(
         .map_err(model_switch_error)?;
 
     let message = if !outcome.changed {
-        format!("`{}` is already the active model.", outcome.current_model)
+        format!(
+            "`{}` is already the active model and has been warmed in memory.",
+            outcome.current_model
+        )
     } else if let Some(warning) = &outcome.unload_warning {
         format!(
             "Switched from {} to {}. {}",
@@ -159,7 +196,7 @@ pub async fn select_model(
         )
     } else {
         format!(
-            "Switched from {} to {}.",
+            "Switched from {} to {}. The previous model was unloaded and the selected model is warmed in memory.",
             outcome.previous_model, outcome.current_model
         )
     };
@@ -178,16 +215,23 @@ pub async fn list_ollama_models(State(state): State<AppState>) -> Json<ModelList
 
     Json(ModelListResponse {
         provider: "ollama".to_string(),
+        warning: None,
         models: model_names
             .into_iter()
-            .map(|name| ModelResponse {
-                active: name.eq_ignore_ascii_case(&active_model),
-                description: if name.eq_ignore_ascii_case(&active_model) {
-                    "Currently active in the engine.".to_string()
-                } else {
-                    String::new()
-                },
-                name,
+            .map(|name| {
+                let active = name.eq_ignore_ascii_case(&active_model);
+                ModelResponse {
+                    active,
+                    description: if active {
+                        "Currently active in the engine.".to_string()
+                    } else {
+                        String::new()
+                    },
+                    name,
+                    status: if active { "ready" } else { "installed" },
+                    provider: "ollama".to_string(),
+                    supports_managed_download: true,
+                }
             })
             .collect(),
     })

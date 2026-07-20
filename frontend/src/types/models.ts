@@ -12,11 +12,15 @@ export interface ModelResponse {
   name: string;
   description: string;
   active: boolean;
+  status?: 'installed' | 'warming' | 'ready' | 'degraded';
+  provider?: string;
+  supports_managed_download?: boolean;
 }
 
 export interface ModelListResponse {
   provider: string;
   models: ModelResponse[];
+  warning?: string;
 }
 
 export interface ProviderResponse {

@@ -3,6 +3,7 @@ import { X, Mic, Volume2, VolumeX } from 'lucide-react';
 import { VoiceOrb } from './VoiceOrb';
 import type { Message } from '../types';
 import { useT } from '../lib/i18n';
+import { useDialogA11y } from '../hooks/useDialogA11y';
 
 interface VoiceModeOverlayProps {
   isDark: boolean;
@@ -33,14 +34,17 @@ export function VoiceModeOverlay({
   onStartRecording,
   onStopDictation,
 }: VoiceModeOverlayProps) {
+  const dialogRef = useDialogA11y(true, onClose);
   const t = useT();
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
   const lastAssistantMessage = [...messages].reverse().find((m) => m.role === 'assistant');
 
   return (
-    <div className={`fixed inset-0 z-50 flex flex-col items-center justify-center p-6 backdrop-blur-xl transition-all duration-500 ${isDark ? 'bg-zinc-950/80' : 'bg-white/80'}`}>
+    <div aria-label="Voice mode" aria-modal="true" className={`fixed inset-0 z-50 flex flex-col items-center justify-center p-6 backdrop-blur-xl transition-all duration-500 ${isDark ? 'bg-zinc-950/80' : 'bg-white/80'}`} ref={dialogRef} role="dialog" tabIndex={-1}>
       <button
         onClick={onClose}
+        aria-label="Close voice mode"
+        data-dialog-initial-focus
         className={`absolute top-6 right-6 p-2 rounded-full transition ${isDark ? 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-400 hover:bg-stone-100 hover:text-slate-800'}`}
       >
         <X size={24} />

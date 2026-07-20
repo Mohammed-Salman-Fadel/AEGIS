@@ -3,8 +3,9 @@ from typing import List, Dict, Any
 from ..core.lifecycle import state
 
 class RetrievalService:
-    def query(self, query_text: str, top_k: int, session_id: str) -> Dict[str, Any]:
-        if not query_text.strip() or not session_id.strip():
+    def query(self, query_text: str, top_k: int, session_id: str | None, scope: str = "session") -> Dict[str, Any]:
+        normalized_session = (session_id or "").strip()
+        if not query_text.strip() or (scope != "workspace" and not normalized_session):
             return {
                 "results": [],
                 "metrics": {
@@ -16,7 +17,7 @@ class RetrievalService:
             }
             
         start_time = time.time()
-        results = state.vector_store.query(query_text, top_k, session_id.strip())
+        results = state.vector_store.query(query_text, top_k, normalized_session, scope)
         duration_ms = (time.time() - start_time) * 1000
         
         avg_sim = 0.0

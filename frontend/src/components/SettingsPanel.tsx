@@ -1,20 +1,20 @@
 // Settings panel with tabs: General, Inference, Models, Voice, RAG, Memories
 import { useState, useEffect } from 'react';
-import { Settings, X, Download, Pause, Play, Plus, Eye, Sun, Moon, Monitor, BookOpen, Check, AlertCircle, Loader } from 'lucide-react';
-import type { SettingsTab, ThemeMode, ModelResponse, ProviderResponse, CatalogModel, ModelDownloadState } from '../types';
+import { Settings, X, Download, Pause, Play, Plus, Eye, Sun, Moon, Monitor, BookOpen, Check, AlertCircle, Loader, TerminalSquare, ShieldCheck } from 'lucide-react';
+import type { SettingsTab, ThemeMode, ModelResponse, ProviderResponse, CatalogModel, ModelDownloadState, CommandLineSettings } from '../types';
 import { useT, type Language } from '../lib/i18n';
 import { API_BASE } from '../constants';
 import {
   OLLAMA_MODEL_CATALOG, MODEL_PROVIDER_TAGS, RESPONSE_STYLE_OPTIONS, APPEARANCE_THEME_OPTIONS,
 } from '../constants';
 import { modelSearchPlaceholder, installedModelsLabel } from '../lib/modelDownload';
+import { useDialogA11y } from '../hooks/useDialogA11y';
 
 interface SettingsPanelProps {
   isDark: boolean;
   settingsOpen: boolean;
   settingsClosing: boolean;
   settingsTab: SettingsTab;
-  settingsMessage: string | null;
   settingsLoading: boolean;
   theme: ThemeMode;
   appearanceTheme: string;
@@ -30,6 +30,10 @@ interface SettingsPanelProps {
   modelDownloadState: ModelDownloadState;
   modelDownloadProgress: number;
   modelDownloadStatus: string;
+  modelSwitching: boolean;
+  providerSwitching: boolean;
+  commandLineSettings: CommandLineSettings;
+  commandLineSaving: boolean;
   isVoiceLowRamMode: boolean;
   isTtsEnabled: boolean;
   isRagEnabled: boolean;
@@ -45,6 +49,7 @@ interface SettingsPanelProps {
   onSetResponseStyle: (style: string) => void;
   onSelectModel: (name: string) => void;
   onSelectProvider: (name: string) => void;
+  onChangeCommandLineSettings: (settings: CommandLineSettings) => void;
   onModelSearchChange: (value: string) => void;
   onSetModelProviderTag: (tag: string) => void;
   onDownloadModel: (name?: string) => void;
@@ -69,42 +74,77 @@ interface SettingsPanelProps {
   onObsidianEnabledChange: (value: boolean) => void;
 }
 
+type CommandLineCapability = Exclude<keyof CommandLineSettings, 'git_safety'>;
+
+const COMMAND_LINE_CAPABILITIES: Array<{
+  key: CommandLineCapability;
+  label: string;
+  description: string;
+}> = [
+  { key: 'agentic_loop', label: 'Agentic coding loop', description: 'Run Understand, Explore, Plan, Permission, Edit, Format, Test, and Review as a controlled task cycle.' },
+  { key: 'repository_detection', label: 'Repository detection', description: 'Detect the Git root, languages, frameworks, package managers, branch, and existing changes.' },
+  { key: 'repository_instructions', label: 'Repository instructions', description: 'Read AGENTS.md, CONTRIBUTING.md, CLAUDE.md, and .aegis.md before planning changes.' },
+  { key: 'semantic_index', label: 'Repository semantic index', description: 'Cache files, symbols, docs, configuration, tests, and recent Git history for natural-language navigation.' },
+  { key: 'context_budgeting', label: 'Context budgeting', description: 'Rank indexed files by relevance and compact context instead of repeatedly loading the entire repository.' },
+  { key: 'persistent_task_plan', label: 'Persistent task plan', description: 'Save live task stages and resume the same task plan after a CLI or engine restart.' },
+  { key: 'task_checkpoints', label: 'Reversible checkpoints', description: 'Snapshot touched files before edits and permit guarded restoration with aegis code restore.' },
+  { key: 'patch_application', label: 'File editing', description: 'Allow validated workspace-local patches. When disabled, coding tasks are forced into read-only mode.' },
+  { key: 'command_execution', label: 'Command execution', description: 'Allow explicitly approved formatting, build, and test commands inside the repository.' },
+  { key: 'automatic_verification', label: 'Automatic verification', description: 'Infer and run affected checks after edits when the selected permission mode allows it.' },
+  { key: 'deep_reasoning', label: 'Deep reasoning by default', description: 'Enable the higher-overhead reasoning path for CLI coding tasks unless overridden by the command.' },
+];
+
 export function SettingsPanel({
-  isDark, settingsOpen, settingsClosing, settingsTab, settingsMessage, settingsLoading,
+  isDark, settingsOpen, settingsClosing, settingsTab, settingsLoading,
   theme, appearanceTheme, responseStyle, availableModels, availableProviders, activeProvider,
   modelSearch, selectedModelProviderTag, filteredCatalogModels,
-  downloadingModel, pausedModelDownload, modelDownloadState, modelDownloadProgress, modelDownloadStatus,
+  downloadingModel, pausedModelDownload, modelDownloadState, modelDownloadProgress, modelDownloadStatus, modelSwitching, providerSwitching,
+  commandLineSettings, commandLineSaving,
   isVoiceLowRamMode, isTtsEnabled, isRagEnabled, ragTopK, ragSimilarityThreshold,
   profileText, profilePath, memoryInput,
   onClose, onSetSettingsTab, onSetTheme, onSetAppearanceTheme, onSetResponseStyle,
   onSelectModel, onSelectProvider, onModelSearchChange, onSetModelProviderTag,
+  onChangeCommandLineSettings,
   onDownloadModel, onPauseDownload, onCancelDownload, onResumeDownload,
   onToggleVoiceLowRam, onToggleTts, onToggleRag, onChangeRagTopK, onChangeRagThreshold,
   onMemoryInputChange, onAddMemory, onDisplayMemories, onSaveProfile, onProfileTextChange,
   lang, onSetLanguage,
   obsidianVaultPath, onObsidianVaultPathChange, obsidianEnabled, onObsidianEnabledChange,
 }: SettingsPanelProps) {
+  const dialogRef = useDialogA11y(settingsOpen, onClose);
   const t = useT();
+  const isInferenceSwitching = modelSwitching || providerSwitching;
+  const changeCommandLineCapability = (key: CommandLineCapability, enabled: boolean) => {
+    const next = { ...commandLineSettings, [key]: enabled };
+    if (key === 'command_execution' && !enabled) next.automatic_verification = false;
+    if (key === 'semantic_index' && !enabled) next.context_budgeting = false;
+    onChangeCommandLineSettings(next);
+  };
   if (!settingsOpen) return null;
 
-  const tabs: SettingsTab[] = ['general', 'models', 'tools', 'personalize', 'voice', 'rag', 'memories'];
+  const tabs: SettingsTab[] = ['general', 'models', 'command-line', 'tools', 'personalize', 'voice', 'rag', 'memories'];
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 ${settingsClosing ? 'aegis-modal-backdrop-out' : 'aegis-modal-backdrop'}`} onClick={onClose}>
       <div
-        className={`flex min-h-[340px] max-h-[calc(100dvh-2rem)] overflow-hidden rounded-2xl border shadow-2xl ${settingsClosing ? 'aegis-modal-panel-out' : 'aegis-modal-panel'} aegis-bg-surface aegis-border-subtle aegis-text-base`}
-        style={{ aspectRatio: '1.18 / 1', width: 'min(84vw, calc((100dvh - 2rem) * 1.18), 70rem)' }}
+        aria-labelledby="settings-dialog-title"
+        aria-modal="true"
+        className={`aegis-settings-panel flex min-h-[340px] max-h-[calc(100dvh-2rem)] overflow-hidden rounded-2xl border shadow-2xl ${settingsClosing ? 'aegis-modal-panel-out' : 'aegis-modal-panel'} aegis-bg-surface aegis-border-subtle aegis-text-base`}
+        style={{ aspectRatio: '1.22 / 1', width: 'min(88vw, calc((100dvh - 2rem) * 1.22), 74rem)' }}
         onClick={(e) => e.stopPropagation()}
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
       >
-        <aside className={`w-48 shrink-0 border-r p-4 aegis-bg-base aegis-border-subtle`}>
-          <div className="mb-8 flex items-center gap-2 text-sm font-semibold">
+        <aside className={`w-52 shrink-0 border-r p-5 aegis-bg-base aegis-border-subtle ${isDark ? '' : 'shadow-[8px_0_26px_rgba(80,62,39,0.08)]'}`}>
+          <div className="aegis-display mb-8 flex items-center gap-2 text-[13px] font-semibold tracking-[-0.01em]" id="settings-dialog-title">
             <Settings size={16} />
             {t('settings.title')}
           </div>
           {tabs.map((value) => (
             <button
               key={value}
-              className={`mb-1 flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition ${settingsTab === value ? 'aegis-accent-solid text-white' : isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-slate-600 hover:bg-stone-200 hover:text-slate-950'}`}
+              className={`mb-1.5 flex w-full items-center rounded-xl px-3.5 py-2.5 text-left text-[13px] font-medium transition ${settingsTab === value ? 'aegis-accent-solid text-white' : isDark ? 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100' : 'text-stone-600 hover:bg-[rgba(94,76,55,0.1)] hover:text-stone-950'}`}
               onClick={() => onSetSettingsTab(value)}
               type="button"
             >
@@ -114,32 +154,24 @@ export function SettingsPanel({
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col">
-          <div className={`flex h-14 shrink-0 items-center justify-between px-5 ${isDark ? 'border-zinc-800' : 'border-stone-200'}`}>
+          <div className={`flex h-16 shrink-0 items-center justify-between border-b px-6 aegis-border-subtle`}>
             <div>
-              <div className="text-sm font-semibold capitalize">{t(`settings.tab.${settingsTab}`)}</div>
-              <div className={`text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{settingsLoading ? t('settings.loading') : t('settings.preferences')}</div>
+              <div className="aegis-display text-[15px] font-semibold capitalize tracking-[-0.015em]">{t(`settings.tab.${settingsTab}`)}</div>
+              <div className={`text-[12px] font-normal ${isDark ? 'text-zinc-500' : 'text-stone-500'}`}>{settingsLoading ? t('settings.loading') : t('settings.preferences')}</div>
             </div>
-            <button aria-label="Close settings" className={`rounded-md p-1 transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-stone-100'}`} onClick={onClose} type="button">
+            <button aria-label="Close settings" className={`rounded-md p-1 transition ${isDark ? 'hover:bg-zinc-900' : 'hover:bg-[rgba(94,76,55,0.1)]'}`} data-dialog-initial-focus onClick={onClose} type="button">
               <X size={18} />
             </button>
           </div>
 
-          {settingsMessage && (
-            <div className={`mx-5 mb-2 rounded-lg border px-3 py-2 text-xs ${settingsMessage.toLowerCase().includes('could not') || settingsMessage.toLowerCase().includes('failed') || settingsMessage.toLowerCase().includes('only')
-              ? isDark ? 'border-red-900/60 bg-red-950/30 text-red-200' : 'border-red-200 bg-red-50 text-red-700'
-              : isDark ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-200' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
-              {settingsMessage}
-            </div>
-          )}
-
-          <div className="settings-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-5 aegis-bg-base">
+          <div className="settings-scroll min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-1 aegis-bg-base">
             {settingsTab === 'general' && (
-              <div className="space-y-5">
+              <div className="space-y-6">
                 <div>
                   <label className="mb-2 block text-sm font-semibold" htmlFor="general-model">{t('settings.general.active_model')}</label>
                   <select
                     className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
-                    disabled={availableModels.length === 0 || Boolean(downloadingModel)}
+                    disabled={availableModels.length === 0 || Boolean(downloadingModel) || isInferenceSwitching}
                     id="general-model"
                     onChange={(e) => onSelectModel(e.target.value)}
                     value={availableModels.find((m) => m.active)?.name ?? ''}
@@ -147,7 +179,14 @@ export function SettingsPanel({
                     <option value="" disabled>{availableModels.length === 0 ? 'No installed models found' : 'Choose active model'}</option>
                     {availableModels.map((m) => (<option key={m.name} value={m.name}>{m.name}</option>))}
                   </select>
-                  <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{t('settings.general.model_switch_hint')}</div>
+                  {modelSwitching ? (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600" role="status">
+                      <Loader className="animate-spin" size={14} />
+                      <span>Loading the selected model into memory…</span>
+                    </div>
+                  ) : (
+                    <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{t('settings.general.model_switch_hint')}</div>
+                  )}
                 </div>
                 <div>
                   <div className="mb-2 text-sm font-semibold">{t('settings.general.language')}</div>
@@ -165,7 +204,7 @@ export function SettingsPanel({
                   <label className="mb-2 block text-sm font-semibold" htmlFor="provider-select">{t('settings.inference.provider')}</label>
                   <select
                     className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
-                    disabled={availableProviders.length === 0}
+                    disabled={availableProviders.length === 0 || isInferenceSwitching}
                     id="provider-select"
                     onChange={(e) => onSelectProvider(e.target.value)}
                     value={activeProvider?.name ?? ''}
@@ -173,6 +212,12 @@ export function SettingsPanel({
                     <option value="" disabled>{availableProviders.length === 0 ? 'No providers available' : 'Choose provider'}</option>
                     {availableProviders.map((p) => (<option key={p.name} value={p.name}>{p.name}</option>))}
                   </select>
+                  {providerSwitching && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600" role="status">
+                      <Loader className="animate-spin" size={14} />
+                      <span>Switching inference provider…</span>
+                    </div>
+                  )}
                   {activeProvider && (
                     <div className={`mt-2 rounded-xl border p-3 text-xs leading-5 ${isDark ? 'border-zinc-800 bg-zinc-900/40 text-zinc-400' : 'border-stone-300 bg-stone-50 text-slate-500'}`}>
                       {activeProvider.description}
@@ -186,7 +231,7 @@ export function SettingsPanel({
               <div className="space-y-5">
                 <div>
                   <div className="mb-2 text-sm font-semibold">{t('settings.personalize.appearance')}</div>
-                  <div className="inline-flex items-center gap-1 rounded-lg p-1 ${isDark ? 'bg-zinc-900' : 'bg-stone-200'}">
+                  <div className={`inline-flex items-center gap-1 rounded-lg border p-1 ${isDark ? 'border-zinc-800 bg-zinc-900' : 'border-stone-300 bg-[rgba(239,233,222,0.86)]'}`}>
                     {(['light', 'dark', 'system'] as ThemeMode[]).map((mode) => {
                       const Icon = mode === 'light' ? Sun : mode === 'dark' ? Moon : Monitor;
                       return (
@@ -391,7 +436,7 @@ export function SettingsPanel({
                   <label className="mb-2 block text-sm font-semibold" htmlFor="installed-model-select">{installedModelsLabel(activeProvider?.name)}</label>
                   <select
                     className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-emerald-600 ${isDark ? 'border-zinc-800 bg-zinc-900 text-zinc-100' : 'border-stone-300 bg-white text-slate-900'}`}
-                    disabled={availableModels.length === 0 || modelDownloadState === 'downloading'}
+                    disabled={availableModels.length === 0 || modelDownloadState === 'downloading' || isInferenceSwitching}
                     id="installed-model-select"
                     onChange={(e) => onSelectModel(e.target.value)}
                     value={availableModels.find((m) => m.active)?.name ?? ''}
@@ -399,7 +444,69 @@ export function SettingsPanel({
                     <option value="" disabled>{availableModels.length === 0 ? 'No installed models found' : 'Choose installed model'}</option>
                     {availableModels.map((m) => (<option key={m.name} value={m.name}>{m.active ? `${m.name} (active)` : m.name}</option>))}
                   </select>
-                  <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>Selecting an installed model warms it before making it active.</div>
+                  {modelSwitching ? (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-emerald-600" role="status">
+                      <Loader className="animate-spin" size={14} />
+                      <span>Warming selected model…</span>
+                    </div>
+                  ) : (
+                    <div className={`mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>Selecting an installed model warms it before making it active.</div>
+                  )}
+                  {availableModels.length === 0 ? (
+                    <div className={`mt-3 rounded-xl border p-3 text-xs leading-5 ${isDark ? 'border-zinc-800 bg-zinc-900/40 text-zinc-400' : 'border-stone-200 bg-stone-50 text-slate-600'}`}>
+                      <span className="block font-semibold">No models available for this provider</span>
+                      <span>Download a model above, or switch providers if the model is managed outside AEGIS.</span>
+                    </div>
+                  ) : (
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                      <span className={`rounded-full px-2 py-1 ${isDark ? 'bg-zinc-800 text-zinc-300' : 'bg-stone-200 text-stone-700'}`}>{availableModels.some((model) => model.status === 'degraded') ? 'Catalog unavailable' : `${availableModels.length} installed`}</span>
+                      <span className={`rounded-full px-2 py-1 ${availableModels.some((model) => model.status === 'degraded') ? 'bg-amber-500/15 text-amber-700' : 'bg-emerald-500/15 text-emerald-600'}`}>{availableModels.some((model) => model.status === 'degraded') ? 'Provider unavailable' : availableModels.some((model) => model.status === 'ready' || model.active) ? 'Active model ready' : 'Select to warm'}</span>
+                      <span className={`rounded-full px-2 py-1 ${isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-stone-200 text-stone-600'}`}>{availableModels[0]?.supports_managed_download === false ? 'Downloads managed by provider' : 'Managed downloads supported'}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'command-line' && (
+              <div className="space-y-4 pt-4">
+                <div className={`rounded-2xl border p-4 ${isDark ? 'border-emerald-900/60 bg-emerald-950/20' : 'border-emerald-200 bg-emerald-50/70'}`}>
+                  <div className="flex items-start gap-3">
+                    <TerminalSquare className="mt-0.5 text-emerald-500" size={19} />
+                    <div>
+                      <div className="text-sm font-semibold">Command Line capabilities</div>
+                      <p className={`mt-1 text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+                        These controls are enforced by the CLI before every coding task. Changes apply to new commands immediately.
+                      </p>
+                    </div>
+                    {commandLineSaving && <Loader className="ml-auto animate-spin text-emerald-500" size={17} />}
+                  </div>
+                </div>
+
+                <div className="grid gap-2.5">
+                  {COMMAND_LINE_CAPABILITIES.map((capability) => (
+                    <CommandLineToggle
+                      key={capability.key}
+                      checked={commandLineSettings[capability.key]}
+                      description={capability.description}
+                      disabled={commandLineSaving
+                        || (capability.key === 'automatic_verification' && !commandLineSettings.command_execution)
+                        || (capability.key === 'context_budgeting' && !commandLineSettings.semantic_index)}
+                      isDark={isDark}
+                      label={capability.label}
+                      onChange={(enabled) => changeCommandLineCapability(capability.key, enabled)}
+                    />
+                  ))}
+                </div>
+
+                <div className={`flex items-start gap-3 rounded-xl border p-3.5 ${isDark ? 'border-zinc-800 bg-zinc-900/50' : 'border-stone-200 bg-stone-50'}`}>
+                  <ShieldCheck className="mt-0.5 shrink-0 text-emerald-500" size={17} />
+                  <div>
+                    <div className="text-xs font-semibold">Git safety is always enforced</div>
+                    <p className={`mt-1 text-xs leading-5 ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>
+                      AEGIS never writes outside the repository, never edits .git, and refuses unsafe overlap with unrelated user changes.
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
@@ -508,6 +615,42 @@ export function SettingsPanel({
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function CommandLineToggle({
+  checked,
+  description,
+  disabled,
+  isDark,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  description: string;
+  disabled: boolean;
+  isDark: boolean;
+  label: string;
+  onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className={`flex items-center gap-4 rounded-xl border px-4 py-3.5 transition ${isDark ? 'border-zinc-800 bg-zinc-900/35' : 'border-stone-200 bg-white'} ${disabled ? 'opacity-55' : ''}`}>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-semibold">{label}</div>
+        <div className={`mt-1 text-xs leading-5 ${isDark ? 'text-zinc-500' : 'text-slate-500'}`}>{description}</div>
+      </div>
+      <button
+        aria-checked={checked}
+        aria-label={`${checked ? 'Disable' : 'Enable'} ${label}`}
+        className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-emerald-500' : isDark ? 'bg-zinc-700' : 'bg-stone-300'} disabled:cursor-not-allowed`}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        role="switch"
+        type="button"
+      >
+        <span className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
+      </button>
     </div>
   );
 }

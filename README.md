@@ -84,7 +84,7 @@ Once everything is ran, you simpy go to the localhost link and you can begin cha
 Calling the AEGIS CLi is very easy, you can simply call `aegis` in powershell or your default command line shell and AEGIS CLI should start running.
 
 ```
-aegis
+    aegis
 ```
 
 **NOTE**: When using the aegis cli, you should still call the `aegis open` command to run the background services needed for the cli to function.
