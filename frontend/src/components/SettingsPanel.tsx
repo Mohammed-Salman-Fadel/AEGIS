@@ -35,6 +35,7 @@ interface SettingsPanelProps {
   commandLineSettings: CommandLineSettings;
   commandLineSaving: boolean;
   isVoiceLowRamMode: boolean;
+  isVoiceConversationEnabled: boolean;
   isTtsEnabled: boolean;
   isRagEnabled: boolean;
   ragTopK: number;
@@ -57,6 +58,7 @@ interface SettingsPanelProps {
   onCancelDownload: () => void;
   onResumeDownload: () => void;
   onToggleVoiceLowRam: (enabled: boolean) => void;
+  onToggleVoiceConversation: (enabled: boolean) => void;
   onToggleTts: (enabled: boolean) => void;
   onToggleRag: (enabled: boolean) => void;
   onChangeRagTopK: (val: number) => void;
@@ -100,13 +102,13 @@ export function SettingsPanel({
   modelSearch, selectedModelProviderTag, filteredCatalogModels,
   downloadingModel, pausedModelDownload, modelDownloadState, modelDownloadProgress, modelDownloadStatus, modelSwitching, providerSwitching,
   commandLineSettings, commandLineSaving,
-  isVoiceLowRamMode, isTtsEnabled, isRagEnabled, ragTopK, ragSimilarityThreshold,
+  isVoiceLowRamMode, isVoiceConversationEnabled, isTtsEnabled, isRagEnabled, ragTopK, ragSimilarityThreshold,
   profileText, profilePath, memoryInput,
   onClose, onSetSettingsTab, onSetTheme, onSetAppearanceTheme, onSetResponseStyle,
   onSelectModel, onSelectProvider, onModelSearchChange, onSetModelProviderTag,
   onChangeCommandLineSettings,
   onDownloadModel, onPauseDownload, onCancelDownload, onResumeDownload,
-  onToggleVoiceLowRam, onToggleTts, onToggleRag, onChangeRagTopK, onChangeRagThreshold,
+  onToggleVoiceLowRam, onToggleVoiceConversation, onToggleTts, onToggleRag, onChangeRagTopK, onChangeRagThreshold,
   onMemoryInputChange, onAddMemory, onDisplayMemories, onSaveProfile, onProfileTextChange,
   lang, onSetLanguage,
   obsidianVaultPath, onObsidianVaultPathChange, obsidianEnabled, onObsidianEnabledChange,
@@ -154,7 +156,7 @@ export function SettingsPanel({
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col">
-          <div className={`flex h-16 shrink-0 items-center justify-between border-b px-6 aegis-border-subtle`}>
+          <div className="flex h-16 shrink-0 items-center justify-between px-6">
             <div>
               <div className="aegis-display text-[15px] font-semibold capitalize tracking-[-0.015em]">{t(`settings.tab.${settingsTab}`)}</div>
               <div className={`text-[12px] font-normal ${isDark ? 'text-zinc-500' : 'text-stone-500'}`}>{settingsLoading ? t('settings.loading') : t('settings.preferences')}</div>
@@ -277,6 +279,13 @@ export function SettingsPanel({
 
             {settingsTab === 'voice' && (
               <div className="space-y-5">
+                <label className={`flex items-start justify-between rounded-xl border p-4 cursor-pointer transition ${isVoiceConversationEnabled ? isDark ? 'border-emerald-500 bg-emerald-950/25 text-emerald-100' : 'border-emerald-500 bg-emerald-50 text-emerald-900' : isDark ? 'border-zinc-800 hover:bg-zinc-900/60' : 'border-stone-300 hover:bg-stone-50'}`}>
+                  <div className="flex flex-col gap-1 pr-4">
+                    <span className="text-sm font-semibold">Enable voice conversation</span>
+                    <span className={`text-xs leading-5 ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>Show the microphone in the message composer and allow voice conversations.</span>
+                  </div>
+                  <input type="checkbox" checked={isVoiceConversationEnabled} onChange={(e) => onToggleVoiceConversation(e.target.checked)} className="mt-1 h-4 w-4 shrink-0 rounded border-stone-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
+                </label>
                 <div>
                   <div className="mb-2 text-sm font-semibold">{t('settings.voice.caching')}</div>
                   <div className="flex flex-col gap-3">
@@ -643,13 +652,14 @@ function CommandLineToggle({
       <button
         aria-checked={checked}
         aria-label={`${checked ? 'Disable' : 'Enable'} ${label}`}
-        className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${checked ? 'bg-emerald-500' : isDark ? 'bg-zinc-700' : 'bg-stone-300'} disabled:cursor-not-allowed`}
+        className={`aegis-command-toggle relative h-6 w-11 shrink-0 rounded-full border transition-colors ${checked ? 'border-white/25 bg-emerald-500' : isDark ? 'border-zinc-600 bg-zinc-700' : 'border-stone-400 bg-stone-300'} disabled:cursor-not-allowed`}
         disabled={disabled}
         onClick={() => onChange(!checked)}
         role="switch"
+        title={`${label}: ${checked ? 'On' : 'Off'}`}
         type="button"
       >
-        <span className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
+        <span className={`aegis-command-toggle-thumb absolute left-1 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
       </button>
     </div>
   );

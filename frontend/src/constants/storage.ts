@@ -7,6 +7,7 @@ export const PINNED_SESSIONS_STORAGE_KEY = 'aegis-pinned-session-ids';
 export const RESPONSE_STYLE_STORAGE_KEY = 'aegis-response-style';
 export const VOICE_LOW_RAM_MODE_STORAGE_KEY = 'aegis-voice-low-ram-mode';
 export const VOICE_TTS_ENABLED_STORAGE_KEY = 'aegis-voice-tts-enabled';
+export const VOICE_CONVERSATION_ENABLED_STORAGE_KEY = 'aegis-voice-conversation-enabled';
 export const RAG_ENABLED_STORAGE_KEY = 'aegis-rag-enabled';
 export const RAG_TOP_K_STORAGE_KEY = 'aegis-rag-top-k';
 export const RAG_THRESHOLD_STORAGE_KEY = 'aegis-rag-threshold';

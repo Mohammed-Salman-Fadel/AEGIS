@@ -803,6 +803,139 @@ body {
 .aegis-theme-rose { --aegis-text-subtle-dark: #fbcfe8; --aegis-text-subtle-light: #9d174d; }
 .aegis-theme-slate { --aegis-text-subtle-dark: #cbd5e1; --aegis-text-subtle-light: #475569; }
 
+/* Send is a primary action, so it uses contrast-tested theme values rather than
+   the lighter decorative accent ramp. */
+.aegis-theme-default { --aegis-send-bg: #047857; --aegis-send-hover: #065f46; --aegis-on-send: #ffffff; }
+.aegis-theme-terminal { --aegis-send-bg: #4ade80; --aegis-send-hover: #86efac; --aegis-on-send: #052e16; }
+.aegis-theme-ocean { --aegis-send-bg: #0369a1; --aegis-send-hover: #075985; --aegis-on-send: #ffffff; }
+.aegis-theme-ember { --aegis-send-bg: #c2410c; --aegis-send-hover: #9a3412; --aegis-on-send: #ffffff; }
+.aegis-theme-rose { --aegis-send-bg: #be185d; --aegis-send-hover: #9d174d; --aegis-on-send: #ffffff; }
+.aegis-theme-slate { --aegis-send-bg: #475569; --aegis-send-hover: #334155; --aegis-on-send: #ffffff; }
+
+.aegis-send-button {
+  background-color: var(--aegis-send-bg) !important;
+  color: var(--aegis-on-send) !important;
+  box-shadow: 0 7px 18px rgba(var(--aegis-accent-rgb), 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+}
+
+.aegis-send-button:hover:not(:disabled) {
+  background-color: var(--aegis-send-hover) !important;
+  box-shadow: 0 9px 22px rgba(var(--aegis-accent-rgb), 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.aegis-send-button:disabled { opacity: 0.58; }
+
+.aegis-terminal-screen {
+  border-color: rgba(74, 222, 128, 0.22);
+  background:
+    linear-gradient(rgba(74, 222, 128, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(74, 222, 128, 0.018) 1px, transparent 1px),
+    #070b09;
+  background-size: 100% 1.5rem, 1.5rem 100%, auto;
+  box-shadow: inset 0 0 32px rgba(0, 0, 0, 0.52), 0 14px 32px rgba(0, 0, 0, 0.22);
+  color: #d1fae5;
+}
+
+.aegis-terminal-screen .terminal-muted { color: rgba(167, 243, 208, 0.58); }
+
+.aegis-terminal-screen :is(.text-zinc-500, .text-stone-500) {
+  color: rgba(167, 243, 208, 0.58) !important;
+}
+
+.aegis-terminal-screen input {
+  min-height: 1.5rem !important;
+  padding-block: 0;
+}
+
+.aegis-terminal-screen input:focus-visible {
+  outline: none !important;
+}
+
+.aegis-terminal-container {
+  container-type: inline-size;
+}
+
+.aegis-terminal-screen,
+.aegis-terminal-prompt,
+.aegis-terminal-output {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.aegis-terminal-output {
+  overflow-wrap: anywhere;
+}
+
+.aegis-terminal-container > div:not([aria-hidden]) > div:first-child > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 390px) {
+  .aegis-terminal-screen {
+    margin: 0.5rem;
+    font-size: 12px;
+    line-height: 1.4rem;
+  }
+
+  .aegis-terminal-screen .terminal-scroll {
+    padding: 0.75rem;
+  }
+
+  .aegis-terminal-screen .aegis-terminal-prompt label {
+    margin-right: 0.35rem;
+  }
+}
+
+@container (max-width: 340px) {
+  .aegis-terminal-container > div:not([aria-hidden]) > div:first-child {
+    padding-inline: 0.75rem;
+  }
+
+  .aegis-terminal-container > div:not([aria-hidden]) > div:first-child > span {
+    font-size: 10px;
+  }
+}
+
+.aegis-terminal-resize-handle {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.aegis-terminal-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 2px;
+  height: 4rem;
+  border-radius: 999px;
+  background: transparent;
+  content: "";
+  transform: translateY(-50%);
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.aegis-terminal-resize-handle:hover::after,
+.aegis-terminal-resize-handle-active::after {
+  background: var(--aegis-accent-500);
+  box-shadow: 0 0 10px rgba(var(--aegis-accent-rgb), 0.68);
+}
+
+/* Compact switches opt out of the general button minimum so their visual
+   track remains a conventional 44 × 24px control. */
+.aegis-shell .aegis-command-toggle {
+  min-height: 1.5rem !important;
+}
+
 .aegis-success-text { color: var(--aegis-success) !important; }
 .aegis-success-bg { background-color: var(--aegis-success) !important; }
 
@@ -892,23 +1025,23 @@ body {
 .aegis-shell :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select) { min-height: 2.5rem; }
 
 /* Persistent, theme-neutral scroll affordances. */
-.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display) {
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display, .terminal-scroll) {
   -ms-overflow-style: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--aegis-scroll-thumb) transparent;
   scrollbar-gutter: stable;
 }
-.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display)::-webkit-scrollbar {
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display, .terminal-scroll)::-webkit-scrollbar {
   display: block;
   width: 6px;
   height: 6px;
 }
-.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display)::-webkit-scrollbar-track { background: transparent; }
-.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display)::-webkit-scrollbar-thumb {
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display, .terminal-scroll)::-webkit-scrollbar-track { background: transparent; }
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display, .terminal-scroll)::-webkit-scrollbar-thumb {
   background: var(--aegis-scroll-thumb);
   border-radius: 999px;
 }
-.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display):is(:hover, :focus-within)::-webkit-scrollbar-thumb {
+.aegis-shell :is(.scrollbar-hide, .sessions-scroll, .settings-scroll, .prompt-checkpoint-scroll, .aegis-math-display, .terminal-scroll):is(:hover, :focus-within)::-webkit-scrollbar-thumb {
   background: var(--aegis-scroll-thumb-active);
 }
 
@@ -936,9 +1069,19 @@ body {
   }
 }
 /* Semantic focus and wordmark treatments follow the active appearance theme. */
-.aegis-shell :is(button, a, input, textarea, select, [tabindex]):focus-visible {
+.aegis-shell :is(button, a, select, [tabindex]):focus-visible {
   outline: 2px solid var(--aegis-accent-500) !important;
   outline-offset: 2px;
 }
 .aegis-shell.aegis-mode-dark .aegis-wordmark { color: var(--aegis-accent-500); }
 .aegis-shell.aegis-mode-light .aegis-wordmark { color: var(--aegis-accent-700); }
+
+/* The conversation finder is a compact secondary control. */
+.aegis-shell .aegis-session-search {
+  min-height: 2.25rem;
+}
+
+.aegis-shell .aegis-session-search-input {
+  min-height: 1.5rem;
+  font-size: 12px !important;
+}

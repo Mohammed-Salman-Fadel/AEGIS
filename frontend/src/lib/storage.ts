@@ -8,6 +8,7 @@ import {
   RESPONSE_STYLE_STORAGE_KEY,
   VOICE_LOW_RAM_MODE_STORAGE_KEY,
   VOICE_TTS_ENABLED_STORAGE_KEY,
+  VOICE_CONVERSATION_ENABLED_STORAGE_KEY,
   RAG_ENABLED_STORAGE_KEY,
   RAG_TOP_K_STORAGE_KEY,
   RAG_THRESHOLD_STORAGE_KEY,
@@ -35,6 +36,14 @@ export function loadStoredTtsEnabled(): boolean {
     const stored = window.localStorage.getItem(VOICE_TTS_ENABLED_STORAGE_KEY);
     return stored ? JSON.parse(stored) === true : false;
   } catch { return false; }
+}
+
+export function loadStoredVoiceConversationEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const stored = window.localStorage.getItem(VOICE_CONVERSATION_ENABLED_STORAGE_KEY);
+    return stored ? JSON.parse(stored) !== false : true;
+  } catch { return true; }
 }
 
 export function loadStoredRagEnabled(): boolean {

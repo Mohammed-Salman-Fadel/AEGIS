@@ -743,6 +743,10 @@ pub fn create_router(state: AppState) -> Router {
             "/api/settings/command-line",
             get(handlers::command_line::get_settings).put(handlers::command_line::save_settings),
         )
+        .route(
+            "/api/command-line/execute",
+            post(handlers::command_line::execute_command),
+        )
         .route("/api/context/usage", get(handlers::context::usage))
         .route(
             "/api/search/workspace",

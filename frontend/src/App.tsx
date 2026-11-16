@@ -27,7 +27,7 @@ import {
   API_BASE, THEME_STORAGE_KEY, APPEARANCE_THEME_STORAGE_KEY,
   INDEXED_DOCUMENTS_STORAGE_KEY, PINNED_SESSIONS_STORAGE_KEY,
   RESPONSE_STYLE_STORAGE_KEY, VOICE_LOW_RAM_MODE_STORAGE_KEY,
-  VOICE_TTS_ENABLED_STORAGE_KEY, RAG_ENABLED_STORAGE_KEY,
+  VOICE_TTS_ENABLED_STORAGE_KEY, VOICE_CONVERSATION_ENABLED_STORAGE_KEY, RAG_ENABLED_STORAGE_KEY,
   RAG_TOP_K_STORAGE_KEY, RAG_THRESHOLD_STORAGE_KEY, REASONING_ENABLED_STORAGE_KEY, LANGUAGE_STORAGE_KEY,
   OBSIDIAN_VAULT_PATH_KEY, OBSIDIAN_ENABLED_KEY,
   OLLAMA_MODEL_CATALOG, EMPTY_CONTEXT_USAGE,
@@ -36,7 +36,7 @@ import {
 // Lib utilities
 import {
   loadStoredTheme, loadStoredAppearanceTheme, loadStoredResponseStyle,
-  loadStoredVoiceLowRamMode, loadStoredTtsEnabled, loadStoredRagEnabled,
+  loadStoredVoiceLowRamMode, loadStoredTtsEnabled, loadStoredVoiceConversationEnabled, loadStoredRagEnabled,
   loadStoredRagTopK, loadStoredRagThreshold,
   loadStoredIndexedDocumentsBySession, loadStoredPinnedSessionIds,
   fetchContextUsage, formatTokenMeter,
@@ -255,6 +255,7 @@ export default function App() {
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isVoiceConversationEnabled, setIsVoiceConversationEnabled] = useState<boolean>(loadStoredVoiceConversationEnabled);
   const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(loadStoredTtsEnabled);
   const [isVoiceLowRamMode, setIsVoiceLowRamMode] = useState<boolean>(loadStoredVoiceLowRamMode);
   const [isRagEnabled, setIsRagEnabled] = useState<boolean>(loadStoredRagEnabled);
@@ -517,6 +518,7 @@ export default function App() {
     fetch(`${API_BASE}/profile`).then((r) => (r.ok ? r.json() : null)).then((d: ProfileResponse | null) => { if (d) { setProfileText(d.contents); setProfilePath(d.path); } }).catch(() => {});
   }, []);
 
+  useEffect(() => { void loadSettingsData(); }, [loadSettingsData]);
   useEffect(() => { if (settingsOpen) void loadSettingsData(); }, [loadSettingsData, settingsOpen]);
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
@@ -790,6 +792,12 @@ export default function App() {
   const changeRagThreshold = useCallback((val: number) => {
     setRagSimilarityThreshold(val);
     if (typeof window !== 'undefined') window.localStorage.setItem(RAG_THRESHOLD_STORAGE_KEY, JSON.stringify(val));
+  }, []);
+
+  const toggleVoiceConversationEnabled = useCallback((enabled: boolean) => {
+    setIsVoiceConversationEnabled(enabled);
+    if (!enabled) setIsVoiceMode(false);
+    if (typeof window !== 'undefined') window.localStorage.setItem(VOICE_CONVERSATION_ENABLED_STORAGE_KEY, JSON.stringify(enabled));
   }, []);
 
   const updateCommandLineSettings = async (next: CommandLineSettings) => {
@@ -1848,6 +1856,7 @@ export default function App() {
           isUploading={isUploading}
           isClearingIndexedDocuments={isClearingIndexedDocuments}
           isVoiceMode={isVoiceMode}
+          isVoiceConversationEnabled={isVoiceConversationEnabled}
           showCenteredComposer={showCenteredComposer}
           showImportProgress={showImportProgress}
           toolsOpen={toolsOpen}
@@ -1981,6 +1990,7 @@ export default function App() {
         commandLineSettings={commandLineSettings}
         commandLineSaving={commandLineSaving}
         isVoiceLowRamMode={isVoiceLowRamMode}
+        isVoiceConversationEnabled={isVoiceConversationEnabled}
         isTtsEnabled={isTtsEnabled}
         isRagEnabled={isRagEnabled}
         ragTopK={ragTopK}
@@ -2003,6 +2013,7 @@ export default function App() {
         onCancelDownload={cancelModelDownload}
         onResumeDownload={resumeModelDownload}
         onToggleVoiceLowRam={toggleVoiceLowRamMode}
+        onToggleVoiceConversation={toggleVoiceConversationEnabled}
         onToggleTts={changeTtsEnabled}
         onToggleRag={toggleRagEnabled}
         onChangeRagTopK={changeRagTopK}

@@ -17,6 +17,7 @@ export {
   loadStoredTheme,
   loadStoredVoiceLowRamMode,
   loadStoredTtsEnabled,
+  loadStoredVoiceConversationEnabled,
   loadStoredRagEnabled,
   loadStoredRagTopK,
   loadStoredRagThreshold,

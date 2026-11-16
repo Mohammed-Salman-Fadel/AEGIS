@@ -12,6 +12,7 @@ interface ComposerProps {
   isUploading: boolean;
   isClearingIndexedDocuments: boolean;
   isVoiceMode: boolean;
+  isVoiceConversationEnabled: boolean;
   showCenteredComposer: boolean;
   showImportProgress: boolean;
   toolsOpen: boolean;
@@ -60,7 +61,7 @@ interface ComposerProps {
 }
 
 export function Composer({
-  isDark, isStreaming, isUploading, isClearingIndexedDocuments, isVoiceMode,
+  isDark, isStreaming, isUploading, isClearingIndexedDocuments, isVoiceMode, isVoiceConversationEnabled,
   showCenteredComposer, showImportProgress, toolsOpen, input,
   importPhase, importProgress, importFileLabel,
   indexedDocuments, indexedDocumentLabel, indexedChunkCount,
@@ -351,14 +352,14 @@ export function Composer({
                   <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${reasoningEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
                 </span>
               </button>
-              <button
+              {isVoiceConversationEnabled && <button
                 className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-all duration-200 ${isVoiceMode ? 'aegis-accent-chip-active text-white' : isDark ? 'text-zinc-500 hover:bg-white/[0.06] hover:text-emerald-300' : 'text-stone-600 hover:bg-stone-900/6 hover:text-emerald-800'}`}
                 onClick={onVoiceModeOpen}
                 type="button"
                 title="Voice Mode"
               >
                 <Mic size={17} />
-              </button>
+              </button>}
               {/* ── Model dropdown ── */}
               <div className="relative" ref={modelMenuRef}>
                 <button
@@ -400,7 +401,9 @@ export function Composer({
                     </div>
                     {availableModels.length === 0 ? (
                       <div className={`px-3 py-3 text-center text-[11px] ${isDark ? 'text-zinc-600' : 'text-slate-400'}`}>
-                        No models found. Install one in Settings.
+                        {contextUsage.model
+                          ? <><span className="block font-medium">Active engine model: {contextUsage.model}</span><span className="mt-1 block">Installed model list is unavailable. Open Settings to refresh.</span></>
+                          : 'No models found. Install one in Settings.'}
                       </div>
                     ) : (
                       <div className="max-h-48 overflow-y-auto">
@@ -430,7 +433,7 @@ export function Composer({
                 )}
               </div>
               <button
-                className={`inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs font-medium text-white transition-all duration-200 ${isStreaming && input.trim() ? 'aegis-accent-chip-active' : 'aegis-accent-solid'} disabled:opacity-60`}
+                className={`aegis-send-button inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold transition-all duration-200 ${isStreaming && input.trim() ? 'aegis-accent-chip-active' : 'aegis-accent-solid'} disabled:opacity-60`}
                 disabled={isStreaming && !input.trim()}
                 type="submit"
               >

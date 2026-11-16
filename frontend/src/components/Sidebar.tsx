@@ -172,11 +172,11 @@ export function Sidebar({
         </div>
 
         {sessionsOpen && sessions.length > 0 && (
-          <label className={`mb-1 flex items-center gap-2 rounded-xl border px-2.5 py-2 transition focus-within:ring-1 ${isDark ? 'border-zinc-800 bg-zinc-950/55 text-zinc-500 focus-within:border-zinc-700 focus-within:ring-emerald-500/30' : 'border-[rgba(94,76,55,0.22)] bg-[rgba(255,250,240,0.52)] text-stone-500 focus-within:border-emerald-700/50 focus-within:ring-emerald-700/15'}`}>
+          <label className={`aegis-session-search mb-1 flex items-center gap-2 rounded-xl border px-2.5 py-1.5 transition focus-within:ring-1 ${isDark ? 'border-zinc-800 bg-zinc-950/55 text-zinc-500 focus-within:border-zinc-700 focus-within:ring-emerald-500/30' : 'border-[rgba(94,76,55,0.22)] bg-[rgba(255,250,240,0.52)] text-stone-500 focus-within:border-emerald-700/50 focus-within:ring-emerald-700/15'}`}>
             <Search size={14} />
             <input
               aria-label="Search conversations"
-              className="min-w-0 flex-1 bg-transparent text-[12px] text-inherit outline-none placeholder:text-inherit"
+              className="aegis-session-search-input min-w-0 flex-1 bg-transparent text-[12px] text-inherit outline-none placeholder:text-inherit"
               onChange={(event) => setSessionQuery(event.target.value)}
               placeholder="Find a conversation"
               type="search"

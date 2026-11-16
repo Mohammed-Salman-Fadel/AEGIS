@@ -90,3 +90,11 @@ Calling the AEGIS CLi is very easy, you can simply call `aegis` in powershell or
 **NOTE**: When using the aegis cli, you should still call the `aegis open` command to run the background services needed for the cli to function.
 
 ## Demo
+
+<!--
+Source - https://stackoverflow.com/q/41604263
+Posted by zjffdu, modified by community. See post 'Timeline' for change history
+Retrieved 2026-11-16, License - CC BY-SA 4.0
+-->
+
+![home](images\demo\homescreen.png)
