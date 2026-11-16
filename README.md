@@ -97,4 +97,4 @@ Posted by zjffdu, modified by community. See post 'Timeline' for change history
 Retrieved 2026-11-16, License - CC BY-SA 4.0
 -->
 
-![home](images\demo\homescreen.png)
+![home](images/demo/homescreen.png)
